@@ -1306,8 +1306,12 @@ LVDSPort::SetDisplayMode(display_mode* target, uint32 colorMode)
 
 	// Setup PanelFitter and Train FDI if it exists
 	PanelFitter* fitter = fPipe->PFT();
-	if (fitter != NULL)
-		fitter->Enable(hardwareTarget);
+	if (fitter != NULL) {
+		if (needsScaling)
+			fitter->Enable(hardwareTarget);
+		else
+			fitter->Disable();
+	}
 	FDILink* link = fPipe->FDI();
 	if (link != NULL) {
 		uint32 lanes = 0;
