@@ -43,8 +43,9 @@
 	| HDA_QUIRK_IVREF100)
 #define HDA_QUIRK_OVREF (HDA_QUIRK_OVREF50 | HDA_QUIRK_OVREF80 \
 	| HDA_QUIRK_OVREF100)
+#define HDA_QUIRK_SONY_VAIO	(1 << 14)
 
-
+#define SONY_VENDORID				0x104d
 #define ANALOGDEVICES_VENDORID		0x11d4
 #define CIRRUSLOGIC_VENDORID		0x1013
 #define CONEXANT_VENDORID			0x14f1
@@ -98,6 +99,10 @@ static const struct {
 	{ 0x106b, 0x7200, CIRRUSLOGIC_VENDORID, 0x4208,
 		HDA_QUIRK_GPIO0, 0},						// MacBookAir 6,2
 	{ HDA_ALL, HDA_ALL, IDT_VENDORID, 0x76b2, HDA_QUIRK_GPIO0, 0},
+	// Sony Vaio with ALC269: pin 0x19 VREF_80 causes speaker crosstalk,
+	// must be set to VREF_GRD (ref: Linux ALC269_FIXUP_SONY_VAIO)
+	{ SONY_VENDORID, HDA_ALL, REALTEK_VENDORID, 0x0269,
+		HDA_QUIRK_SONY_VAIO, HDA_QUIRK_IVREF },
 };
 
 
@@ -1177,6 +1182,17 @@ hda_audio_group_build_tree(hda_audio_group* audioGroup)
 		TRACE("Setting gpio 0x%" B_PRIx32 "\n", gpio);
 		if (hda_send_verbs(audioGroup->codec, verb, NULL, 3) != B_OK)
 			ERROR("Setting gpio failed!\n");
+	}
+
+	// Sony Vaio ALC269: set pin 0x19 to VREF_GRD to prevent speaker
+	// crosstalk caused by VREF_80 leakage on this electrically active
+	// but logically disabled pin.
+	if (audioGroup->codec->quirks & HDA_QUIRK_SONY_VAIO) {
+		TRACE("Applying Sony Vaio ALC269 VREF fix (pin 0x19 -> VREF_GRD)\n");
+		corb_t verb = MAKE_VERB(audioGroup->codec->addr, 0x19,
+			VID_SET_PIN_WIDGET_CONTROL, PIN_ENABLE_VREF_GROUND);
+		if (hda_send_verbs(audioGroup->codec, &verb, NULL, 1) != B_OK)
+			ERROR("Sony Vaio VREF fix failed!\n");
 	}
 
 	dump_audiogroup_widgets(audioGroup);
