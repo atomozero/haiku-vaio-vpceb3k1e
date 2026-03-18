@@ -815,6 +815,13 @@ hda_codec_parse_audio_group(hda_audio_group* audioGroup)
 				if (nodeID == 29)
 					widget.type = WT_BEEP_GENERATOR;
 				break;
+			case 0x10ec0269:
+				// ALC269: NID 0x23 and 0x24 are input selectors (mux)
+				// that route mic pins to the ADCs. The hardware reports
+				// them as vendor-defined, but they function as selectors.
+				if (nodeID == 0x23 || nodeID == 0x24)
+					widget.type = WT_AUDIO_SELECTOR;
+				break;
 		}
 		widget.active_input = -1;
 		widget.capabilities.audio = capabilities;
