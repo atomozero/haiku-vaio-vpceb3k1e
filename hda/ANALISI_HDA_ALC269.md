@@ -178,24 +178,26 @@ codec separato (`snd-hda-codec-hdmi`).
 
 ---
 
-## 6. MANCANZA: HEADPHONE AUTOMUTE
+## 6. HEADPHONE AUTOMUTE - GIA IMPLEMENTATO
 
-### Il problema
-Non c'e nessun meccanismo di jack detection nel driver HDA di Haiku.
-Il pin 21 (cuffie) ha `Unsolicited Responses` abilitato e `Presence Detect`,
-ma il driver non gestisce gli eventi per mutare automaticamente gli speaker.
+### Analisi approfondita
+Contrariamente all'analisi iniziale, il driver HDA di Haiku **ha gia**
+l'automute implementato:
 
-### Come funziona in Linux
-1. Il pin 0x15 (cuffie) genera un unsolicited event quando un jack viene
-   inserito/rimosso
-2. Il generic parser registra un callback `snd_hda_gen_hp_automute`
-3. Quando le cuffie vengono inserite: pin 0x14 (speaker) viene mutato
-4. Quando le cuffie vengono rimosse: pin 0x14 viene smutato
+- `hda_audio_group_switch_init()` (riga 1212): abilita unsolicited responses
+  su tutti i pin complex con presence detect
+- `hda_codec_switch_handler()` (riga 1282): thread kernel che riceve gli
+  eventi unsolicited via semaforo
+- `hda_audio_group_check_sense()` (riga 1233): legge il presence detect
+  del pin HP (PIN_DEV_HEAD_PHONE_OUT) e muta/smuta i pin speaker
 
-### Fix necessario
-Implementare un handler per gli unsolicited event che:
-1. Legga lo stato presence detect del pin 0x15
-2. Muti/smuti il pin 0x14 (speaker) di conseguenza
+Il pin 21 (HP, config 0x0221101f, device=PIN_DEV_HEAD_PHONE_OUT) e il pin
+20 (Speaker, config 0x90170110, device=PIN_DEV_SPEAKER) hanno i device type
+corretti per essere gestiti dall'automute esistente.
+
+### Stato: NESSUN FIX NECESSARIO
+L'automute dovrebbe funzionare correttamente una volta applicati i fix
+VREF e input tree. Da verificare con test pratico.
 
 ---
 
@@ -233,17 +235,16 @@ E dopo il setup del quirk, inviare il verb specifico:
 // NID 25 (0x19), verb 0x707, valore 0x01
 ```
 
-### Fix 2: Input tree (Medio) - Difficolta: Media
-Debug del parsing dei widget 35-36 (selettori input). Verificare se:
-- Sono parsati come tipo corretto (WT_AUDIO_SELECTOR)
-- Le loro connection list e completa
-- I pin mic non sono bloccati da flag OUTPUT_PATH
+### Fix 2: Input tree (Medio) - Difficolta: Bassa - IMPLEMENTATO
+Forzato tipo WT_AUDIO_SELECTOR per NID 0x23 e 0x24 dell'ALC269.
+Questi widget sono riportati dall'hardware come "vendor defined" ma
+funzionano come selettori input per il routing mic → ADC.
 
-### Fix 3: Headphone automute (Migliorativo) - Difficolta: Media-Alta
-Implementare gestione unsolicited events per jack detect:
-- Registrare handler per eventi dal pin 0x15
-- Toggle mute sul pin 0x14 in base allo stato presence detect
-- Gestire anche pin 0x18 (mic esterno) per switch input
+### Fix 3: Headphone automute - NON NECESSARIO
+L'automute e gia implementato nel driver HDA di Haiku tramite:
+- `hda_audio_group_switch_init()` per abilitare unsolicited responses
+- `hda_codec_switch_handler()` thread per ricevere eventi
+- `hda_audio_group_check_sense()` per toggle mute speaker/HP
 
 ### Fix 4: HDMI audio (Opzionale) - Difficolta: Alta
 Gestire il secondo function group Intel HDMI. Richiede supporto
@@ -260,15 +261,15 @@ Non prioritario per questo laptop.
 | Granularita | Per codec/vendor | Per subsystem ID specifico |
 | Pin config override | No | Si (completo) |
 | Verb di init | No | Si (array di verb) |
-| Jack detection | No | Si (unsolicited events) |
-| Automute | No | Si (generico + per-codec) |
+| Jack detection | Si (base) | Si (unsolicited events) |
+| Automute | Si (base) | Si (generico + per-codec) |
 | Input switching | No | Si (automatico) |
 
-Il sistema di quirk di Haiku e molto piu primitivo di quello di Linux.
-Per supportare correttamente l'ALC269 servirebbero almeno:
-1. Supporto per verb di inizializzazione custom
-2. Pin VREF control per-pin (non globale)
-3. Gestione unsolicited events base
+Il sistema di quirk di Haiku e piu semplice di quello di Linux ma
+funzionale. Per l'ALC269 i fix applicati (VREF + selector type) sono
+sufficienti per il funzionamento base. Fix avanzati richiederebbero:
+1. Pin VREF control per-pin (non globale) - AGGIRATO con quirk dedicato
+2. Input source switching automatico (mic interno/esterno)
 
 ---
 
@@ -299,7 +300,7 @@ Intel HDMI:    codec_addr = 3 (tipicamente)
 
 ## 11. FILE SORGENTI DRIVER HDA HAIKU
 
-Scaricati in `hda_src/`:
+Scaricati in `hda/`:
 - `hda_codec.cpp` - Parsing codec, widget tree, quirk table (FILE PRINCIPALE)
 - `hda_codec_defs.h` - Definizioni verb, tipi widget, pin capabilities
 - `driver.h` - Strutture dati driver
