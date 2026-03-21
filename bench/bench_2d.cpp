@@ -138,6 +138,42 @@ public:
 			500.0 * 1000000.0 / elapsed,
 			500.0 * WINDOW_W * WINDOW_H * 4.0 / elapsed);
 
+		// Test 5: Sync latency
+		start = system_time();
+		for (int i = 0; i < 1000; i++) {
+			SetHighColor(i % 256, 0, 0);
+			FillRect(BRect(0, 0, 10, 10));
+			Sync();
+		}
+		elapsed = system_time() - start;
+		printf("SyncLat:   1000 syncs in %lld us (%.1f us/sync)\n",
+			elapsed, (double)elapsed / 1000.0);
+
+		// Test 6: Small rects (per-command overhead dominated)
+		srand(77777);
+		start = system_time();
+		for (int i = 0; i < 10000; i++) {
+			SetHighColor(rand() % 256, rand() % 256, rand() % 256);
+			int x = rand() % (WINDOW_W - 16);
+			int y = rand() % (WINDOW_H - 16);
+			FillRect(BRect(x, y, x + 15, y + 15));
+		}
+		Sync();
+		elapsed = system_time() - start;
+		printf("SmallRect: 10000 16x16 in %lld us (%.1f rects/sec)\n",
+			elapsed, 10000.0 * 1000000.0 / elapsed);
+
+		// Test 7: Large rects (bandwidth dominated)
+		start = system_time();
+		for (int i = 0; i < 100; i++) {
+			SetHighColor(rand() % 256, rand() % 256, rand() % 256);
+			FillRect(bounds);
+		}
+		Sync();
+		elapsed = system_time() - start;
+		printf("LargeRect: 100 fills in %lld us (%.1f MB/s)\n",
+			elapsed, 100.0 * WINDOW_W * WINDOW_H * 4.0 / elapsed);
+
 		printf("\n=== Benchmark complete ===\n");
 
 		// Quit after benchmark
