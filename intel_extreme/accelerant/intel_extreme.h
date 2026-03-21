@@ -1532,6 +1532,17 @@ struct intel_brightness_legacy {
 #define COMMAND_OVERLAY_OFF				(2 << 21)
 #define OVERLAY_UPDATE_COEFFICIENTS		0x1
 
+// MI commands
+#define MI_NOOP							0x00000000
+#define MI_FLUSH						(0x04 << 23)
+#define MI_BATCH_BUFFER_START			(0x31 << 23)
+#define MI_BATCH_BUFFER_END				(0x0A << 23)
+#define MI_STORE_DWORD_INDEX			((0x21 << 23) | (1 << 0))
+	// bit 0 = use DWORD index (not byte offset)
+
+// Sequence number location in HWS store[] array
+#define HWS_SYNC_SEQUENCE_INDEX			0
+
 // 2D acceleration
 #define XY_COMMAND_SOURCE_BLIT			0x54c00006
 #define XY_COMMAND_COLOR_BLIT			0x54000004

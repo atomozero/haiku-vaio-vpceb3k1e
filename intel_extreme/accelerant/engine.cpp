@@ -28,6 +28,7 @@
 
 
 static engine_token sEngineToken = {1, 0 /*B_2D_ACCELERATION*/, NULL};
+static int32 sLastSubmittedSeq = 0;
 
 
 QueueCommands::QueueCommands(ring_buffer &ring)
@@ -40,6 +41,17 @@ QueueCommands::QueueCommands(ring_buffer &ring)
 
 QueueCommands::~QueueCommands()
 {
+	// Emit MI_STORE_DWORD_INDEX to write a sequence number to the
+	// Hardware Status Page. This allows intel_wait_engine_idle() to
+	// check completion by reading cached memory instead of polling
+	// the MMIO ring HEAD register (~100x faster).
+	uint32 seq = atomic_add(&sLastSubmittedSeq, 1) + 1;
+	MakeSpace(4);
+	Write(MI_STORE_DWORD_INDEX);
+	Write(HWS_SYNC_SEQUENCE_INDEX);
+	Write(seq);
+	Write(MI_NOOP);
+
 	if (fRingBuffer.position & 0x07) {
 		// make sure the command is properly aligned
 		Write(COMMAND_NOOP);
@@ -248,14 +260,35 @@ intel_wait_engine_idle(void)
 		return;
 	}
 
+	// Fast path: check sequence number in Hardware Status Page.
+	// The GPU writes this via MI_STORE_DWORD_INDEX after each batch.
+	// Reading cached memory is ~100x faster than polling MMIO HEAD.
+	uint32 target = (uint32)sLastSubmittedSeq;
+	if (target == 0)
+		return;  // nothing submitted yet
+
+	hardware_status* hws =
+		(hardware_status*)gInfo->shared_info->status_page;
+
+	if (hws != NULL) {
+		bigtime_t start = system_time();
+		while (hws->store[HWS_SYNC_SEQUENCE_INDEX] < target) {
+			if (system_time() > start + 1000000LL) {
+				ERROR("engine timeout waiting for seq %" B_PRIu32
+					" (current %" B_PRIu32 ")\n",
+					target, hws->store[HWS_SYNC_SEQUENCE_INDEX]);
+				break;
+			}
+			spin(1);
+		}
+		return;
+	}
+
+	// Fallback: poll ring HEAD == TAIL (slow MMIO path)
 	{
 		QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 		queue.PutFlush();
 	}
-
-	// TODO: this should only be a temporary solution!
-	// a better way to do this would be to acquire the engine's lock and
-	// sync to the latest token
 
 	bigtime_t start = system_time();
 
@@ -271,7 +304,6 @@ intel_wait_engine_idle(void)
 			break;
 
 		if (system_time() > start + 1000000LL) {
-			// the engine seems to be locked up!
 			ERROR("engine locked up, head %" B_PRIx32 "!\n", head);
 			break;
 		}
