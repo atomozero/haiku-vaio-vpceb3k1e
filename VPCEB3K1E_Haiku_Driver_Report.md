@@ -32,12 +32,21 @@
   1. `LVDSPort::IsConnected()` - Aggiunto fallback VESA EDID / VBT / BIOS per piattaforme PCH (GMBUS DDC falliva su questo pannello)
   2. `LVDSPort::SetDisplayMode()` - Preserva configurazione BIOS dual/single channel LVDS (ref: 9front fix)
   3. `Pipe::Enable()` - Aggiunto supporto watermark per PCH Ibex Peak (IBX)
-- **Stato: Risoluzione nativa funzionante. Nessuna accelerazione 3D.**
+  4. `LVDSPort::SetDisplayMode()` - Disabilita panel fitter a risoluzione nativa
+  5. `commands.h` - Fix COMMAND_BLIT_RGBA: bit 21:20 indicano tiling su Gen5, non RGBA
+  6. `engine.cpp` - Fix variabile flush non inizializzata + abilitato trace engine
+- **Stato: Risoluzione nativa funzionante. Accelerazione 2D in fase di test.**
 
-### 3. Audio - Intel HDA - FUNZIONANTE
+### 3. Audio - Intel HDA - FUNZIONANTE (con patch)
 - Controller: Intel 5 Series/3400 HD Audio (device 3b56)
+- Codec: Realtek ALC269 (subsystem Sony 104d:4600)
 - Device node presente: `/dev/audio/hmulti/hda`
-- **Stato: Funzionante**
+- Driver patchato installato via HPKG con BlockedEntries per override driver di sistema
+- **Patch applicate:**
+  1. Quirk Sony VAIO: VREF_GRD su pin 0x19 per eliminare crosstalk speaker
+  2. Override tipo widget NID 0x23/0x24 come WT_AUDIO_SELECTOR per microfono
+- Automute cuffie/speaker gia implementato nel driver base
+- **Stato: Audio funzionante, microfono rilevato, VREF fix attivo (Quirks: 0x4000)**
 
 ### 4. Rete Ethernet - Marvell Yukon 88E8059 - FUNZIONANTE
 - Driver `marvell_yukon` caricato
@@ -108,8 +117,8 @@
 | Componente | Stato | Note |
 |---|---|---|
 | CPU (i3 M370) | **Funzionante** | 4 thread, SpeedStep attivo |
-| GPU (Intel HD) | **Parziale** | 1024x768 invece di 1366x768, no 3D |
-| Audio (HDA) | **Funzionante** | |
+| GPU (Intel HD) | **Funzionante** | 1366x768 nativo, 6 patch applicate |
+| Audio (HDA) | **Funzionante** | ALC269 con VREF fix + mic fix |
 | Ethernet (Marvell) | **Funzionante** | |
 | WiFi (Intel N1000) | **Funzionante** | Connesso e operativo |
 | USB 2.0 | **Funzionante** | |

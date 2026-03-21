@@ -63,7 +63,10 @@ struct xy_command : command {
 				break;
 			case 32:
 				mode = COMMAND_MODE_RGB32;
-				opcode |= COMMAND_BLIT_RGBA;
+				// COMMAND_BLIT_RGBA sets bits 21:20 which on Gen5+
+				// indicate tiling, not RGBA. Only safe on Gen3/Gen4.
+				if (gInfo->shared_info->device_type.Generation() < 5)
+					opcode |= COMMAND_BLIT_RGBA;
 				break;
 			default:
 				debugger("invalid bits_per_pixel for xy_command");

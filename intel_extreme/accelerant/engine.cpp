@@ -15,7 +15,7 @@
 
 
 #undef TRACE
-//#define TRACE_ENGINE
+#define TRACE_ENGINE
 #ifdef TRACE_ENGINE
 #	define TRACE(x...) _sPrintf("intel_extreme: " x)
 #else
@@ -48,7 +48,7 @@ QueueCommands::~QueueCommands()
 	// is in write combining mode - releasing the lock does this, as the
 	// buffer is flushed on a locked memory operation (which is what this
 	// benaphore does), but it must happen before writing the new tail...
-	int32 flush;
+	int32 flush = 0;
 	atomic_add(&flush, 1);
 
 	write32(fRingBuffer.register_base + RING_BUFFER_TAIL, fRingBuffer.position);
