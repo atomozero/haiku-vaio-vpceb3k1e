@@ -10,10 +10,15 @@
 
 #include <driver_settings.h>
 
+#include "hmulti_audio.h"
 #include "driver.h"
 
 #include <kernel.h>
 
+
+#ifdef TRACE
+#	undef TRACE
+#endif
 
 //#define TRACE_MULTI_AUDIO
 #ifdef TRACE_MULTI_AUDIO
@@ -22,7 +27,6 @@
 #	define TRACE(a...) ;
 #endif
 #define ERROR(a...)	dprintf("hda: " a)
-
 
 typedef enum {
 	B_MIX_GAIN = 1 << 0,
