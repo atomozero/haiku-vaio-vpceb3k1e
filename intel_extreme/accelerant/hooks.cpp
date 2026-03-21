@@ -128,7 +128,8 @@ get_accelerant_hook(uint32 feature, void* data)
 				|| gInfo->shared_info->device_type.IsModel(INTEL_MODEL_965M)
 				|| gInfo->shared_info->device_type.InGroup(INTEL_GROUP_G4x)
 				|| gInfo->shared_info->device_type.InGroup(INTEL_GROUP_PIN)
-				|| gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)
+				// ILK (Ironlake/Gen5) removed: legacy overlay should work
+				// via MI_OVERLAY_FLIP, same as Gen3/Gen4.
 				|| gInfo->shared_info->device_type.InFamily(INTEL_FAMILY_SER5)
 				|| gInfo->shared_info->device_type.InFamily(INTEL_FAMILY_SOC0))
 				return NULL;
