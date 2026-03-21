@@ -8,6 +8,7 @@
 
 
 #include <Debug.h>
+#include <string.h>
 
 #include "accelerant.h"
 #include "accelerant_protos.h"
@@ -15,7 +16,7 @@
 
 
 #undef TRACE
-#define TRACE_ENGINE
+//#define TRACE_ENGINE
 #ifdef TRACE_ENGINE
 #	define TRACE(x...) _sPrintf("intel_extreme: " x)
 #else
@@ -65,8 +66,17 @@ QueueCommands::Put(struct command &command, size_t size)
 
 	MakeSpace(count);
 
-	for (uint32 i = 0; i < count; i++) {
-		Write(data[i]);
+	// Fast path: if the command fits without wrapping, use memcpy
+	uint32 bytesLeft = fRingBuffer.size - fRingBuffer.position;
+	if (bytesLeft >= size) {
+		memcpy((uint8*)fRingBuffer.base + fRingBuffer.position, data, size);
+		fRingBuffer.position = (fRingBuffer.position + size)
+			& (fRingBuffer.size - 1);
+	} else {
+		// Slow path: write DWORD by DWORD across the wrap boundary
+		for (uint32 i = 0; i < count; i++) {
+			Write(data[i]);
+		}
 	}
 }
 
@@ -297,8 +307,9 @@ intel_screen_to_screen_blit(engine_token* token, blit_params* params,
 {
 	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 
+	xy_source_blit_command blit;
+
 	for (uint32 i = 0; i < count; i++) {
-		xy_source_blit_command blit;
 		blit.source_left = params[i].src_left;
 		blit.source_top = params[i].src_top;
 		blit.dest_left = params[i].dest_left;
@@ -317,13 +328,14 @@ intel_fill_rectangle(engine_token* token, uint32 color,
 {
 	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 
+	xy_color_blit_command blit(false);
+	blit.color = color;
+
 	for (uint32 i = 0; i < count; i++) {
-		xy_color_blit_command blit(false);
 		blit.dest_left = params[i].left;
 		blit.dest_top = params[i].top;
 		blit.dest_right = params[i].right + 1;
 		blit.dest_bottom = params[i].bottom + 1;
-		blit.color = color;
 
 		queue.Put(blit, sizeof(blit));
 	}
@@ -336,13 +348,14 @@ intel_invert_rectangle(engine_token* token, fill_rect_params* params,
 {
 	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 
+	xy_color_blit_command blit(true);
+	blit.color = 0xffffffff;
+
 	for (uint32 i = 0; i < count; i++) {
-		xy_color_blit_command blit(true);
 		blit.dest_left = params[i].left;
 		blit.dest_top = params[i].top;
 		blit.dest_right = params[i].right + 1;
 		blit.dest_bottom = params[i].bottom + 1;
-		blit.color = 0xffffffff;
 
 		queue.Put(blit, sizeof(blit));
 	}
@@ -366,11 +379,14 @@ intel_fill_span(engine_token* token, uint32 color, uint16* _params,
 	setup.pattern = 0;
 	queue.Put(setup, sizeof(setup));
 
+	xy_scanline_blit_command blit;
+
 	for (uint32 i = 0; i < count; i++) {
-		xy_scanline_blit_command blit;
 		blit.dest_left = params[i].left;
 		blit.dest_top = params[i].top;
 		blit.dest_right = params[i].right;
 		blit.dest_bottom = params[i].top;
+
+		queue.Put(blit, sizeof(blit));
 	}
 }

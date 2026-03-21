@@ -1,4 +1,12 @@
 *.o
 *.a
 *.accelerant
+*.accelerant.backup
+*.hpkg
 .claude/
+bench/bench_2d
+hda/hda
+hda/kernel_debug_config.h
+hda/tracing_config.h
+hda/pkg_build/
+hda/hda_codec.cpp.new
