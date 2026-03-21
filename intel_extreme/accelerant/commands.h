@@ -36,6 +36,29 @@ class QueueCommands {
 };
 
 
+// Batch buffer: writes commands to a separate GTT buffer, then submits
+// the whole batch via MI_BATCH_BUFFER_START in the ring. Eliminates
+// per-command ring overhead (lock, MakeSpace, TAIL write).
+class BatchCommands {
+	public:
+		BatchCommands(ring_buffer &ring);
+		~BatchCommands();
+
+		void Put(struct command &command, size_t size);
+
+	private:
+		void WriteBatch(uint32 data);
+
+		ring_buffer	&fRing;
+		uint32		fPosition;
+};
+
+// Batch buffer management
+extern status_t init_batch_buffer();
+extern void uninit_batch_buffer();
+extern bool batch_buffer_available();
+
+
 // commands
 
 struct xy_command : command {

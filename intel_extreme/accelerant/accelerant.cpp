@@ -506,6 +506,9 @@ intel_init_accelerant(int device)
 
 	setup_ring_buffer(info.primary_ring_buffer, "intel primary ring buffer");
 
+	// Allocate batch buffer for faster 2D command submission
+	init_batch_buffer();
+
 	// Probe all ports
 	status = probe_ports();
 
@@ -602,6 +605,7 @@ intel_uninit_accelerant(void)
 		intel_shared_info &info = *gInfo->shared_info;
 		uninit_lock(&info.accelerant_lock);
 		uninit_lock(&info.engine_lock);
+		uninit_batch_buffer();
 		uninit_ring_buffer(info.primary_ring_buffer);
 	}
 	uninit_common();

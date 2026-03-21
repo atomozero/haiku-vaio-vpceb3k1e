@@ -30,6 +30,13 @@
 static engine_token sEngineToken = {1, 0 /*B_2D_ACCELERATION*/, NULL};
 static int32 sLastSubmittedSeq = 0;
 
+// Batch buffer for BLT commands - avoids per-command ring overhead
+#define BATCH_BUFFER_SIZE	(64 * 1024)
+
+static addr_t sBatchBase = 0;		// virtual address (WC mapped)
+static uint32 sBatchOffset = 0;	// GTT offset for GPU
+static uint32 sBatchSize = 0;
+
 
 QueueCommands::QueueCommands(ring_buffer &ring)
 	:
@@ -208,6 +215,106 @@ setup_ring_buffer(ring_buffer &ringBuffer, const char* name)
 }
 
 
+status_t
+init_batch_buffer()
+{
+	addr_t base;
+	if (intel_allocate_memory(BATCH_BUFFER_SIZE, 0, base) != B_OK) {
+		ERROR("Failed to allocate batch buffer\n");
+		return B_NO_MEMORY;
+	}
+
+	sBatchBase = base;
+	sBatchOffset = base - (addr_t)gInfo->shared_info->graphics_memory;
+	sBatchSize = BATCH_BUFFER_SIZE;
+
+	memset((void*)base, 0, BATCH_BUFFER_SIZE);
+	TRACE("Batch buffer: base %p, GTT offset 0x%" B_PRIx32 ", size 0x%"
+		B_PRIx32 "\n", (void*)base, sBatchOffset, sBatchSize);
+	return B_OK;
+}
+
+
+void
+uninit_batch_buffer()
+{
+	if (sBatchBase != 0) {
+		intel_free_memory(sBatchBase);
+		sBatchBase = 0;
+	}
+}
+
+
+//	#pragma mark - BatchCommands
+
+
+BatchCommands::BatchCommands(ring_buffer &ring)
+	:
+	fRing(ring),
+	fPosition(0)
+{
+}
+
+
+BatchCommands::~BatchCommands()
+{
+	if (sBatchBase == 0 || fPosition == 0)
+		return;
+
+	// Write sequence number to HWS page
+	uint32 seq = atomic_add(&sLastSubmittedSeq, 1) + 1;
+	WriteBatch(MI_STORE_DWORD_INDEX);
+	WriteBatch(HWS_SYNC_SEQUENCE_INDEX);
+	WriteBatch(seq);
+	WriteBatch(MI_NOOP);
+
+	// End the batch
+	WriteBatch(MI_BATCH_BUFFER_END);
+	if (fPosition & 0x07)
+		WriteBatch(MI_NOOP);
+
+	// Memory barrier: ensure batch writes are visible to GPU
+	int32 flush = 0;
+	atomic_add(&flush, 1);
+
+	// Submit batch via ring: MI_BATCH_BUFFER_START + GTT address
+	QueueCommands queue(fRing);
+	queue.MakeSpace(2);
+	queue.Write(MI_BATCH_BUFFER_START);
+	queue.Write(sBatchOffset);
+}
+
+
+void
+BatchCommands::Put(struct command &command, size_t size)
+{
+	// Check if batch has enough space (leave room for trailer)
+	if (fPosition + size + 32 > sBatchSize) {
+		// Batch full - shouldn't happen with 64KB buffer
+		ERROR("Batch buffer full!\n");
+		return;
+	}
+
+	memcpy((uint8*)sBatchBase + fPosition, command.Data(), size);
+	fPosition += size;
+}
+
+
+void
+BatchCommands::WriteBatch(uint32 data)
+{
+	*(uint32*)((uint8*)sBatchBase + fPosition) = data;
+	fPosition += sizeof(uint32);
+}
+
+
+bool
+batch_buffer_available()
+{
+	return sBatchBase != 0;
+}
+
+
 //	#pragma mark - engine management
 
 
@@ -337,10 +444,23 @@ void
 intel_screen_to_screen_blit(engine_token* token, blit_params* params,
 	uint32 count)
 {
+	if (false && batch_buffer_available()) {
+		BatchCommands batch(gInfo->shared_info->primary_ring_buffer);
+		xy_source_blit_command blit;
+		for (uint32 i = 0; i < count; i++) {
+			blit.source_left = params[i].src_left;
+			blit.source_top = params[i].src_top;
+			blit.dest_left = params[i].dest_left;
+			blit.dest_top = params[i].dest_top;
+			blit.dest_right = params[i].dest_left + params[i].width + 1;
+			blit.dest_bottom = params[i].dest_top + params[i].height + 1;
+			batch.Put(blit, sizeof(blit));
+		}
+		return;
+	}
+
 	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
-
 	xy_source_blit_command blit;
-
 	for (uint32 i = 0; i < count; i++) {
 		blit.source_left = params[i].src_left;
 		blit.source_top = params[i].src_top;
@@ -348,7 +468,6 @@ intel_screen_to_screen_blit(engine_token* token, blit_params* params,
 		blit.dest_top = params[i].dest_top;
 		blit.dest_right = params[i].dest_left + params[i].width + 1;
 		blit.dest_bottom = params[i].dest_top + params[i].height + 1;
-
 		queue.Put(blit, sizeof(blit));
 	}
 }
@@ -358,17 +477,28 @@ void
 intel_fill_rectangle(engine_token* token, uint32 color,
 	fill_rect_params* params, uint32 count)
 {
-	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
+	if (false && batch_buffer_available()) {
+		BatchCommands batch(gInfo->shared_info->primary_ring_buffer);
+		xy_color_blit_command blit(false);
+		blit.color = color;
+		for (uint32 i = 0; i < count; i++) {
+			blit.dest_left = params[i].left;
+			blit.dest_top = params[i].top;
+			blit.dest_right = params[i].right + 1;
+			blit.dest_bottom = params[i].bottom + 1;
+			batch.Put(blit, sizeof(blit));
+		}
+		return;
+	}
 
+	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 	xy_color_blit_command blit(false);
 	blit.color = color;
-
 	for (uint32 i = 0; i < count; i++) {
 		blit.dest_left = params[i].left;
 		blit.dest_top = params[i].top;
 		blit.dest_right = params[i].right + 1;
 		blit.dest_bottom = params[i].bottom + 1;
-
 		queue.Put(blit, sizeof(blit));
 	}
 }
@@ -378,17 +508,28 @@ void
 intel_invert_rectangle(engine_token* token, fill_rect_params* params,
 	uint32 count)
 {
-	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
+	if (false && batch_buffer_available()) {
+		BatchCommands batch(gInfo->shared_info->primary_ring_buffer);
+		xy_color_blit_command blit(true);
+		blit.color = 0xffffffff;
+		for (uint32 i = 0; i < count; i++) {
+			blit.dest_left = params[i].left;
+			blit.dest_top = params[i].top;
+			blit.dest_right = params[i].right + 1;
+			blit.dest_bottom = params[i].bottom + 1;
+			batch.Put(blit, sizeof(blit));
+		}
+		return;
+	}
 
+	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 	xy_color_blit_command blit(true);
 	blit.color = 0xffffffff;
-
 	for (uint32 i = 0; i < count; i++) {
 		blit.dest_left = params[i].left;
 		blit.dest_top = params[i].top;
 		blit.dest_right = params[i].right + 1;
 		blit.dest_bottom = params[i].bottom + 1;
-
 		queue.Put(blit, sizeof(blit));
 	}
 }
