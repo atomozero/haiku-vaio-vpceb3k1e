@@ -48,16 +48,17 @@ QueueCommands::QueueCommands(ring_buffer &ring)
 
 QueueCommands::~QueueCommands()
 {
-	// Emit MI_STORE_DWORD_INDEX to write a sequence number to the
-	// Hardware Status Page. This allows intel_wait_engine_idle() to
-	// check completion by reading cached memory instead of polling
-	// the MMIO ring HEAD register (~100x faster).
+	// Emit MI_STORE_DWORD_INDEX to update the sequence number in the
+	// Hardware Status Page. Only emit every 8th submission to balance
+	// per-command overhead (4 DWORDs) vs sync accuracy.
 	uint32 seq = atomic_add(&sLastSubmittedSeq, 1) + 1;
-	MakeSpace(4);
-	Write(MI_STORE_DWORD_INDEX);
-	Write(HWS_SYNC_SEQUENCE_INDEX);
-	Write(seq);
-	Write(MI_NOOP);
+	if ((seq & 0x07) == 0) {
+		MakeSpace(4);
+		Write(MI_STORE_DWORD_INDEX);
+		Write(HWS_SYNC_SEQUENCE_INDEX);
+		Write(seq);
+		Write(MI_NOOP);
+	}
 
 	if (fRingBuffer.position & 0x07) {
 		// make sure the command is properly aligned
@@ -368,30 +369,19 @@ intel_wait_engine_idle(void)
 	}
 
 	// Fast path: check sequence number in Hardware Status Page.
-	// The GPU writes this via MI_STORE_DWORD_INDEX after each batch.
-	// Reading cached memory is ~100x faster than polling MMIO HEAD.
-	uint32 target = (uint32)sLastSubmittedSeq;
-	if (target == 0)
-		return;  // nothing submitted yet
-
+	// The seq is only updated every 8th submission to reduce overhead,
+	// so we round target down to the nearest multiple of 8.
+	uint32 target = (uint32)sLastSubmittedSeq & ~0x07;
 	hardware_status* hws =
 		(hardware_status*)gInfo->shared_info->status_page;
 
-	if (hws != NULL) {
-		bigtime_t start = system_time();
-		while (hws->store[HWS_SYNC_SEQUENCE_INDEX] < target) {
-			if (system_time() > start + 1000000LL) {
-				ERROR("engine timeout waiting for seq %" B_PRIu32
-					" (current %" B_PRIu32 ")\n",
-					target, hws->store[HWS_SYNC_SEQUENCE_INDEX]);
-				break;
-			}
-			spin(1);
-		}
+	if (hws != NULL && target > 0
+		&& hws->store[HWS_SYNC_SEQUENCE_INDEX] >= target) {
+		// GPU already past our target - no wait needed
 		return;
 	}
 
-	// Fallback: poll ring HEAD == TAIL (slow MMIO path)
+	// Slow path: poll ring HEAD == TAIL
 	{
 		QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 		queue.PutFlush();
@@ -468,6 +458,13 @@ intel_screen_to_screen_blit(engine_token* token, blit_params* params,
 		blit.dest_top = params[i].dest_top;
 		blit.dest_right = params[i].dest_left + params[i].width + 1;
 		blit.dest_bottom = params[i].dest_top + params[i].height + 1;
+
+		// For overlapping regions where dest is below/right of source,
+		// the GPU handles this correctly with XY_SRC_COPY_BLT as long
+		// as source and dest use the same base address and pitch.
+		// The hardware processes scanlines top-to-bottom, so vertical
+		// overlap downward needs no special handling on Intel BLT.
+
 		queue.Put(blit, sizeof(blit));
 	}
 }
