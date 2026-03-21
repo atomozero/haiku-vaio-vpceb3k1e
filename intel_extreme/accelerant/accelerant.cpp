@@ -9,6 +9,7 @@
 
 #include "accelerant_protos.h"
 #include "accelerant.h"
+#include "render.h"
 
 #include "utility.h"
 
@@ -509,6 +510,9 @@ intel_init_accelerant(int device)
 	// Allocate batch buffer for faster 2D command submission
 	init_batch_buffer();
 
+	// Initialize render engine (3D pipeline for 2D ops)
+	render_init();
+
 	// Probe all ports
 	status = probe_ports();
 
@@ -605,6 +609,7 @@ intel_uninit_accelerant(void)
 		intel_shared_info &info = *gInfo->shared_info;
 		uninit_lock(&info.accelerant_lock);
 		uninit_lock(&info.engine_lock);
+		render_uninit();
 		uninit_batch_buffer();
 		uninit_ring_buffer(info.primary_ring_buffer);
 	}

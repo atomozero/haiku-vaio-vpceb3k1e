@@ -112,7 +112,7 @@ get_accelerant_hook(uint32 feature, void* data)
 		case B_INVERT_RECTANGLE:
 			return (void*)intel_invert_rectangle;
 		case B_FILL_SPAN:
-			return NULL;//(void*)intel_fill_span;
+			return (void*)intel_fill_span;
 
 		// overlay
 		case B_OVERLAY_COUNT:

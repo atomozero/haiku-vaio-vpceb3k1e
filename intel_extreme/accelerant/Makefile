@@ -31,7 +31,7 @@ CFLAGS   = $(CFLAGS_COMMON) -std=c11 -fPIC
 
 # Accelerant source files
 ACCEL_SRCS = accelerant.cpp cursor.cpp dpms.cpp engine.cpp hooks.cpp \
-	memory.cpp mode.cpp overlay.cpp pll.cpp \
+	memory.cpp mode.cpp overlay.cpp pll.cpp render.cpp \
 	FlexibleDisplayInterface.cpp PanelFitter.cpp Ports.cpp Pipes.cpp \
 	TigerLakePLL.cpp
 
