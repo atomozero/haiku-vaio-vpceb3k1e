@@ -46,12 +46,17 @@ program_pipe_color_modes(uint32 colorMode)
 			& ~(DISPLAY_CONTROL_COLOR_MASK_SKY | DISPLAY_CONTROL_GAMMA))
 			| colorMode);
 	} else {
+		uint32 tiledBit = gInfo->shared_info->frame_buffer_tiled
+			? DISPLAY_CONTROL_TILED : 0;
+
 		write32(INTEL_DISPLAY_A_CONTROL, (read32(INTEL_DISPLAY_A_CONTROL)
-			& ~(DISPLAY_CONTROL_COLOR_MASK | DISPLAY_CONTROL_GAMMA))
-			| colorMode);
+			& ~(DISPLAY_CONTROL_COLOR_MASK | DISPLAY_CONTROL_GAMMA
+				| DISPLAY_CONTROL_TILED))
+			| colorMode | tiledBit);
 		write32(INTEL_DISPLAY_B_CONTROL, (read32(INTEL_DISPLAY_B_CONTROL)
-			& ~(DISPLAY_CONTROL_COLOR_MASK | DISPLAY_CONTROL_GAMMA))
-			| colorMode);
+			& ~(DISPLAY_CONTROL_COLOR_MASK | DISPLAY_CONTROL_GAMMA
+				| DISPLAY_CONTROL_TILED))
+			| colorMode | tiledBit);
 	}
 }
 
