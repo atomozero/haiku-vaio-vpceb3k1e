@@ -368,45 +368,12 @@ intel_set_display_mode(display_mode* mode)
 	// free old and allocate new frame buffer in graphics memory
 
 	intel_free_memory(sharedInfo.frame_buffer);
-	gInfo->frame_buffer_tiled = false;
 
-	// For X-Tiling (Gen5 Ironlake), use power-of-2 stride
-	// This step only changes the stride — fence and DSPCNTR tiled
-	// are enabled in subsequent steps after validation.
-	bool useTiledStride = sharedInfo.device_type.InGroup(INTEL_GROUP_ILK);
-	if (useTiledStride) {
-		uint32 tiledStride = 512;
-		while (tiledStride < bytesPerRow)
-			tiledStride <<= 1;
-		if (tiledStride <= 32768) {
-			ERROR("X-Tiling step2: stride %d -> %d (po2)\n",
-				(int)bytesPerRow, (int)tiledStride);
-			bytesPerRow = tiledStride;
-		}
-	}
-
-	uint32 fbSize = bytesPerRow * target.virtual_height;
 	addr_t base;
-	status_t allocStatus;
-
-	if (useTiledStride) {
-		// Allocate with power-of-2 alignment for future fence use
-		uint32 fenceSize = 1;
-		while (fenceSize < fbSize)
-			fenceSize <<= 1;
-		allocStatus = intel_allocate_memory(fenceSize, fenceSize, 0, base);
-		if (allocStatus < B_OK) {
-			ERROR("X-Tiling: aligned alloc failed, fallback linear\n");
-			bytesPerRow = (target.virtual_width * ((bitsPerPixel + 7) / 8)
-				+ 63) & ~63;
-			fbSize = bytesPerRow * target.virtual_height;
-			allocStatus = intel_allocate_memory(fbSize, 0, base);
-		}
-	} else {
-		allocStatus = intel_allocate_memory(fbSize, 0, base);
-	}
-
-	if (allocStatus < B_OK) {
+	if (intel_allocate_memory(bytesPerRow * target.virtual_height, 0,
+			base) < B_OK) {
+		// oh, how did that happen? Unfortunately, there is no really good way
+		// back. Try to restore a framebuffer for the previous mode, at least.
 		if (intel_allocate_memory(sharedInfo.current_mode.virtual_height
 				* sharedInfo.bytes_per_row, 0, base) == B_OK) {
 			sharedInfo.frame_buffer = base;
@@ -414,7 +381,8 @@ intel_set_display_mode(display_mode* mode)
 				- (addr_t)sharedInfo.graphics_memory;
 			set_frame_buffer_base();
 		}
-		ERROR("%s: Failed to allocate framebuffer!\n", __func__);
+
+		ERROR("%s: Failed to allocate framebuffer !\n", __func__);
 		return B_NO_MEMORY;
 	}
 
