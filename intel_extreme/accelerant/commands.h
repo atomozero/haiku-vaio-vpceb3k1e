@@ -97,13 +97,6 @@ struct xy_command : command {
 		dest_bytes_per_row = gInfo->shared_info->bytes_per_row;
 		dest_base = gInfo->shared_info->frame_buffer_offset;
 		raster_operation = rop;
-
-		// X-Tiled surface: set dst tiling bit and encode stride
-		// as DWORDs (GPU multiplies by 4 internally for tiled)
-		if (gInfo->shared_info->frame_buffer_tiled) {
-			opcode |= (1 << 11);	// XY_BLT_DST_TILED
-			dest_bytes_per_row = gInfo->shared_info->bytes_per_row >> 2;
-		}
 	}
 };
 
@@ -120,10 +113,6 @@ struct xy_source_blit_command : xy_command {
 		source_bytes_per_row = dest_bytes_per_row;
 		source_base = dest_base;
 		reserved = 0;
-
-		// X-Tiled source: set src tiling bit
-		if (gInfo->shared_info->frame_buffer_tiled)
-			opcode |= (1 << 15);	// XY_SRC_COPY_BLT_SRC_TILED
 	}
 };
 

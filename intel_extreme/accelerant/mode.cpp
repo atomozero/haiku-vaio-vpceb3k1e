@@ -367,65 +367,11 @@ intel_set_display_mode(display_mode* mode)
 
 	// free old and allocate new frame buffer in graphics memory
 
-	// Invalidate fence before freeing tiled framebuffer
-	if (sharedInfo.frame_buffer_tiled) {
-		uint32 fenceBase = sharedInfo.device_type.Generation() >= 6
-			? INTEL_FENCE_BASE_GEN6 : INTEL_FENCE_BASE_965;
-		uint32 fenceReg = fenceBase
-			+ sharedInfo.fence_register_index * INTEL_FENCE_SIZE;
-		write32(fenceReg, 0);		// invalidate
-		read32(fenceReg);			// posting read
-		write32(fenceReg + 4, 0);
-		read32(fenceReg);
-		sharedInfo.frame_buffer_tiled = false;
-	}
-
 	intel_free_memory(sharedInfo.frame_buffer);
 
-	// X-Tiling disabled: fence register programming needs validation
-	// before enabling. Set to true only after confirming fence works.
-	bool useTiling = false;
-	// bool useTiling = sharedInfo.device_type.InGroup(INTEL_GROUP_ILK);
-	uint32 fbSize = bytesPerRow * target.virtual_height;
-
-	if (useTiling) {
-		// X-Tiling requires stride = power of 2
-		uint32 tiledStride = 1;
-		while (tiledStride < bytesPerRow)
-			tiledStride <<= 1;
-		if (tiledStride <= 32768) {
-			bytesPerRow = tiledStride;
-			fbSize = bytesPerRow * target.virtual_height;
-		} else {
-			useTiling = false;
-		}
-	}
-
 	addr_t base;
-	status_t allocStatus;
-
-	if (useTiling) {
-		// Fence requires object aligned to power-of-2 size
-		uint32 fenceSize = 1;
-		while (fenceSize < fbSize)
-			fenceSize <<= 1;
-
-		allocStatus = intel_allocate_memory(fenceSize, fenceSize, 0, base);
-		if (allocStatus < B_OK) {
-			// Fallback to linear
-			TRACE("X-Tiled alloc failed, falling back to linear\n");
-			useTiling = false;
-			uint32 linearBpr = (target.virtual_width
-				* ((bitsPerPixel + 7) / 8) + 63) & ~63;
-			bytesPerRow = linearBpr;
-			fbSize = bytesPerRow * target.virtual_height;
-			allocStatus = intel_allocate_memory(fbSize, 0, base);
-		}
-	} else {
-		allocStatus = intel_allocate_memory(fbSize, 0, base);
-	}
-
-	if (allocStatus < B_OK) {
+	if (intel_allocate_memory(bytesPerRow * target.virtual_height, 0,
+			base) < B_OK) {
 		// oh, how did that happen? Unfortunately, there is no really good way
 		// back. Try to restore a framebuffer for the previous mode, at least.
 		if (intel_allocate_memory(sharedInfo.current_mode.virtual_height
@@ -444,57 +390,6 @@ intel_set_display_mode(display_mode* mode)
 	memset((uint8*)base, 0, bytesPerRow * target.virtual_height);
 	sharedInfo.frame_buffer = base;
 	sharedInfo.frame_buffer_offset = base - (addr_t)sharedInfo.graphics_memory;
-
-	// Program fence register for X-Tiled framebuffer
-	if (useTiling) {
-		uint32 fenceIndex = 0;
-		uint32 fenceBase = sharedInfo.device_type.Generation() >= 6
-			? INTEL_FENCE_BASE_GEN6 : INTEL_FENCE_BASE_965;
-		uint32 fenceReg = fenceBase + fenceIndex * INTEL_FENCE_SIZE;
-
-		uint32 startOffset = sharedInfo.frame_buffer_offset;
-		uint32 fenceObjSize = 1;
-		while (fenceObjSize < fbSize)
-			fenceObjSize <<= 1;
-		uint32 endOffset = startOffset + fenceObjSize - 4096;
-
-		uint32 pitchVal = (bytesPerRow / 128) - 1;
-
-		// Linux i965_write_fence_reg sequence:
-		// 1. Invalidate (write lo = 0, posting read)
-		// 2. Write high DWORD (end address)
-		// 3. Write low DWORD (start + pitch + valid)
-		// 4. Posting read
-
-		// Low DWORD: start[31:12] | pitch[11:2] | tile_walk[1] | valid[0]
-		uint32 fenceLo = (startOffset & 0xFFFFF000)
-			| ((pitchVal & 0x3FF) << FENCE_REG_PITCH_SHIFT)
-			| FENCE_REG_VALID;
-		// High DWORD: end[31:12] (end = start + size - 4096)
-		uint32 fenceHi = endOffset & 0xFFFFF000;
-
-		// Step 1: invalidate
-		write32(fenceReg, 0);
-		read32(fenceReg);
-
-		// Step 2: write high DWORD first
-		write32(fenceReg + 4, fenceHi);
-
-		// Step 3: write low DWORD (activates fence)
-		write32(fenceReg, fenceLo);
-		read32(fenceReg);
-
-		sharedInfo.frame_buffer_tiled = true;
-		sharedInfo.fence_register_index = fenceIndex;
-
-		TRACE("X-Tiled FB: stride=%" B_PRIu32 ", fence %d at 0x%x: "
-			"lo=0x%08" B_PRIx32 " hi=0x%08" B_PRIx32 " "
-			"(start=0x%" B_PRIx32 " end=0x%" B_PRIx32 " pitch=%" B_PRIu32 ")\n",
-			bytesPerRow, fenceIndex, fenceReg,
-			fenceLo, fenceHi, startOffset, endOffset, pitchVal);
-	} else {
-		sharedInfo.frame_buffer_tiled = false;
-	}
 
 #if 0
 	if ((gInfo->head_mode & HEAD_MODE_TESTING) != 0) {

@@ -607,19 +607,6 @@ intel_uninit_accelerant(void)
 
 	if (!gInfo->is_clone) {
 		intel_shared_info &info = *gInfo->shared_info;
-
-		// Invalidate fence register before freeing tiled framebuffer
-		if (info.frame_buffer_tiled) {
-			uint32 fenceBase = info.device_type.Generation() >= 6
-				? INTEL_FENCE_BASE_GEN6 : INTEL_FENCE_BASE_965;
-			uint32 fenceReg = fenceBase
-				+ info.fence_register_index * INTEL_FENCE_SIZE;
-			write32(fenceReg, 0);
-			read32(fenceReg);
-			write32(fenceReg + 4, 0);
-			read32(fenceReg);
-		}
-
 		uninit_lock(&info.accelerant_lock);
 		uninit_lock(&info.engine_lock);
 		render_uninit();
