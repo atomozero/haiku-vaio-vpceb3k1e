@@ -70,6 +70,10 @@ struct accelerant_info {
 	int				device;
 	uint8			head_mode;
 	bool			is_clone;
+
+	// X-Tiling state (accelerant-only, not in shared_info)
+	bool			frame_buffer_tiled;
+	uint32			fence_register_index;
 };
 
 
