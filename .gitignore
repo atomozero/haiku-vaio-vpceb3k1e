@@ -10,3 +10,4 @@ hda/kernel_debug_config.h
 hda/tracing_config.h
 hda/pkg_build/
 hda/hda_codec.cpp.new
+intel_extreme/intel_extreme.accelerant.pre_tiling

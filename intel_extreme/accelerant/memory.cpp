@@ -44,10 +44,17 @@ intel_free_memory(addr_t base)
 status_t
 intel_allocate_memory(size_t size, uint32 flags, addr_t &base)
 {
+	return intel_allocate_memory(size, 0, flags, base);
+}
+
+
+status_t
+intel_allocate_memory(size_t size, size_t alignment, uint32 flags, addr_t &base)
+{
 	intel_allocate_graphics_memory allocMemory;
 	allocMemory.magic = INTEL_PRIVATE_DATA_MAGIC;
 	allocMemory.size = size;
-	allocMemory.alignment = 0;
+	allocMemory.alignment = alignment;
 	allocMemory.flags = flags;
 
 	if (ioctl(gInfo->device, INTEL_ALLOCATE_GRAPHICS_MEMORY, &allocMemory,
