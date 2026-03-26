@@ -492,15 +492,8 @@ intel_set_display_mode(display_mode* mode)
 	// We set the same color mode across all pipes
 	program_pipe_color_modes(colorMode);
 
-	// TODO: This may not be neccesary (see DPMS OFF at top)
-	set_display_power_mode(sharedInfo.dpms_mode);
-
-	// Changing bytes per row seems to be ignored if the plane/pipe is turned
-	// off
-
-	// Always set both pipes, just in case
-	// TODO rework this when we get multiple head support with different
-	// resolutions
+	// Write DSPSTRIDE BEFORE re-enabling display (Linux does the same:
+	// DSPSTRIDE is a "noarm" register written before the arming sequence)
 	if (sharedInfo.device_type.InFamily(INTEL_FAMILY_LAKE)) {
 		write32(INTEL_DISPLAY_A_BYTES_PER_ROW, bytesPerRow >> 6);
 		write32(INTEL_DISPLAY_B_BYTES_PER_ROW, bytesPerRow >> 6);
@@ -515,8 +508,12 @@ intel_set_display_mode(display_mode* mode)
 	sharedInfo.bits_per_pixel = bitsPerPixel;
 
 	set_frame_buffer_base();
-		// triggers writing back double-buffered registers
-		// which is INTEL_DISPLAY_X_BYTES_PER_ROW only apparantly
+		// writes DSPSURF which is the ARMING WRITE — latches DSPCNTR,
+		// DSPSTRIDE, and all other double-buffered registers at next vblank
+
+	// Re-enable display AFTER all registers are programmed
+	// (was before DSPSTRIDE/DSPSURF — caused corruption with tiling)
+	set_display_power_mode(sharedInfo.dpms_mode);
 
 	// Second register dump
 	//dump_registers();

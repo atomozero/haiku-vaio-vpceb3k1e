@@ -2,12 +2,16 @@
  * Copyright 2026, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
- * Gen5 (Ironlake) 3D render engine for 2D acceleration.
- * Uses the GPU's shader pipeline for operations the BLT engine
- * cannot do: alpha compositing, scaling, gradients.
+ * Authors:
+ *		Alexander (Wikipedia Wikipedia), user@shredder
  */
 #ifndef RENDER_H
 #define RENDER_H
+
+
+// Gen5 (Ironlake) 3D render engine for 2D acceleration.
+// Uses the GPU's shader pipeline for operations the BLT engine
+// cannot do: alpha compositing, scaling, gradients.
 
 #include "accelerant.h"
 
@@ -110,9 +114,10 @@ struct render_state {
 };
 
 // Render engine functions
-extern status_t render_init();
-extern void render_uninit();
-extern status_t render_fill_rect(uint32 color, int16 left, int16 top,
+status_t render_init();
+void render_uninit();
+status_t render_fill_rect(uint32 color, int16 left, int16 top,
 	int16 right, int16 bottom);
 
-#endif	/* RENDER_H */
+
+#endif	// RENDER_H

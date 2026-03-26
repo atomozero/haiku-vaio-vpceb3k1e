@@ -2,26 +2,24 @@
  * Copyright 2026, Haiku, Inc. All Rights Reserved.
  * Distributed under the terms of the MIT License.
  *
- * Gen5 (Ironlake) render engine for 2D acceleration.
- * Initial implementation: solid color fill via 3D pipeline.
- *
- * Architecture:
- *   1. Allocate GPU memory for state structures + shader kernel
- *   2. Write pre-compiled EU kernel (solid fill)
- *   3. Build state: VS, WM, CC, binding table, surface state
- *   4. Emit 3D commands via ring buffer
- *   5. Draw RECTLIST primitive
- *
- * This is a proof-of-concept. The BLT engine remains the primary
- * path for simple fills. The render engine will be used for
- * operations BLT cannot do (alpha blend, scale, gradient).
+ * Authors:
+ *		Alexander (Wikipedia Wikipedia), user@shredder
  */
 
+
+// Gen5 (Ironlake) render engine for 2D acceleration.
+// Initial implementation: solid color fill via 3D pipeline.
+// The BLT engine remains the primary path for simple fills.
+// The render engine will be used for operations BLT cannot do
+// (alpha blend, scale, gradient).
+
 #include "render.h"
-#include "commands.h"
 
 #include <string.h>
+
 #include <Debug.h>
+
+#include "commands.h"
 
 
 #undef TRACE
@@ -201,9 +199,15 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 	// Write vertex data for RECTLIST (3 vertices per rect)
 	// Format: X, Y (float)
 	float* vb = (float*)(sRenderState.base + STATE_VERTEX_OFFSET);
-	vb[0] = (float)left;	vb[1] = (float)bottom;  // v0: bottom-left
-	vb[2] = (float)left;	vb[3] = (float)top;     // v1: top-left
-	vb[4] = (float)right;	vb[5] = (float)bottom;  // v2: bottom-right
+	// v0: bottom-left
+	vb[0] = (float)left;
+	vb[1] = (float)bottom;
+	// v1: top-left
+	vb[2] = (float)left;
+	vb[3] = (float)top;
+	// v2: bottom-right
+	vb[4] = (float)right;
+	vb[5] = (float)bottom;
 
 	// Memory barrier
 	int32 flush = 0;

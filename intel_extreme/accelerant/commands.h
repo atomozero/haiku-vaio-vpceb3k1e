@@ -53,10 +53,11 @@ class BatchCommands {
 		uint32		fPosition;
 };
 
+
 // Batch buffer management
-extern status_t init_batch_buffer();
-extern void uninit_batch_buffer();
-extern bool batch_buffer_available();
+status_t init_batch_buffer();
+void uninit_batch_buffer();
+bool batch_buffer_available();
 
 
 // commands
