@@ -11,3 +11,5 @@ hda/tracing_config.h
 hda/pkg_build/
 hda/hda_codec.cpp.new
 intel_extreme/intel_extreme.accelerant.pre_tiling
+gpu_pkg/
+bench/README.md
