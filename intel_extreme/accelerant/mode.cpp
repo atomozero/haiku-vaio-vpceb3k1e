@@ -365,26 +365,17 @@ intel_set_display_mode(display_mode* mode)
 	// TODO: This may not be neccesary
 	set_display_power_mode(B_DPMS_OFF);
 
-	// free old and allocate new frame buffer in graphics memory
-
-	intel_free_memory(sharedInfo.frame_buffer);
+	// Allocate new frame buffer before freeing the old one, so that a
+	// failed allocation leaves the current framebuffer intact.
 
 	addr_t base;
 	if (intel_allocate_memory(bytesPerRow * target.virtual_height, 0,
 			base) < B_OK) {
-		// oh, how did that happen? Unfortunately, there is no really good way
-		// back. Try to restore a framebuffer for the previous mode, at least.
-		if (intel_allocate_memory(sharedInfo.current_mode.virtual_height
-				* sharedInfo.bytes_per_row, 0, base) == B_OK) {
-			sharedInfo.frame_buffer = base;
-			sharedInfo.frame_buffer_offset = base
-				- (addr_t)sharedInfo.graphics_memory;
-			set_frame_buffer_base();
-		}
-
 		ERROR("%s: Failed to allocate framebuffer !\n", __func__);
 		return B_NO_MEMORY;
 	}
+
+	intel_free_memory(sharedInfo.frame_buffer);
 
 	// clear frame buffer before using it
 	memset((uint8*)base, 0, bytesPerRow * target.virtual_height);
@@ -492,8 +483,13 @@ intel_set_display_mode(display_mode* mode)
 	// We set the same color mode across all pipes
 	program_pipe_color_modes(colorMode);
 
-	// Write DSPSTRIDE BEFORE re-enabling display (Linux does the same:
-	// DSPSTRIDE is a "noarm" register written before the arming sequence)
+	// TODO: This may not be neccesary (see DPMS OFF at top)
+	set_display_power_mode(sharedInfo.dpms_mode);
+
+	// Changing bytes per row seems to be ignored if the plane/pipe is turned
+	// off
+
+	// Always set both pipes, just in case
 	if (sharedInfo.device_type.InFamily(INTEL_FAMILY_LAKE)) {
 		write32(INTEL_DISPLAY_A_BYTES_PER_ROW, bytesPerRow >> 6);
 		write32(INTEL_DISPLAY_B_BYTES_PER_ROW, bytesPerRow >> 6);
@@ -508,12 +504,7 @@ intel_set_display_mode(display_mode* mode)
 	sharedInfo.bits_per_pixel = bitsPerPixel;
 
 	set_frame_buffer_base();
-		// writes DSPSURF which is the ARMING WRITE — latches DSPCNTR,
-		// DSPSTRIDE, and all other double-buffered registers at next vblank
-
-	// Re-enable display AFTER all registers are programmed
-	// (was before DSPSTRIDE/DSPSURF — caused corruption with tiling)
-	set_display_power_mode(sharedInfo.dpms_mode);
+		// triggers writing back double-buffered registers
 
 	// Second register dump
 	//dump_registers();
