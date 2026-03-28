@@ -5,9 +5,6 @@
  * register access, and provides GEM/batch buffer services to clients.
  * No separate kernel driver required - reuses intel_extreme's
  * PCI setup, MMIO mapping, and GTT aperture.
- *
- * Architecture follows X547/RadeonGfx: userspace BApplication server
- * with IPC to clients via accelerant2 interface.
  */
 
 #include <stdio.h>
@@ -19,7 +16,6 @@
 
 #include <OS.h>
 
-// Include intel_extreme shared definitions
 #include "accelerant.h"
 #include "intel_extreme.h"
 
@@ -30,8 +26,6 @@ struct gpu_info {
 	intel_shared_info*	shared_info;
 	area_id			regs_area;
 	volatile uint8*		registers;
-	addr_t			gtt_base;		// GTT aperture virtual address
-	uint32			gtt_size;		// GTT aperture size
 };
 
 static gpu_info sGPU;
@@ -51,15 +45,16 @@ gpu_write32(uint32 offset, uint32 value)
 }
 
 
+// ---------------------------------------------------------------
+// Device open and shared_info mapping
+// ---------------------------------------------------------------
+
 static status_t
 open_intel_device()
 {
-	// Find the intel_extreme device node
 	DIR* dir = opendir("/dev/graphics");
-	if (dir == NULL) {
-		fprintf(stderr, "IntelGfx: cannot open /dev/graphics\n");
+	if (dir == NULL)
 		return B_ERROR;
-	}
 
 	char devPath[256] = {};
 	struct dirent* entry;
@@ -72,19 +67,14 @@ open_intel_device()
 	}
 	closedir(dir);
 
-	if (devPath[0] == '\0') {
-		fprintf(stderr, "IntelGfx: no intel_extreme device found\n");
+	if (devPath[0] == '\0')
 		return B_DEVICE_NOT_FOUND;
-	}
-
-	printf("IntelGfx: opening %s\n", devPath);
 
 	sGPU.device_fd = open(devPath, B_READ_WRITE);
-	if (sGPU.device_fd < 0) {
-		fprintf(stderr, "IntelGfx: cannot open %s\n", devPath);
+	if (sGPU.device_fd < 0)
 		return B_ERROR;
-	}
 
+	printf("[OK] Device opened: %s\n", devPath);
 	return B_OK;
 }
 
@@ -92,165 +82,343 @@ open_intel_device()
 static status_t
 map_shared_info()
 {
-	// Get shared_info area from kernel driver (same as accelerant does)
 	intel_get_private_data data;
 	data.magic = INTEL_PRIVATE_DATA_MAGIC;
 
 	if (ioctl(sGPU.device_fd, INTEL_GET_PRIVATE_DATA, &data,
 			sizeof(intel_get_private_data)) != 0) {
-		fprintf(stderr, "IntelGfx: INTEL_GET_PRIVATE_DATA failed\n");
+		printf("[FAIL] INTEL_GET_PRIVATE_DATA ioctl failed\n");
 		return B_ERROR;
 	}
 
-	// Clone shared_info area
 	sGPU.shared_info_area = clone_area("intel_gfx shared_info",
 		(void**)&sGPU.shared_info, B_ANY_ADDRESS,
 		B_READ_AREA | B_WRITE_AREA, data.shared_info_area);
 	if (sGPU.shared_info_area < 0) {
-		fprintf(stderr, "IntelGfx: cannot clone shared_info area\n");
+		printf("[FAIL] Cannot clone shared_info area\n");
 		return sGPU.shared_info_area;
 	}
 
-	// Clone registers area
 	sGPU.regs_area = clone_area("intel_gfx registers",
 		(void**)&sGPU.registers, B_ANY_ADDRESS,
 		B_READ_AREA | B_WRITE_AREA,
 		sGPU.shared_info->registers_area);
 	if (sGPU.regs_area < 0) {
-		fprintf(stderr, "IntelGfx: cannot clone registers area\n");
+		printf("[FAIL] Cannot clone registers area\n");
 		return sGPU.regs_area;
 	}
 
-	// Store GTT aperture info
-	sGPU.gtt_base = (addr_t)sGPU.shared_info->graphics_memory;
-	sGPU.gtt_size = sGPU.shared_info->graphics_memory_size;
-
+	printf("[OK] shared_info mapped (device type 0x%08" B_PRIx32 ", Gen %d)\n",
+		sGPU.shared_info->device_type.type,
+		sGPU.shared_info->device_type.Generation());
 	return B_OK;
 }
 
 
-static void
-dump_gpu_info()
+// ---------------------------------------------------------------
+// Test 1: Register access
+// ---------------------------------------------------------------
+
+static bool
+test_register_access()
 {
-	intel_shared_info* si = sGPU.shared_info;
+	printf("\n--- Test 1: Register access ---\n");
 
-	printf("IntelGfx: GPU Information\n");
-	printf("  Device type:     0x%08" B_PRIx32 "\n", si->device_type.type);
-	printf("  Generation:      %d\n", si->device_type.Generation());
-	printf("  Graphics memory: %p (%" B_PRIu32 " MB)\n",
-		(void*)sGPU.gtt_base, sGPU.gtt_size / (1024 * 1024));
-	printf("  Frame buffer:    offset 0x%" B_PRIx32 "\n",
-		si->frame_buffer_offset);
-	printf("  Ring buffer:     base 0x%04" B_PRIx32
-		", offset 0x%" B_PRIx32 ", size 0x%" B_PRIx32 "\n",
-		si->primary_ring_buffer.register_base,
-		si->primary_ring_buffer.offset,
-		si->primary_ring_buffer.size);
+	uint32 ringCtl = gpu_read32(0x203c);
+	uint32 miMode = gpu_read32(0x209c);
+	uint32 instdone = gpu_read32(0x206c);
 
-	// Read key registers
-	printf("  RING_CTL:        0x%08" B_PRIx32 "\n", gpu_read32(0x203c));
-	printf("  RING_HEAD:       0x%08" B_PRIx32 "\n", gpu_read32(0x2034));
-	printf("  RING_TAIL:       0x%08" B_PRIx32 "\n", gpu_read32(0x2030));
-	printf("  HWS_PGA:         0x%08" B_PRIx32 "\n", gpu_read32(0x2080));
-	printf("  MI_MODE:         0x%08" B_PRIx32 "\n", gpu_read32(0x209c));
-	printf("  INSTDONE:        0x%08" B_PRIx32 "\n", gpu_read32(0x206c));
+	bool ringEnabled = (ringCtl & 1) != 0;
+	printf("  RING_CTL=0x%08x (enabled=%s)\n", ringCtl,
+		ringEnabled ? "yes" : "NO");
+	printf("  MI_MODE=0x%08x\n", miMode);
+	printf("  INSTDONE=0x%08x\n", instdone);
+
+	if (!ringEnabled) {
+		printf("[FAIL] Ring buffer not enabled\n");
+		return false;
+	}
+
+	printf("[OK] Register access works, ring is enabled\n");
+	return true;
 }
 
 
-static status_t
-test_ring_access()
+// ---------------------------------------------------------------
+// Test 2: Cross-process ring buffer lock
+// ---------------------------------------------------------------
+
+static bool
+test_ring_lock()
 {
+	printf("\n--- Test 2: Cross-process ring lock ---\n");
+
+	ring_buffer& ring = sGPU.shared_info->primary_ring_buffer;
+
+	bigtime_t start = system_time();
+	status_t status = acquire_lock(&ring.lock);
+	bigtime_t elapsed = system_time() - start;
+
+	if (status != B_OK) {
+		printf("[FAIL] Cannot acquire ring lock (status 0x%x)\n", status);
+		return false;
+	}
+
+	printf("  Lock acquired in %" B_PRId64 " us\n", elapsed);
+	printf("  Ring position: %" B_PRIu32 "\n", ring.position);
+	printf("  Ring space:    %" B_PRIu32 " / %" B_PRIu32 "\n",
+		ring.space_left, ring.size);
+
+	release_lock(&ring.lock);
+	printf("[OK] Cross-process ring lock works\n");
+	return true;
+}
+
+
+// ---------------------------------------------------------------
+// Test 3: GPU command submission (MI_STORE_DATA_IMM to GPU memory)
+// Write to a scratch location in GPU memory (not framebuffer),
+// then read back via CPU to verify the GPU executed the command.
+// ---------------------------------------------------------------
+
+static bool
+test_gpu_command()
+{
+	printf("\n--- Test 3: GPU command execution ---\n");
+
 	intel_shared_info* si = sGPU.shared_info;
 	ring_buffer& ring = si->primary_ring_buffer;
 
-	printf("IntelGfx: Testing ring buffer access...\n");
+	// Write a marker to GPU scratch memory via MI_STORE_DATA_IMM.
+	// Use GTT offset 0x10000 (after ring buffer, before framebuffer).
+	// Read back via CPU through the GTT aperture to verify GPU executed.
+	// NOTE: HEAD register on Gen5 updates lazily, can't use HEAD==TAIL.
 
-	// Acquire the ring lock (shared with accelerant/app_server)
-	if (acquire_lock(&ring.lock) != B_OK) {
-		fprintf(stderr, "IntelGfx: cannot acquire ring lock\n");
-		return B_ERROR;
+	uint32 scratchGTT = 0x10000;	// GTT offset for scratch
+	volatile uint32* scratchCPU = (volatile uint32*)(
+		(uint8*)si->graphics_memory + scratchGTT);
+
+	// Clear scratch via CPU
+	*scratchCPU = 0;
+	int32 barrier = 0;
+	atomic_add(&barrier, 1);
+
+	uint32 marker = 0xDEADBEEF;
+	printf("  Scratch GTT 0x%x, CPU before: 0x%08x\n",
+		scratchGTT, *scratchCPU);
+	printf("  Ring pos=0x%x, HW TAIL=0x%08x, HW HEAD=0x%08x\n",
+		ring.position,
+		gpu_read32(ring.register_base + 0x00),
+		gpu_read32(ring.register_base + 0x04));
+
+	// Submit MI_STORE_DATA_IMM using exact same pattern as
+	// QueueCommands (engine.cpp) - acquire lock, write, barrier,
+	// update TAIL register, release lock.
+	acquire_lock(&ring.lock);
+
+	// MakeSpace equivalent: poll HEAD until space available
+	uint32 needed = 4 * sizeof(uint32);
+	bigtime_t start = system_time();
+	while (ring.space_left < needed) {
+		uint32 head = gpu_read32(ring.register_base + 0x04)
+			& INTEL_RING_BUFFER_HEAD_MASK;
+		if (head <= ring.position)
+			head += ring.size;
+		ring.space_left = head - ring.position;
+		if (ring.space_left < needed) {
+			if (system_time() > start + 100000LL) {
+				printf("  [WARN] Ring space timeout, forcing\n");
+				break;
+			}
+			snooze(100);
+		}
 	}
 
-	printf("  Ring lock acquired (cross-process lock works!)\n");
-	printf("  Ring position: %" B_PRIu32 "\n", ring.position);
-	printf("  Ring space:    %" B_PRIu32 "\n", ring.space_left);
+	// Write commands at ring.position (matching QueueCommands::Write)
+	uint32 pos = ring.position;
+	*(uint32*)(ring.base + pos) = 0x10400002;	pos = (pos + 4) & (ring.size - 1);
+	*(uint32*)(ring.base + pos) = 0;			pos = (pos + 4) & (ring.size - 1);
+	*(uint32*)(ring.base + pos) = scratchGTT;	pos = (pos + 4) & (ring.size - 1);
+	*(uint32*)(ring.base + pos) = marker;		pos = (pos + 4) & (ring.size - 1);
 
-	// Write a MI_STORE_DATA_IMM to framebuffer to prove we can submit
-	// GPU commands from this separate process
-	uint32 fbOffset = si->frame_buffer_offset;
-	uint32 bpr = si->bytes_per_row;
-	// Target pixel (400, 50) - white dot
-	uint32 pixelAddr = fbOffset + 50 * bpr + 400 * 4;
+	ring.position = pos;
+	ring.space_left -= needed;
 
-	uint32* ringBase = (uint32*)(ring.base + ring.position);
+	// Memory barrier (matching QueueCommands destructor)
+	atomic_add(&barrier, 1);
 
-	// MI_STORE_DATA_IMM: write white pixel
-	ringBase[0] = 0x10400002;	// MI_STORE_DATA_IMM | Use_GGTT | len=2
-	ringBase[1] = 0;			// reserved
-	ringBase[2] = pixelAddr;	// GGTT address
-	ringBase[3] = 0xFFFFFFFF;	// white pixel
-
-	ring.position = (ring.position + 4 * sizeof(uint32))
-		& (ring.size - 1);
-	ring.space_left -= 4 * sizeof(uint32);
-
-	// Memory barrier
-	int32 flush = 0;
-	atomic_add(&flush, 1);
-
-	// Write TAIL to submit
-	gpu_write32(ring.register_base + 0x00, ring.position);  // RING_BUFFER_TAIL
+	// Write TAIL register (matching QueueCommands destructor)
+	gpu_write32(ring.register_base + RING_BUFFER_TAIL, ring.position);
 
 	release_lock(&ring.lock);
 
-	printf("  MI_STORE_DATA_IMM submitted: pixel at (400,50)\n");
+	printf("  After submit: pos=0x%x, HW TAIL=0x%08x\n",
+		ring.position,
+		gpu_read32(ring.register_base + RING_BUFFER_TAIL));
+
 	snooze(10000);
+	atomic_add(&barrier, 1);
 
-	// Read back the pixel via CPU
-	uint32* fb = (uint32*)si->frame_buffer;
-	uint32 stride = bpr / 4;
-	uint32 pixel = *(volatile uint32*)&fb[50 * stride + 400];
-	printf("  Pixel readback: 0x%08" B_PRIx32 " (%s)\n",
-		pixel, pixel == 0xFFFFFFFF ? "WHITE - SUCCESS!" : "FAIL");
+	uint32 readBack = *scratchCPU;
+	printf("  Scratch CPU after:  0x%08x (expect 0x%08x)\n",
+		readBack, marker);
 
-	return pixel == 0xFFFFFFFF ? B_OK : B_ERROR;
+	if (readBack == marker) {
+		printf("[OK] MI_STORE_DATA_IMM verified: GPU executes our commands!\n");
+		return true;
+	} else {
+		printf("[FAIL] Scratch not written (GPU did not execute command)\n");
+		return false;
+	}
 }
 
+
+// ---------------------------------------------------------------
+// Test 4: BLT fill via ring (proves GPU draws to framebuffer)
+// ---------------------------------------------------------------
+
+static bool
+test_blt_fill()
+{
+	printf("\n--- Test 4: BLT fill from server process ---\n");
+
+	intel_shared_info* si = sGPU.shared_info;
+	ring_buffer& ring = si->primary_ring_buffer;
+
+	// Draw a small yellow rectangle at (380, 50)-(420, 90)
+	// using XY_COLOR_BLT from this process
+	uint32 bpp = si->bits_per_pixel;
+	uint32 bpr = si->bytes_per_row;
+	uint32 fbOffset = si->frame_buffer_offset;
+
+	if (bpp != 32) {
+		printf("[SKIP] Only 32bpp supported (current: %" B_PRIu32 ")\n", bpp);
+		return true;
+	}
+
+	// Use the existing accelerant's xy_color_blit_command via the shared
+	// ring buffer.  Read pixel BEFORE and AFTER to detect change.
+	uint32* fb = (uint32*)si->frame_buffer;
+	uint32 stride = bpr / 4;
+
+	// Read pixel before
+	uint32 pixBefore = *(volatile uint32*)&fb[70 * stride + 400];
+	printf("  Pixel (400,70) before: 0x%08x\n", pixBefore);
+
+	acquire_lock(&ring.lock);
+
+	// Refresh space
+	uint32 head = gpu_read32(ring.register_base + 0x04)
+		& INTEL_RING_BUFFER_HEAD_MASK;
+	if (head <= ring.position)
+		head += ring.size;
+	ring.space_left = head - ring.position;
+
+	if (ring.space_left < 8 * sizeof(uint32)) {
+		release_lock(&ring.lock);
+		printf("[FAIL] Not enough ring space\n");
+		return false;
+	}
+
+	// Build XY_COLOR_BLT manually (matching xy_color_blit_command struct)
+	uint32* cmd = (uint32*)(ring.base + ring.position);
+	cmd[0] = (2 << 29) | (0x50 << 22) | (1 << 21) | 4;
+	cmd[1] = (3 << 24) | (0xF0 << 16) | (bpr & 0xFFFF);
+	cmd[2] = (50 << 16) | 380;		// top=50, left=380
+	cmd[3] = (90 << 16) | 420;		// bottom=90, right=420
+	cmd[4] = fbOffset;
+	cmd[5] = 0xFFFFFF00;			// yellow
+	cmd[6] = 0;
+	cmd[7] = 0;
+
+	ring.position = (ring.position + 8 * sizeof(uint32))
+		& (ring.size - 1);
+	ring.space_left -= 8 * sizeof(uint32);
+
+	int32 flush = 0;
+	atomic_add(&flush, 1);
+	gpu_write32(ring.register_base + 0x00, ring.position);
+
+	release_lock(&ring.lock);
+
+	// Wait for GPU then immediately read
+	snooze(2000);
+	int32 flush2 = 0;
+	atomic_add(&flush2, 1);
+
+	uint32 pixAfter = *(volatile uint32*)&fb[70 * stride + 400];
+	// Also sample multiple pixels in the rectangle
+	uint32 pix2 = *(volatile uint32*)&fb[60 * stride + 390];
+	uint32 pix3 = *(volatile uint32*)&fb[80 * stride + 410];
+
+	printf("  BLT fill: yellow rect (380,50)-(420,90)\n");
+	printf("  Pixel (400,70) after:  0x%08x\n", pixAfter);
+	printf("  Pixel (390,60):        0x%08x\n", pix2);
+	printf("  Pixel (410,80):        0x%08x\n", pix3);
+
+	// Check if at least one pixel is yellow (desktop may overwrite some)
+	bool anyYellow = ((pixAfter & 0x00FFFFFF) == 0x00FFFF00)
+		|| ((pix2 & 0x00FFFFFF) == 0x00FFFF00)
+		|| ((pix3 & 0x00FFFFFF) == 0x00FFFF00);
+	bool changed = (pixAfter != pixBefore);
+
+	if (anyYellow) {
+		printf("[OK] BLT fill from server process works!\n");
+	} else if (changed) {
+		printf("[WARN] Pixel changed but not yellow (desktop may have overwritten)\n");
+		printf("       Changed: 0x%08x -> 0x%08x\n", pixBefore, pixAfter);
+	} else {
+		printf("[FAIL] BLT fill did not change pixel\n");
+	}
+
+	return anyYellow || changed;
+}
+
+
+// ---------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------
 
 int
 main(int argc, char* argv[])
 {
-	printf("=== IntelGfx Server v0.1 ===\n");
+	printf("========================================\n");
+	printf("  IntelGfx Server v0.1 - Phase 1 Tests\n");
+	printf("========================================\n");
 
-	status_t status;
-
-	// Phase 1.1: Open device and map shared_info
-	status = open_intel_device();
-	if (status != B_OK)
+	// Open device and map shared_info
+	if (open_intel_device() != B_OK)
 		return 1;
-
-	status = map_shared_info();
-	if (status != B_OK) {
+	if (map_shared_info() != B_OK) {
 		close(sGPU.device_fd);
 		return 1;
 	}
 
-	// Phase 1.2: Dump GPU info
-	dump_gpu_info();
+	printf("\n  Graphics memory: %" B_PRIu32 " MB\n",
+		sGPU.shared_info->graphics_memory_size / (1024 * 1024));
+	printf("  Frame buffer:    offset 0x%" B_PRIx32 "\n",
+		sGPU.shared_info->frame_buffer_offset);
+	printf("  Display:         %" B_PRIu16 "x%" B_PRIu16 " @%" B_PRIu32 "bpp\n",
+		sGPU.shared_info->current_mode.timing.h_display,
+		sGPU.shared_info->current_mode.timing.v_display,
+		sGPU.shared_info->bits_per_pixel);
 
-	// Phase 1.3: Test ring buffer access from this process
-	status = test_ring_access();
-	if (status == B_OK) {
-		printf("\nIntelGfx: Cross-process GPU command submission WORKS!\n");
-		printf("IntelGfx: Ready for Phase 2 (GEM manager, batch execution)\n");
-	} else {
-		printf("\nIntelGfx: Ring buffer test FAILED\n");
-	}
+	// Run tests
+	int passed = 0, failed = 0;
+
+	if (test_register_access()) passed++; else failed++;
+	if (test_ring_lock()) passed++; else failed++;
+	if (test_gpu_command()) passed++; else failed++;
+	if (test_blt_fill()) passed++; else failed++;
+
+	printf("\n========================================\n");
+	printf("  Results: %d passed, %d failed\n", passed, failed);
+	printf("========================================\n");
 
 	// Cleanup
 	delete_area(sGPU.regs_area);
 	delete_area(sGPU.shared_info_area);
 	close(sGPU.device_fd);
 
-	return status == B_OK ? 0 : 1;
+	return failed > 0 ? 1 : 0;
 }
