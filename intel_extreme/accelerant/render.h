@@ -17,8 +17,17 @@
 
 // 3D Pipeline Commands (MI client = 0, 3D client = 3)
 
+// Gen5 3D command encoding macro (matching xf86-video-intel SNA):
+//   bits[31:29] = Type (3 = 3D instruction)
+//   bits[28:27] = Pipeline/SubType
+//   bits[26:24] = Opcode
+//   bits[23:16] = SubOpcode
+//   bits[15:0]  = Length (DWord count - 2)
+#define GEN5_3D(pipeline, opcode, subopcode) \
+	((0x3 << 29) | ((pipeline) << 27) | ((opcode) << 24) | ((subopcode) << 16))
+
 // Pipeline select: choose between 3D and media pipeline
-#define CMD_PIPELINE_SELECT			((0x1 << 29) | (0x01 << 24))
+#define CMD_PIPELINE_SELECT			GEN5_3D(1, 1, 4)	// 0x69040000
 #define PIPELINE_SELECT_3D			0
 
 // MI_FLUSH - flush caches between BLT and 3D
@@ -26,32 +35,30 @@
 #define MI_FLUSH_STATE_INST_CACHE	(1 << 1)
 #define MI_FLUSH_RENDER_CACHE		(1 << 2)
 
-// STATE_BASE_ADDRESS - set base addresses for state heaps
-// Gen5: SubType=0 (non-pipelined), Opcode=1, SubOpcode=1, Length=6
-#define CMD_STATE_BASE_ADDRESS		(0x61010000 | 0x06)
+// STATE_BASE_ADDRESS (non-pipelined, opcode 1, subopcode 1)
+#define CMD_STATE_BASE_ADDRESS		(GEN5_3D(0, 1, 1) | 0x06)	// 0x61010006
 
-// 3DSTATE_DRAWING_RECTANGLE - set clip rect for rasterizer
-// SubType=1 (pipelined), Opcode=1, SubOpcode=0, Length=2
-#define CMD_DRAWING_RECTANGLE		(0x69000000 | 0x02)
+// 3DSTATE_DRAWING_RECTANGLE (pipelined, opcode 1, subopcode 0)
+#define CMD_DRAWING_RECTANGLE		(GEN5_3D(1, 1, 0) | 0x02)	// 0x69000002
 
-// 3DSTATE_PIPELINED_POINTERS - set VS/GS/CLIP/SF/WM/CC state pointers
-#define CMD_PIPELINED_POINTERS		((0x3 << 29) | (0x01 << 27) | (0x00 << 24) | 0x05)
+// 3DSTATE_PIPELINED_POINTERS (pipelined, opcode 0, subopcode 0)
+#define CMD_PIPELINED_POINTERS		(GEN5_3D(1, 0, 0) | 0x05)	// 0x68000005
 
-// 3DSTATE_BINDING_TABLE_POINTERS
-#define CMD_BINDING_TABLE_PTRS		((0x3 << 29) | (0x01 << 27) | (0x01 << 24) | 0x01)
+// 3DSTATE_BINDING_TABLE_POINTERS (pipelined, opcode 1, subopcode 1)
+#define CMD_BINDING_TABLE_PTRS		GEN5_3D(1, 1, 1)			// 0x69010000
 
-// 3DSTATE_VERTEX_BUFFERS
-#define CMD_VERTEX_BUFFERS			((0x3 << 29) | (0x01 << 27) | (0x08 << 24))
+// 3DSTATE_VERTEX_BUFFERS (pipelined, opcode 0, subopcode 8)
+#define CMD_VERTEX_BUFFERS			GEN5_3D(1, 0, 8)			// 0x68080000
 
-// 3DSTATE_VERTEX_ELEMENTS
-#define CMD_VERTEX_ELEMENTS			((0x3 << 29) | (0x01 << 27) | (0x09 << 24))
+// 3DSTATE_VERTEX_ELEMENTS (pipelined, opcode 0, subopcode 9)
+#define CMD_VERTEX_ELEMENTS			GEN5_3D(1, 0, 9)			// 0x68090000
 
-// 3DPRIMITIVE
-#define CMD_3DPRIMITIVE				((0x3 << 29) | (0x03 << 27))
+// 3DPRIMITIVE (3D, opcode 3, subopcode 0)
+#define CMD_3DPRIMITIVE				GEN5_3D(3, 3, 0)			// 0x7B000000
 #define PRIM_RECTLIST				3
 
-// PIPE_CONTROL (Gen5)
-#define CMD_PIPE_CONTROL			((0x3 << 29) | (0x02 << 27) | (0x00 << 24) | 0x02)
+// PIPE_CONTROL (3D, opcode 2, subopcode 0)
+#define CMD_PIPE_CONTROL			(GEN5_3D(3, 2, 0) | 0x02)	// 0x7A000002
 #define PIPE_CONTROL_CS_STALL		(1 << 20)
 #define PIPE_CONTROL_FLUSH			(1 << 12)
 

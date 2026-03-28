@@ -56,24 +56,25 @@ static render_state sRenderState;
 // DW3 bits: src1 or message descriptor
 
 
-// SF kernel: copy thread header and terminate.
-// Copies r0 (thread header with URB return handle) to MRF m1,
-// then sends URB_WRITE from m1 with EOT/complete/used flags.
-// The fixed-function rasterizer handles scan conversion for RECTLIST;
-// the SF kernel only provides attribute setup (none for solid fill).
-//
-// inst 0: mov(8) m1<1>:UD  r0<8,8,1>:UD  {NoMask}
-// inst 1: send(8) null  URB_WRITE EOT  msg_reg_nr=1
+// SF kernel: attribute interpolation setup for Gen5.
+// From intel-vaapi-driver exa_sf.g4b.gen5 / SNA brw_sf_kernel__nomask.
+// Computes attribute deltas (dA/dx, dA/dy) and writes setup data
+// to the URB for the WM rasterizer.  7 instructions:
+//   0: math_inv  r6 = 1/det (from r1.11)
+//   1: mov       m3 = v0 attributes (vertex 0 base values)
+//   2: add       r7 = v1 - v2
+//   3: mul       m1 = (v1-v2) * inv (dA/dx)
+//   4: add       r7 = v2 - v0
+//   5: mul       m2 = (v2-v0) * inv (dA/dy)
+//   6: send      URB_WRITE EOT (msg_length=4: m0-m3)
 static const uint32 gen5_sf_kernel[] = {
-	// inst 0: copy thread header to MRF m1
-	0x00600201, 0x20200022, 0x008D0000, 0x00000000,
-
-	// inst 1: send(8) null URB_WRITE EOT complete used
-	//   DW0: SEND(0x31), SIMD8, msg_reg_nr=1 (bits[27:24])
-	//   DW2: SFID=URB(6), EOT=1, src0=r0 vec8
-	//   DW3: EOT=1, msg_length=1, header_present=1,
-	//         complete=1, used=1
-	0x01600031, 0x20000128, 0x648D0000, 0x82002C00,
+	0x00400031, 0x20c01fbd, 0x1069002c, 0x02100001,
+	0x00400001, 0x206003be, 0x00690060, 0x00000000,
+	0x00400040, 0x20e077bd, 0x00690080, 0x006940a0,
+	0x00400041, 0x202077be, 0x006900e0, 0x000000c0,
+	0x00400040, 0x20e077bd, 0x006900a0, 0x00694060,
+	0x00400041, 0x204077be, 0x006900e0, 0x000000c8,
+	0x00600031, 0x20001fbc, 0x648d0000, 0x8808c800,
 };
 
 #define SF_KERNEL_SIZE sizeof(gen5_sf_kernel)
@@ -141,8 +142,8 @@ static const uint32 gen5_wm_kernel_solid[] = {
 //   0x140  Surface state dst (32 bytes)
 //   0x160  Surface state src (32 bytes)
 //   0x180  SF state (64 bytes)
-//   0x1C0  SF kernel (64 bytes, 16 bytes used)
-//   0x200  WM kernel (256 bytes, 96 bytes used)
+//   0x1C0  SF kernel (128 bytes, 112 bytes used = 7 instructions)
+//   0x240  WM kernel (128 bytes, 96 bytes used = 6 instructions)
 //   0x300  Vertex buffer (256 bytes)
 //   Total  0x400 = 1024 bytes
 // ---------------------------------------------------------------------------
@@ -156,13 +157,32 @@ static const uint32 gen5_wm_kernel_solid[] = {
 #define STATE_SURF_SRC_OFFSET	0x160
 #define STATE_SF_OFFSET			0x180
 #define STATE_SF_KERNEL_OFFSET	0x1C0
-#define STATE_WM_KERNEL_OFFSET	0x200
+#define STATE_WM_KERNEL_OFFSET	0x240
 #define STATE_VERTEX_OFFSET		0x300
 #define STATE_TOTAL_SIZE		0x400
 
 // Ironlake SF/WM max threads (from PRM)
 #define ILK_SF_MAX_THREADS		48
 #define ILK_WM_MAX_THREADS		72
+
+// URB partitioning (matching SNA gen5_emit_urb)
+#define URB_VS_ENTRIES			256
+#define URB_VS_ENTRY_SIZE		1
+#define URB_SF_ENTRIES			64
+#define URB_SF_ENTRY_SIZE		2
+#define URB_CS_ENTRIES			0
+#define URB_CS_ENTRY_SIZE		1
+
+// URB_FENCE: Type 3 non-pipelined (opcode 0, subopcode 5)
+#define CMD_URB_FENCE			GEN5_3D(0, 0, 5)	// 0x60050000
+#define UF0_VS_REALLOC			(1 << 9)
+#define UF0_GS_REALLOC			(1 << 10)
+#define UF0_CLIP_REALLOC		(1 << 11)
+#define UF0_SF_REALLOC			(1 << 12)
+#define UF0_CS_REALLOC			(1 << 13)
+
+// CS_URB_STATE: Type 3 non-pipelined (opcode 1, subopcode 0)
+#define CMD_CS_URB_STATE		GEN5_3D(0, 1, 0)	// 0x61000000
 
 
 static void
@@ -206,6 +226,79 @@ render_init()
 {
 	memset(&sRenderState, 0, sizeof(sRenderState));
 
+	// Gen5 (Ironlake): re-initialize the render ring and apply
+	// workarounds required for 3D command processing.
+	// The Haiku kernel driver sets up the ring for BLT only, without
+	// the full disable→reset→re-enable cycle that i915 does in
+	// init_ring_common().  Without this, Type 3 (3D) commands are
+	// silently ignored by the command parser.
+	if (gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)) {
+		ring_buffer &ring = gInfo->shared_info->primary_ring_buffer;
+		uint32 ringReg = ring.register_base;
+
+		// WaIssueDummyWriteToWakeupFromRC6:ilk
+		write32(0x209c, 0);
+
+		// Full ring re-initialization (matching i915 init_ring_common)
+		// 1. Disable ring
+		write32(ringReg + RING_BUFFER_CONTROL, 0);
+		read32(ringReg + RING_BUFFER_CONTROL);	// posting read
+		snooze(1000);
+
+		// 2. Reset HEAD to 0
+		write32(ringReg + RING_BUFFER_HEAD, 0);
+		read32(ringReg + RING_BUFFER_HEAD);		// posting read
+
+		// 3. Wait for HEAD to clear
+		for (int i = 0; i < 100; i++) {
+			if ((read32(ringReg + RING_BUFFER_HEAD)
+				& INTEL_RING_BUFFER_HEAD_MASK) == 0)
+				break;
+			snooze(100);
+		}
+
+		// 4. Set TAIL = 0
+		write32(ringReg + RING_BUFFER_TAIL, 0);
+
+		// 5. Set ring start address (preserve existing)
+		write32(ringReg + RING_BUFFER_START, ring.offset);
+
+		// 6. Re-enable ring
+		write32(ringReg + RING_BUFFER_CONTROL,
+			((ring.size - B_PAGE_SIZE) & INTEL_RING_BUFFER_SIZE_MASK)
+			| INTEL_RING_BUFFER_ENABLED);
+
+		// 7. Reset software tracking
+		ring.position = 0;
+		ring.space_left = ring.size;
+
+		TRACE("Ring re-initialized: CTL=0x%08" B_PRIx32
+			" HEAD=0x%08" B_PRIx32 "\n",
+			read32(ringReg + RING_BUFFER_CONTROL),
+			read32(ringReg + RING_BUFFER_HEAD));
+
+		// Apply Gen5 workarounds (masked register writes)
+		// WaTimedSingleVertexDispatch:ilk - MI_MODE bit[6]
+		write32(0x209c, (1 << 22) | (1 << 6));
+
+		// Required on all Ironlake steppings (B-Spec)
+		// _3D_CHICKEN2 bit[14] = WM_READ_PIPELINED
+		write32(0x208c, (1 << 30) | (1 << 14));
+
+		// WaDisable_RenderCache_OperationalFlush:ilk
+		// WaDisableRenderCachePipelinedFlush:ilk
+		write32(0x2120, (1 << 24) | (1 << 16) | (1 << 8));
+
+		// Clear stale error flags
+		write32(0x2064, 0);
+		write32(0x2068, 0);
+
+		TRACE("Gen5 workarounds applied: MI_MODE=0x%08" B_PRIx32
+			" _3D_CHICKEN2=0x%08" B_PRIx32
+			" CACHE_MODE_0=0x%08" B_PRIx32 "\n",
+			read32(0x209c), read32(0x208c), read32(0x2120));
+	}
+
 	// Allocate GPU memory for all state structures
 	addr_t base;
 	if (intel_allocate_memory(STATE_TOTAL_SIZE, 0, base) != B_OK) {
@@ -233,67 +326,39 @@ render_init()
 	vs[0] = 0;  // no kernel (passthrough)
 	vs[1] = (1 << 10);  // single program flow, 1 URB entry
 
-	// ----- SF state -----
-	// Gen5 SF unit state (brw_sf_unit_state): 8 DWORDs
-	//   DW0 thread0: bits[31:6] = kernel_start_pointer (addr >> 6),
-	//                bits[3:1] = grf_reg_count
-	//   DW1 sf1: (defaults)
-	//   DW2: scratch space (0)
-	//   DW3 sf3: bits[4:1] = dispatch_grf_start_reg,
-	//            bits[10:5] = urb_entry_read_offset,
-	//            bits[18:12] = urb_entry_read_length,
-	//            bits[25:20] = const_urb_entry_read_offset,
-	//            bits[31:26] = const_urb_entry_read_length
-	//   DW4 sf4: bits[16:9] = nr_urb_entries,
-	//            bits[22:18] = urb_entry_allocation_size,
-	//            bits[30:25] = max_threads
-	//   DW5 sf5: viewport transform etc.
-	//   DW6 sf6: cull mode, dest org bias
-	//   DW7 sf7: trifan pv
+	// ----- SF state (matching SNA gen5_create_sf_state) -----
 	uint32 sfKernelOff = stateOff + STATE_SF_KERNEL_OFFSET;
 	uint32* sf = (uint32*)(base + STATE_SF_OFFSET);
-	sf[0] = sfKernelOff;  // kernel pointer (64-byte aligned, grf_count=0)
+	sf[0] = sfKernelOff;	// kernel pointer (grf_count=0)
 	sf[1] = 0;
 	sf[2] = 0;
-	sf[3] = (3 << 1)	// dispatch_grf_start_reg = 3
-		| (1 << 5)		// urb_entry_read_offset = 1 (skip VUE header)
-		| (1 << 12);	// urb_entry_read_length = 1 (position only)
-	sf[4] = ((ILK_SF_MAX_THREADS - 1) << 25)	// max threads
-		| (1 << 18)								// urb_entry_allocation_size = 1
-		| (64 << 9);							// nr_urb_entries = 64
-	sf[5] = 0;
-	sf[6] = (2 << 29)	// cull mode = NONE (Gen5: 2 = CULL_NONE)
-		| (0x8 << 22)	// dest_org_vbias = 0x8 (SNA default)
-		| (0x8 << 16);	// dest_org_hbias = 0x8
-	sf[7] = (2 << 12);	// trifan_pv = 2
+	sf[3] = (3 << 1)		// dispatch_grf_start_reg = 3
+		| (1 << 5)			// urb_entry_read_offset = 1
+		| (1 << 12);		// urb_entry_read_length = 1
+	sf[4] = ((ILK_SF_MAX_THREADS - 1) << 25)
+		| (1 << 18)			// urb_entry_allocation_size = 2-1 = 1
+		| (URB_SF_ENTRIES << 9);
+	sf[5] = 0;				// viewport_transform = false
+	sf[6] = (1 << 29)		// cull_mode = NONE (SNA uses 1 for GEN5_CULLMODE_NONE)
+		| (0x8 << 22)		// dest_org_vbias
+		| (0x8 << 16);		// dest_org_hbias
+	sf[7] = (2 << 12);		// trifan_pv = 2
 
-	// ----- WM state -----
-	// Gen5 WM unit state: 8 DWORDs
-	//   DW0 thread0: bits[31:6] = kernel_start_pointer (addr >> 6),
-	//                bits[3:1] = grf_reg_count
-	//   DW1 thread1: bit[25] = single_program_flow
-	//   DW2: scratch space
-	//   DW3 thread3: bits[3:0] = dispatch_grf_start_reg,
-	//                bits[9:4] = urb_entry_read_offset,
-	//                bits[17:11] = urb_entry_read_length,
-	//                bits[25:20] = const_urb_entry_read_offset,
-	//                bits[31:26] = const_urb_entry_read_length
-	//   DW4 wm4: bits[0:0] = sampler_count (0 = no samplers),
-	//            bits[30:25] = max_threads
-	//   DW5 wm5: bit[0] = enable_8_pix,
-	//            bit[29] = thread_dispatch_enable,
-	//            bit[30] = early_depth_test
+	// ----- WM state (matching SNA gen5_init_wm_state) -----
 	uint32 wmKernelOff = stateOff + STATE_WM_KERNEL_OFFSET;
 	uint32* wm = (uint32*)(base + STATE_WM_OFFSET);
-	wm[0] = wmKernelOff;	// kernel start pointer (grf_count=0)
-	wm[1] = (1 << 25);		// single program flow
+	wm[0] = wmKernelOff	// kernel start pointer
+		| (2 << 1);		// grf_reg_count = 2 (3 blocks of 16 regs)
+	wm[1] = 0;				// binding_table_entry_count MUST be 0 on Ironlake!
 	wm[2] = 0;				// no scratch space
-	wm[3] = (1 << 0)		// dispatch_grf_start_reg = 1
-		| (1 << 4)			// urb_entry_read_offset = 1
+	wm[3] = (3 << 0)		// dispatch_grf_start_reg = 3 (must match SF)
+		| (0 << 4)			// urb_entry_read_offset = 0
 		| (1 << 11);		// urb_entry_read_length = 1
-	wm[4] = ((ILK_WM_MAX_THREADS - 1) << 25);	// max threads, no samplers
-	wm[5] = (1 << 29)		// thread_dispatch_enable
-		| WM_8_DISPATCH;	// 8-pixel dispatch (matches SIMD8 kernel)
+	wm[4] = 0;				// no samplers
+	wm[5] = ((ILK_WM_MAX_THREADS - 1) << 25)
+		| (1 << 19)			// thread_dispatch_enable
+		| (1 << 18)			// early_depth_test
+		| WM_8_DISPATCH;	// enable_8_pix
 
 	// ----- CC state (no blending, just write) -----
 	uint32* cc = (uint32*)(base + STATE_CC_OFFSET);
@@ -385,18 +450,67 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 	int32 flush = 0;
 	atomic_add(&flush, 1);
 
+	// Diagnostic: dump all state block contents
+	uint32 stOff = sRenderState.offset;
+	uint32* ss = (uint32*)(sRenderState.base + STATE_SURF_DST_OFFSET);
+	uint32* bt = (uint32*)(sRenderState.base + STATE_BIND_OFFSET);
+	uint32* sf = (uint32*)(sRenderState.base + STATE_SF_OFFSET);
+	uint32* wm = (uint32*)(sRenderState.base + STATE_WM_OFFSET);
+	uint32* cc = (uint32*)(sRenderState.base + STATE_CC_OFFSET);
+	TRACE("stateOff=0x%x fb_off=0x%x bpr=%u\n",
+		stOff, gInfo->shared_info->frame_buffer_offset,
+		gInfo->shared_info->bytes_per_row);
+	TRACE("SurfState: 0x%08x 0x%08x 0x%08x 0x%08x\n",
+		ss[0], ss[1], ss[2], ss[3]);
+	TRACE("BindTbl[0]=0x%08x (expect 0x%08x)\n",
+		bt[0], stOff + STATE_SURF_DST_OFFSET);
+	TRACE("SF: DW0=0x%08x DW3=0x%08x DW4=0x%08x DW6=0x%08x\n",
+		sf[0], sf[3], sf[4], sf[6]);
+	TRACE("WM: DW0=0x%08x DW1=0x%08x DW3=0x%08x DW4=0x%08x DW5=0x%08x\n",
+		wm[0], wm[1], wm[3], wm[4], wm[5]);
+	TRACE("CC: DW0=0x%08x DW4=0x%08x\n", cc[0], cc[4]);
+	TRACE("Vertices: (%.0f,%.0f) (%.0f,%.0f) (%.0f,%.0f)\n",
+		vb[0], vb[1], vb[2], vb[3], vb[4], vb[5]);
+
 	uint32 stateBase = sRenderState.offset;
 
 	// Emit 3D commands via ring buffer (scoped so destructor submits)
 	{
 		QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 
-		// 1. MI_FLUSH to switch from BLT to 3D
+		// 1. MI_FLUSH to serialize before switching to 3D
 		queue.MakeSpace(2);
 		queue.Write(MI_FLUSH_CMD | MI_FLUSH_STATE_INST_CACHE);
 		queue.Write(MI_NOOP);
 
-		// 2. PIPELINE_SELECT = 3D
+		// 2. Apply Gen5 workarounds via MI_LOAD_REGISTER_IMM
+		//    (ring-based writes may be required for 3D context)
+		//    MI_LRI: opcode=0x22, length=1 per register pair
+		#define MI_LOAD_REGISTER_IMM	((0x22 << 23) | 1)
+
+		// MI_MODE: enable VS_TIMER_DISPATCH (bit 6, masked)
+		queue.MakeSpace(4);
+		queue.Write(MI_LOAD_REGISTER_IMM);
+		queue.Write(0x209c);
+		queue.Write((1 << 22) | (1 << 6));
+		queue.Write(MI_NOOP);
+
+		// _3D_CHICKEN2: enable WM_READ_PIPELINED (bit 14, masked)
+		queue.MakeSpace(4);
+		queue.Write(MI_LOAD_REGISTER_IMM);
+		queue.Write(0x208c);
+		queue.Write((1 << 30) | (1 << 14));
+		queue.Write(MI_NOOP);
+
+		// CACHE_MODE_0: disable RC_OP_FLUSH (bit 0), enable
+		// CM0_PIPELINED_RENDER_FLUSH_DISABLE (bit 8)
+		queue.MakeSpace(4);
+		queue.Write(MI_LOAD_REGISTER_IMM);
+		queue.Write(0x2120);
+		queue.Write((1 << 24) | (1 << 16) | (1 << 8));
+		queue.Write(MI_NOOP);
+
+		// 3. PIPELINE_SELECT = 3D
 		queue.MakeSpace(2);
 		queue.Write(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
 		queue.Write(MI_NOOP);
@@ -424,7 +538,31 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		queue.Write(stateBase + STATE_CC_OFFSET);	// CC state
 		queue.Write(MI_NOOP);
 
-		// 5. 3DSTATE_DRAWING_RECTANGLE - set clip rect to framebuffer
+		// 5. URB_FENCE - partition URB (SNA gen5_emit_urb)
+		//    VS: entries 0-255 (256 entries × 1 row)
+		//    SF: entries 256-383 (64 entries × 2 rows)
+		{
+			uint32 vsFence = URB_VS_ENTRIES * URB_VS_ENTRY_SIZE;	// 256
+			uint32 sfFence = vsFence + URB_SF_ENTRIES * URB_SF_ENTRY_SIZE; // 384
+
+			queue.MakeSpace(4);
+			queue.Write(CMD_URB_FENCE
+				| UF0_CS_REALLOC | UF0_SF_REALLOC
+				| UF0_CLIP_REALLOC | UF0_GS_REALLOC
+				| UF0_VS_REALLOC | 1);
+			queue.Write((vsFence << 20)		// CLIP fence = VS fence
+				| (vsFence << 10)			// GS fence = VS fence
+				| (vsFence << 0));			// VS fence
+			queue.Write((sfFence << 10)		// CS fence = SF fence
+				| (sfFence << 0));			// SF fence
+
+			// CS_URB_STATE
+			queue.Write(CMD_CS_URB_STATE);
+			queue.Write(((URB_CS_ENTRY_SIZE - 1) << 4)
+				| (URB_CS_ENTRIES << 0));
+		}
+
+		// 6. 3DSTATE_DRAWING_RECTANGLE - set clip rect to framebuffer
 		{
 			intel_shared_info &info = *gInfo->shared_info;
 			queue.MakeSpace(4);
@@ -435,10 +573,14 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 			queue.Write(0);		// origin: (0, 0)
 		}
 
-		// 6. 3DSTATE_BINDING_TABLE_POINTERS
-		queue.MakeSpace(2);
-		queue.Write(CMD_BINDING_TABLE_PTRS);
-		queue.Write(stateBase + STATE_BIND_OFFSET);
+		// 6. 3DSTATE_BINDING_TABLE_POINTERS (6 DWORDs)
+		queue.MakeSpace(6);
+		queue.Write(CMD_BINDING_TABLE_PTRS | 4);	// length = 4
+		queue.Write(0);								// VS binding table
+		queue.Write(0);								// GS binding table
+		queue.Write(0);								// CLIP binding table
+		queue.Write(0);								// SF binding table
+		queue.Write(stateBase + STATE_BIND_OFFSET);	// WM binding table
 
 		// 7. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
 		queue.MakeSpace(6);
@@ -463,6 +605,14 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		queue.Write(0);		// start instance
 		queue.Write(0);		// base vertex location
 
+		// PIPE_CONTROL: write marker to verify 3D pipeline is active
+		// Opcode from Linux kernel: (3<<29)|(3<<27)|(2<<24)|length
+		queue.MakeSpace(4);
+		queue.Write(0x7A000002);			// PIPE_CONTROL, length=2
+		queue.Write((1 << 14));				// Post-Sync: Write Immediate Data
+		queue.Write((stateBase & ~0x7) | (1 << 2));	// QWord aligned + Global GTT
+		queue.Write(0xDEADBEEF);			// marker value
+
 		// MI_FLUSH to complete 3D and allow BLT again
 		queue.MakeSpace(2);
 		queue.Write(MI_FLUSH_CMD);
@@ -470,8 +620,14 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 	}
 	// QueueCommands destructor has now written TAIL → commands submitted
 
+	// Check if PIPE_CONTROL marker was written (proves 3D pipeline is active)
+	snooze(10000);
+	uint32 marker = *(uint32*)(sRenderState.base);
 	TRACE("render_fill_rect: %d,%d - %d,%d color 0x%08" B_PRIx32 "\n",
 		left, top, right, bottom, color);
+	TRACE("PIPE_CONTROL marker: 0x%08" B_PRIx32
+		" (%s)\n", marker,
+		marker == 0xDEADBEEF ? "3D ACTIVE" : "3D NOT ACTIVE");
 
 	// Wait for GPU to process, then dump error registers
 	snooze(10000);
