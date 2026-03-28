@@ -420,12 +420,23 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		queue.Write(stateBase + STATE_CC_OFFSET);	// CC state
 		queue.Write(MI_NOOP);
 
-		// 5. 3DSTATE_BINDING_TABLE_POINTERS
+		// 5. 3DSTATE_DRAWING_RECTANGLE - set clip rect to framebuffer
+		{
+			intel_shared_info &info = *gInfo->shared_info;
+			queue.MakeSpace(4);
+			queue.Write(CMD_DRAWING_RECTANGLE);
+			queue.Write(0);		// top-left: (0, 0)
+			queue.Write(((info.current_mode.timing.v_display - 1) << 16)
+				| (info.current_mode.timing.h_display - 1));
+			queue.Write(0);		// origin: (0, 0)
+		}
+
+		// 6. 3DSTATE_BINDING_TABLE_POINTERS
 		queue.MakeSpace(2);
 		queue.Write(CMD_BINDING_TABLE_PTRS);
 		queue.Write(stateBase + STATE_BIND_OFFSET);
 
-		// 6. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
+		// 7. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
 		queue.MakeSpace(6);
 		queue.Write(CMD_VERTEX_BUFFERS | (3 - 2));
 		queue.Write((0 << 26) | (8 << 0));

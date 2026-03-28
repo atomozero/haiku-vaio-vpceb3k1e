@@ -27,8 +27,12 @@
 #define MI_FLUSH_RENDER_CACHE		(1 << 2)
 
 // STATE_BASE_ADDRESS - set base addresses for state heaps
-// Gen5 format: 3 DWORDs
-#define CMD_STATE_BASE_ADDRESS		((0x3 << 29) | (0x01 << 27) | (0x01 << 24) | 0x06)
+// Gen5: SubType=0 (non-pipelined), Opcode=1, SubOpcode=1, Length=6
+#define CMD_STATE_BASE_ADDRESS		(0x61010000 | 0x06)
+
+// 3DSTATE_DRAWING_RECTANGLE - set clip rect for rasterizer
+// SubType=1 (pipelined), Opcode=1, SubOpcode=0, Length=2
+#define CMD_DRAWING_RECTANGLE		(0x69000000 | 0x02)
 
 // 3DSTATE_PIPELINED_POINTERS - set VS/GS/CLIP/SF/WM/CC state pointers
 #define CMD_PIPELINED_POINTERS		((0x3 << 29) | (0x01 << 27) | (0x00 << 24) | 0x05)
