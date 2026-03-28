@@ -15,7 +15,10 @@ Mesa crocus, seguendo l'architettura di X547 (RadeonGfx/libdrm2/accelerant2).
 - [x] Clonare e studiare X547/libdrm2 (shim DRM → accelerant2)
 - [x] Clonare e studiare X547/accelerant2 (API COM-like, vtable C/C++)
 - [x] Clonare e studiare X547/VideoStreams (buffer passing producer/consumer)
-- [ ] Compilare RadeonGfx su Haiku per capire il build system
+- [x] Analizzare build system RadeonGfx: usa meson + subprojects
+      (SADomains, Locks, ThreadLink) + libaccelerant + libdrm + VideoStreams.
+      Kernel driver usa Makefile standard Haiku.  Non compilato per
+      dipendenze mancanti, ma struttura chiara dal sorgente.
 
 ### 0.2 Studio del driver Intel i915 Linux
 - [x] Studiare il winsys crocus (crocus_bufmgr.c, crocus_batch.c, crocus_fence.c)
@@ -35,8 +38,14 @@ Mesa crocus, seguendo l'architettura di X547 (RadeonGfx/libdrm2/accelerant2).
 - [x] Documentare il formato batch buffer e relocation
       → Gen5: call-style nesting (1 level), no chain
       → Relocation: global GTT offsets, presumed_offset caching
-- [ ] Scaricare Intel Open Source PRM Vol 1-4 per Ironlake (opzionale,
-      abbiamo gia' le informazioni necessarie dai sorgenti i915/SNA/crocus)
+- [x] Localizzare Intel Ironlake PRM (disponibili online):
+      Vol 1 Part 1: Graphics Core
+      Vol 1 Part 2: MMIO, Ring Buffer, Commands
+      Vol 1 Part 3: Memory Interface, Render Engine, 2D BLT
+      Vol 4 Part 2: URB, Message Gateway
+      Mirror: https://kiwitree.net/~lina/intel-gfx-docs/prm/ilk/
+      Ufficiale: https://www.intel.com/content/www/us/en/docs/graphics-for-linux/developer-reference/1-0/intel-core-processor-2010.html
+      GitHub: https://github.com/Igalia/intel-osrc-gfx-prm
 
 ---
 
