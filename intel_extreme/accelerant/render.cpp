@@ -160,13 +160,10 @@ render_init()
 	uint32* bt = (uint32*)(base + STATE_BIND_OFFSET);
 	bt[0] = sRenderState.offset + STATE_SURF_DST_OFFSET;  // entry 0 = dst
 
-	// Write destination surface state (framebuffer)
-	write_surface_state(STATE_SURF_DST_OFFSET,
-		FORMAT_B8G8R8A8_UNORM,
-		gInfo->shared_info->frame_buffer_offset,
-		gInfo->shared_info->current_mode.timing.h_display,
-		gInfo->shared_info->current_mode.timing.v_display,
-		gInfo->shared_info->bytes_per_row);
+	// NOTE: surface state is NOT written here because render_init() runs
+	// before any display mode is set, so frame_buffer_offset/bytes_per_row
+	// are not yet valid.  The surface state is updated lazily in
+	// render_update_surface() before each draw call.
 
 	sRenderState.initialized = true;
 
@@ -189,12 +186,31 @@ render_uninit()
 }
 
 
+static void
+render_update_surface()
+{
+	// Update destination surface state to match current framebuffer.
+	// Must be called before each draw because the framebuffer may have
+	// changed since render_init() (mode switch, resolution change).
+	intel_shared_info &info = *gInfo->shared_info;
+
+	write_surface_state(STATE_SURF_DST_OFFSET,
+		FORMAT_B8G8R8A8_UNORM,
+		info.frame_buffer_offset,
+		info.current_mode.timing.h_display,
+		info.current_mode.timing.v_display,
+		info.bytes_per_row);
+}
+
+
 status_t
 render_fill_rect(uint32 color, int16 left, int16 top,
 	int16 right, int16 bottom)
 {
 	if (!sRenderState.initialized)
 		return B_NOT_INITIALIZED;
+
+	render_update_surface();
 
 	// Write vertex data for RECTLIST (3 vertices per rect)
 	// Format: X, Y (float)
