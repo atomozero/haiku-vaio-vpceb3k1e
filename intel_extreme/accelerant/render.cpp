@@ -56,22 +56,24 @@ static render_state sRenderState;
 // DW3 bits: src1 or message descriptor
 
 
-// SF kernel: minimal thread termination.
-// Sends URB_WRITE with EOT, complete, and used flags.  The fixed-function
-// rasterizer handles scan conversion for RECTLIST; the SF kernel only
-// needs to signal completion (no attribute interpolation for solid fill).
+// SF kernel: copy thread header and terminate.
+// Copies r0 (thread header with URB return handle) to MRF m1,
+// then sends URB_WRITE from m1 with EOT/complete/used flags.
+// The fixed-function rasterizer handles scan conversion for RECTLIST;
+// the SF kernel only provides attribute setup (none for solid fill).
 //
-// send(8) null:UW r0:UW  URB_WRITE  EOT complete used
+// inst 0: mov(8) m1<1>:UD  r0<8,8,1>:UD  {NoMask}
+// inst 1: send(8) null  URB_WRITE EOT  msg_reg_nr=1
 static const uint32 gen5_sf_kernel[] = {
-	// DW0: SEND(0x31), SIMD8(3<<21)
-	// DW1: dest=null(ARF=0, reg=0, type=UW=2, hstride=1),
-	//       src0=GRF(1), type=UW(2)
-	// DW2: SFID=URB(6) bits[31:28], EOT=1 bit[26],
-	//       src0=r0 vec8(vstride=8,width=8,hstride=1)
-	// DW3: urb msg: EOT=1 bit[31], msg_length=1 bits[28:25],
-	//       header_present=1 bit[13], complete=1 bit[11],
-	//       used=1 bit[10], opcode=0 bit[0]
-	0x00600031, 0x20000128, 0x648D0000, 0x82002C00,
+	// inst 0: copy thread header to MRF m1
+	0x00600201, 0x20200022, 0x008D0000, 0x00000000,
+
+	// inst 1: send(8) null URB_WRITE EOT complete used
+	//   DW0: SEND(0x31), SIMD8, msg_reg_nr=1 (bits[27:24])
+	//   DW2: SFID=URB(6), EOT=1, src0=r0 vec8
+	//   DW3: EOT=1, msg_length=1, header_present=1,
+	//         complete=1, used=1
+	0x01600031, 0x20000128, 0x648D0000, 0x82002C00,
 };
 
 #define SF_KERNEL_SIZE sizeof(gen5_sf_kernel)
@@ -105,7 +107,9 @@ static const uint32 gen5_wm_kernel_solid[] = {
 	// inst 4: mov(8) m5<1>:F  <imm>:F  {NoMask}  -- Alpha
 	0x00600201, 0x20A003FE, 0x00000000, 0x3F800000,
 
-	// inst 5: send(8) null:UW  r0:UW  FB_WRITE  EOT
+	// inst 5: send(8) null:UW  FB_WRITE  EOT  msg_reg_nr=1
+	//   DW0: SEND, SIMD8, msg_reg_nr=1 (bits[27:24]=1)
+	//         payload starts at MRF m1 (header,R,G,B,A = m1-m5)
 	//   DW2: SFID=DATAPORT_WRITE(5) bits[31:28], EOT=1 bit[26],
 	//         src0=r0 vec8
 	//   DW3: EOT=1 bit[31], msg_length=6 bits[28:25],
@@ -113,7 +117,7 @@ static const uint32 gen5_wm_kernel_solid[] = {
 	//         last_render_target=1 bit[11],
 	//         msg_control=SIMD8_SS01(2) bits[10:8],
 	//         binding_table_index=0 bits[7:0]
-	0x00600031, 0x20000128, 0x548D0000, 0x8C084A00,
+	0x01600031, 0x20000128, 0x548D0000, 0x8C084A00,
 };
 
 #define WM_KERNEL_SIZE sizeof(gen5_wm_kernel_solid)
