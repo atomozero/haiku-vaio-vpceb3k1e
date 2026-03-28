@@ -190,27 +190,146 @@ Mesa → llvmpipe (software) → nessun accesso GPU hardware
 Non esiste attualmente un percorso funzionante per usare il GPU Intel
 per il rendering 2D o 3D su Haiku.
 
-## Lavoro futuro (se Haiku aggiunge DRM o modifica app_server)
+## Ecosistema GPU di Haiku: l'approccio X547
 
-1. **SF kernel**: il kernel SF del vaapi-driver potrebbe necessitare
-   adattamento al vertex format (2 float position-only senza UV) o
-   sostituzione con un kernel che produca URB output minimo valido.
+X547 (X512) e' l'unico sviluppatore che ha portato accelerazione GPU
+hardware su Haiku, con un'architettura che evita completamente DRM/KMS:
 
-2. **WM kernel SIMD16**: SNA usa SIMD16, non SIMD8. Potrebbe essere
-   necessario per il corretto dispatch dei thread WM su Ironlake.
+```
+Mesa (radeonsi/radv/nvk)
+    |
+libdrm2 (shim: traduce ioctl DRM → vtable accelerant2)
+    |
+accelerant2 (API COM-like con QueryInterface, vtable C/C++)
+    |
+GPU Server (RadeonGfx / nvidia-haiku, userspace BApplication)
+    |
+Kernel driver (minimale: PCI, MMIO, shared_info)
+```
 
-3. **Texture sampling approach**: SNA usa un kernel WM che campiona
-   una texture 1x1 con il colore solido, invece di MOV immediati.
-   Richiede sampler state e source surface state aggiuntivi.
+### Componenti chiave
 
-4. **DRM layer**: per Mesa hardware serve un layer DRM/KMS su Haiku.
-   X547 ha fatto lavoro preliminare per NVIDIA (nvidia-haiku) ma
-   con architettura completamente diversa (ioctl + GSP firmware).
+**libdrm2** (github.com/X547/libdrm2):
+Reimplementazione di libdrm che intercetta le chiamate DRM e le instrada
+all'accelerant2.  Modalita' server: su `amdgpu_device_initialize()` carica
+l'add-on accelerant2, ottiene i vtable `AccelerantDrm` e `AccelerantAmdgpu`,
+e delega tutte le operazioni (buffer alloc, VA mapping, command submit,
+sync objects) al server GPU.  Implementato: GEM buffer create/close/map/
+export/import, virtual address mapping, command submission, sync objects.
+Non implementato: KMS/mode-setting (gestito separatamente via VideoStreams).
+
+**accelerant2** (github.com/X547/accelerant2):
+API accelerant di nuova generazione con pattern COM-like.  Interfacce:
+- `AccelerantDrm` ("drm/v1"): mmap, buffer handle, sync objects completi
+- `AccelerantAmdgpu` ("amdgpu/v1"): info, buffer alloc/map, command submit
+- `AccelerantDisplay`: VideoStreams consumer per CRTC, cursore
+Supporta sia vtable C che classi virtuali C++.
+
+**RadeonGfx** (github.com/X547/RadeonGfx):
+Server GPU completo per AMD GCN 1.0 (Cape Verde).  Architettura:
+- Kernel driver minimale (PCI, MMIO, shared_info)
+- Server userspace BApplication: firmware, MC, ring buffer, command submit
+- IPC client-server via PortLink/ThreadLink (stile app_server)
+- Ring buffer hardware diretto (scrive a GPU memory-mapped)
+- Memory manager: VRAM, GTT, page table 2-level per client
+- Isolamento per-client: handle table, AddressSpace, VM pool
+
+**VideoStreams** (github.com/X547/VideoStreams):
+Equivalente di GBM + wl_buffer per Haiku.  Producer/Consumer con SwapChain.
+Buffer reference via `area_id` (CPU) o `fd` + fence (GPU, equivalente
+DMA-BUF).  Compositing multi-surface con dirty region tracking.
+
+### Stato attuale dei driver GPU su Haiku
+
+| GPU | Driver | 3D | Vulkan | Stato |
+|---|---|---|---|---|
+| NVIDIA Turing+ | nvidia-haiku (X547) | Zink OpenGL | NVK | v0.0.2, funzionante |
+| AMD GCN 1.0 | RadeonGfx (X547) | radeonsi | RADV | Sperimentale |
+| Intel Gen2-Gen12 | intel_extreme (Haiku) | No | No | Solo display |
+| Qualsiasi | Mesa llvmpipe | Software | Lavapipe | Funzionante |
+
+### Roadmap: Intel Gen5 nell'ecosistema X547
+
+**Cosa servirebbe per portare Intel Gen5 nello stack X547:**
+
+1. **Kernel driver** (`intel_gfx`): minimale - PCI, MMIO mapping,
+   shared_info.  Basabile sull'attuale `intel_extreme` kernel driver
+   gia' funzionante.
+
+2. **Server GPU** (`IntelGfx`): gestione GTT (globale su Gen5, non
+   per-process come AMDGPU), ring buffer RCS, batch buffer submission,
+   fencing via HWS page.  Piu' semplice di RadeonGfx perche' Gen5 ha
+   GTT globale e un solo ring.
+
+3. **Interfaccia accelerant2**: `AccelerantIntel` con operazioni
+   GEM-like (buffer create/map, execbuffer submit, wait).
+
+4. **libdrm2 Intel shim**: `libdrm_intel` o adattamento del winsys
+   `crocus` (Gen4-7 Gallium driver) per chiamare AccelerantIntel
+   invece di `DRM_IOCTL_I915_*`.
+
+5. **Mesa winsys crocus**: adattare `src/gallium/winsys/crocus/drm/`
+   per usare il libdrm2 shim al posto dei DRM ioctl Linux.
+
+**Semplificazioni rispetto a RadeonGfx:**
+- Gen5 ha GTT globale (niente page table per-client)
+- Un solo ring buffer (RCS) vs. multipli (GFX, SDMA, etc.)
+- Nessun firmware GPU da caricare
+- Hardware ben documentato (PRM Intel pubblici)
+
+**Complessita' stimate:**
+- Kernel driver: 1-2 settimane (adattamento intel_extreme esistente)
+- Server GPU: 4-8 settimane (GTT, ring buffer, batch submit, fencing)
+- libdrm2 + winsys: 2-4 settimane
+- Integrazione Mesa crocus: 2-4 settimane
+- **Totale: 2-4 mesi per uno sviluppatore esperto**
+
+### Blocchi tecnici
+
+1. **Nessuna astrazione Intel in libdrm2**: tutto e' AMDGPU-specifico
+   (ioctl numbers, strutture, semantica).  Serve un layer Intel parallelo.
+
+2. **Mesa crocus** chiama `DRM_IOCTL_I915_GEM_CREATE`,
+   `DRM_IOCTL_I915_GEM_EXECBUFFER2`, etc. - completamente diversi
+   da AMDGPU.  Serve un winsys adapter dedicato.
+
+3. **Gen5 e' vecchio**: crocus lo supporta ma e' il target piu' basso.
+   La community potrebbe non essere interessata a mantenerlo.
+
+4. **X547 non ha hardware Intel**: nessuno sta lavorando su Intel
+   nell'ecosistema GPU Haiku.
+
+## Lavoro futuro sul render engine 3D
+
+Se si vuole completare il render engine 3D attuale (senza Mesa):
+
+1. **SF kernel**: il kernel SF dal vaapi-driver potrebbe non corrispondere
+   al vertex format (2 float position-only senza UV).  Alternativa:
+   usare l'approccio SNA con texture 1x1 + kernel WM con sampling.
+
+2. **WM kernel SIMD16**: SNA usa SIMD16, non SIMD8.  Potrebbe essere
+   necessario per il dispatch corretto dei thread WM su Ironlake.
+
+3. **Validazione EU encoding**: le istruzioni EU Gen5 sono derivate
+   dal bitfield layout di brw_eu.h.  Senza un assembler EU o un
+   reference binary verificato, l'encoding potrebbe avere errori
+   sottili nei campi src/dst dei MOV e SEND.
 
 ## Statistiche
 
-- **36 commit** nel repository
-- **3897 righe aggiunte**, 86 rimosse (diff da main)
-- **4 patch display** funzionanti e testate
-- **1 render engine** infrastruttura completa ma non ancora funzionale
+- **37 commit** nel repository
+- **~4100 righe aggiunte**, 86 rimosse
+- **4 patch display** funzionanti e testate (LVDS 1366x768 stabile)
+- **1 render engine** con pipeline 3D attiva (comandi processati)
+  ma draw non ancora funzionale (SF/WM kernel)
 - **~15 riavvii** per test e debug della pipeline 3D
+- **Bug opcode critico** trovato e corretto (tutti i comandi Gen5)
+
+## Riferimenti
+
+- xf86-video-intel SNA gen5_render.c (reference per opcode e state setup)
+- intel-vaapi-driver exa_sf.g4b.gen5 (SF kernel binary)
+- Linux i915 init_render_ring() (workaround Gen5)
+- X547/libdrm2, X547/accelerant2, X547/RadeonGfx (architettura GPU Haiku)
+- Haiku AccelerantHWInterface.cpp commit 03f77fd7d9db (rimozione 2D HW accel)
+- Intel Gen5 (Ironlake) PRM Vol 1-4
