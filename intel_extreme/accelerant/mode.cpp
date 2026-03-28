@@ -553,146 +553,42 @@ intel_set_display_mode(display_mode* mode)
 		}
 		_sPrintf("intel_extreme: render test: BLT fill done (blue 160,50-260,150)\n");
 
-		// Test 2b: PIPE_CONTROL pixel write
-		// Try THREE variants to find which Type 3 encoding works:
-		// A) bare PIPE_CONTROL (no PIPELINE_SELECT)
-		// B) with non-pipelined PIPELINE_SELECT (0x61040000)
-		// C) with pipelined PIPELINE_SELECT (0x69040000)
-		{
-			uint32 testAddr = sharedInfo.frame_buffer_offset
-				+ 100 * sharedInfo.bytes_per_row + 280 * 4;
-			uint32* testPixel = (uint32*)((uint8*)sharedInfo.frame_buffer
-				+ 100 * sharedInfo.bytes_per_row + 280 * 4);
-
-			int32 barrier = 0;
-
-			// Test A: bare PIPE_CONTROL (no pipeline select)
-			*testPixel = 0xFF000000;
-			atomic_add(&barrier, 1);
-			{
-				QueueCommands queue(sharedInfo.primary_ring_buffer);
-				queue.MakeSpace(2);
-				queue.Write(MI_FLUSH_CMD);
-				queue.Write(MI_NOOP);
-				queue.MakeSpace(4);
-				queue.Write(0x7A000002);
-				queue.Write((1 << 14));
-				queue.Write((testAddr & ~0x7) | (1 << 2));
-				queue.Write(0xAABBCCDD);
-			}
-			snooze(10000);
-			atomic_add(&barrier, 1);
-			uint32 readA = *(volatile uint32*)testPixel;
-
-			// Test B: non-pipelined PIPELINE_SELECT (0x61040000)
-			*testPixel = 0xFF000000;
-			atomic_add(&barrier, 1);
-			{
-				QueueCommands queue(sharedInfo.primary_ring_buffer);
-				queue.MakeSpace(2);
-				queue.Write(MI_FLUSH_CMD);
-				queue.Write(MI_NOOP);
-				queue.MakeSpace(2);
-				queue.Write(0x61040000);	// non-pipelined PS
-				queue.Write(MI_NOOP);
-				queue.MakeSpace(4);
-				queue.Write(0x7A000002);
-				queue.Write((1 << 14));
-				queue.Write((testAddr & ~0x7) | (1 << 2));
-				queue.Write(0xAABBCCDD);
-			}
-			snooze(10000);
-			atomic_add(&barrier, 1);
-			uint32 readB = *(volatile uint32*)testPixel;
-
-			// Test C: pipelined PIPELINE_SELECT (0x69040000)
-			*testPixel = 0xFF000000;
-			atomic_add(&barrier, 1);
-			{
-				QueueCommands queue(sharedInfo.primary_ring_buffer);
-				queue.MakeSpace(2);
-				queue.Write(MI_FLUSH_CMD);
-				queue.Write(MI_NOOP);
-				queue.MakeSpace(2);
-				queue.Write(0x69040000);	// pipelined PS
-				queue.Write(MI_NOOP);
-				queue.MakeSpace(4);
-				queue.Write(0x7A000002);
-				queue.Write((1 << 14));
-				queue.Write((testAddr & ~0x7) | (1 << 2));
-				queue.Write(0xAABBCCDD);
-			}
-			snooze(10000);
-			atomic_add(&barrier, 1);
-			uint32 readC = *(volatile uint32*)testPixel;
-
-			if (diagFile) {
-				fprintf(diagFile, "PIPE_CONTROL tests:\n");
-				fprintf(diagFile, "  A (bare):         0x%08x (%s)\n",
-					readA, readA == 0xAABBCCDD ? "WORKS" : "IGNORED");
-				fprintf(diagFile, "  B (PS=0x6104):    0x%08x (%s)\n",
-					readB, readB == 0xAABBCCDD ? "WORKS" : "IGNORED");
-				fprintf(diagFile, "  C (PS=0x6904):    0x%08x (%s)\n",
-					readC, readC == 0xAABBCCDD ? "WORKS" : "IGNORED");
-			}
-
-			uint32 readBack = readA; // for compatibility
-			_sPrintf("intel_extreme: PIPE_CONTROL test: wrote 0xFFFF00FF"
-				" to GTT 0x%x, read back 0x%08x (%s)\n",
-				(testAddr & ~0x7) | (1 << 2), readBack,
-				readBack == 0xFFFF00FF ? "3D WORKS" :
-				readBack == 0xFF000000 ? "3D IGNORED" : "UNEXPECTED");
-
-			// Test 2c: MI_STORE_DATA_IMM (Type 0 MI command)
-			uint32 miRead = 0;
-			{
-				uint32 miAddr = sharedInfo.frame_buffer_offset
-					+ 100 * sharedInfo.bytes_per_row + 290 * 4;
-				uint32* miPixel = (uint32*)((uint8*)sharedInfo.frame_buffer
-					+ 100 * sharedInfo.bytes_per_row + 290 * 4);
-				*miPixel = 0xFF000000;
-				atomic_add(&barrier, 1);
-
-				{
-					QueueCommands queue(sharedInfo.primary_ring_buffer);
-					queue.MakeSpace(4);
-					queue.Write(0x10400002);
-					queue.Write(0);
-					queue.Write(miAddr);
-					queue.Write(0xFFFF00FF);
-				}
-				snooze(10000);
-				atomic_add(&barrier, 1);
-				miRead = *(volatile uint32*)miPixel;
-			}
-
-			// Write all test results to persistent diag file
-			if (diagFile) {
-				fprintf(diagFile, "PIPE_CONTROL: 0x%08x (%s)\n",
-					readBack,
-					readBack == 0xFFFF00FF ? "3D WORKS" : "3D IGNORED");
-				fprintf(diagFile, "MI_STORE_DATA_IMM: 0x%08x (%s)\n",
-					miRead,
-					miRead == 0xFFFF00FF ? "MI WORKS" : "MI IGNORED");
-				fprintf(diagFile, "After tests: MI_MODE=0x%08x"
-					" _3D_CHICKEN2=0x%08x CACHE_MODE_0=0x%08x\n",
-					read32(0x209c), read32(0x208c), read32(0x2120));
-				fprintf(diagFile, "HWS_PGA=0x%08x INSTDONE=0x%08x\n",
-					read32(0x2080), read32(0x206c));
-				fprintf(diagFile, "IPEIR=0x%08x IPEHR=0x%08x EIR=0x%08x\n",
-					read32(0x2064), read32(0x2068), read32(0x20b0));
-				fclose(diagFile);
-			}
-
-		}
-
 		snooze(50000);
 
-		// Test 3: Render 3D fill (red) - the one we're testing
-		status_t err = render_fill_rect(0xFFFF0000,  // red
+		// Test 3: 3D render fill (red 270,50 - 370,150)
+		// Clear target to black, do 3D fill, read back pixels
+		for (int y = 50; y < 150; y++)
+			for (int x = 270; x < 370; x++)
+				fb[y * stride + x] = 0xFF000000;
+
+		status_t err = render_fill_rect(0xFFFF0000,
 			270, 50, 370, 150);
-		_sPrintf("intel_extreme: render test: 3D fill result = 0x%"
-			B_PRIx32 "\n", (uint32)err);
+
+		snooze(100000);
+
+		// Read back pixels to check if 3D wrote anything
+		uint32 px_center = *(volatile uint32*)&fb[100 * stride + 320];
+		uint32 px_corner = *(volatile uint32*)&fb[51 * stride + 271];
+		uint32 px_outside = *(volatile uint32*)&fb[45 * stride + 320];
+
+		if (diagFile) {
+			fprintf(diagFile, "3D fill err=0x%08x\n", (uint32)err);
+			fprintf(diagFile, "Pixel readback:\n");
+			fprintf(diagFile, "  center(320,100): 0x%08x %s\n",
+				px_center,
+				px_center == 0xFFFF0000 ? "RED-3D WORKS!" :
+				px_center == 0xFF000000 ? "BLACK-no draw" : "OTHER");
+			fprintf(diagFile, "  corner(271,51):  0x%08x\n", px_corner);
+			fprintf(diagFile, "  outside(320,45): 0x%08x\n", px_outside);
+			fprintf(diagFile, "IPEHR=0x%08x IPEIR=0x%08x EIR=0x%08x\n",
+				read32(0x2068), read32(0x2064), read32(0x20b0));
+			fprintf(diagFile, "INSTDONE=0x%08x\n", read32(0x206c));
+			fclose(diagFile);
+		}
+
+		_sPrintf("intel_extreme: render test: err=0x%" B_PRIx32
+			" pixel(320,100)=0x%08" B_PRIx32 "\n",
+			(uint32)err, px_center);
 	}
 
 	// Second register dump
