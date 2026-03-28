@@ -9,10 +9,12 @@
 
 #include <Debug.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "accelerant.h"
 #include "accelerant_protos.h"
 #include "commands.h"
+#include "render.h"
 
 
 #undef TRACE
@@ -470,10 +472,42 @@ intel_screen_to_screen_blit(engine_token* token, blit_params* params,
 }
 
 
+// Render engine toggle: checked once, enabled by trigger file.
+// If the 3D pipeline hangs the GPU, reboot and delete the file.
+static int sRenderMode = -1;  // -1 = unchecked, 0 = BLT, 1 = render
+
+static void
+check_render_mode()
+{
+	if (sRenderMode != -1)
+		return;
+
+	if (gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)
+		&& access("/boot/home/Desktop/render_test", F_OK) == 0) {
+		sRenderMode = 1;
+		_sPrintf("intel_extreme: 3D render engine ENABLED for fills "
+			"(delete /boot/home/Desktop/render_test to disable)\n");
+	} else {
+		sRenderMode = 0;
+	}
+}
+
+
 void
 intel_fill_rectangle(engine_token* token, uint32 color,
 	fill_rect_params* params, uint32 count)
 {
+	check_render_mode();
+
+	if (sRenderMode == 1) {
+		for (uint32 i = 0; i < count; i++) {
+			render_fill_rect(color,
+				params[i].left, params[i].top,
+				params[i].right + 1, params[i].bottom + 1);
+		}
+		return;
+	}
+
 	if (false && batch_buffer_available()) {
 		BatchCommands batch(gInfo->shared_info->primary_ring_buffer);
 		xy_color_blit_command blit(false);
