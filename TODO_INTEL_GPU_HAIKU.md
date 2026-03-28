@@ -11,24 +11,32 @@ Mesa crocus, seguendo l'architettura di X547 (RadeonGfx/libdrm2/accelerant2).
 ## Fase 0: Preparazione e studio (1-2 settimane)
 
 ### 0.1 Studio dell'architettura X547
-- [ ] Clonare e studiare X547/RadeonGfx (server GPU, ring buffer, memory manager)
-- [ ] Clonare e studiare X547/libdrm2 (shim DRM → accelerant2)
-- [ ] Clonare e studiare X547/accelerant2 (API COM-like, vtable C/C++)
-- [ ] Clonare e studiare X547/VideoStreams (buffer passing producer/consumer)
+- [x] Clonare e studiare X547/RadeonGfx (server GPU, ring buffer, memory manager)
+- [x] Clonare e studiare X547/libdrm2 (shim DRM → accelerant2)
+- [x] Clonare e studiare X547/accelerant2 (API COM-like, vtable C/C++)
+- [x] Clonare e studiare X547/VideoStreams (buffer passing producer/consumer)
 - [ ] Compilare RadeonGfx su Haiku per capire il build system
 
 ### 0.2 Studio del driver Intel i915 Linux
-- [ ] Studiare il winsys crocus (src/gallium/winsys/crocus/drm/)
-- [ ] Documentare tutti i DRM_IOCTL_I915_* usati da crocus
-- [ ] Studiare GEM object management in i915 (create, mmap, execbuffer)
-- [ ] Studiare la gestione GTT globale Gen5 (vs PPGTT Gen6+)
-- [ ] Studiare il batch buffer submission (execbuffer2)
+- [x] Studiare il winsys crocus (crocus_bufmgr.c, crocus_batch.c, crocus_fence.c)
+- [x] Documentare tutti i DRM_IOCTL_I915_* usati da crocus
+      → 30 ioctl totali, 8 essenziali (Tier 1), 11 raccomandati (Tier 2)
+      → Analisi completa in intel_extreme/CROCUS_DRM_IOCTL_ANALYSIS.md
+- [x] Studiare GEM object management in i915 (create, mmap, execbuffer)
+- [x] Studiare la gestione GTT globale Gen5 (vs PPGTT Gen6+)
+- [x] Studiare il batch buffer submission (execbuffer2)
+      → Formato: exec_object2[] + relocation_entry[] + execbuffer2 header
+      → Gen5: no context (rsvd1=0), no PPGTT, global GTT offsets
+      → Batch structure: commands + MI_STORE_DWORD_INDEX + MI_BATCH_BUFFER_END
 
 ### 0.3 Documentazione hardware Gen5
-- [ ] Scaricare Intel Open Source PRM Vol 1-4 per Ironlake
-- [ ] Documentare il register map GTT (PGTBL_CTL, PTE format)
-- [ ] Documentare il ring buffer RCS (TAIL, HEAD, START, CTL)
-- [ ] Documentare il formato batch buffer e relocation
+- [x] Documentare il register map GTT (PGTBL_CTL 0x2020)
+- [x] Documentare il ring buffer RCS (TAIL 0x2030, HEAD 0x2034, START 0x2038, CTL 0x203C)
+- [x] Documentare il formato batch buffer e relocation
+      → Gen5: call-style nesting (1 level), no chain
+      → Relocation: global GTT offsets, presumed_offset caching
+- [ ] Scaricare Intel Open Source PRM Vol 1-4 per Ironlake (opzionale,
+      abbiamo gia' le informazioni necessarie dai sorgenti i915/SNA/crocus)
 
 ---
 
