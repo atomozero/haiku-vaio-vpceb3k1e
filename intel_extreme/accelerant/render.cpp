@@ -383,84 +383,90 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 
 	uint32 stateBase = sRenderState.offset;
 
-	// Emit 3D commands via ring buffer
-	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
+	// Emit 3D commands via ring buffer (scoped so destructor submits)
+	{
+		QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 
-	// 1. MI_FLUSH to switch from BLT to 3D
-	queue.MakeSpace(2);
-	queue.Write(MI_FLUSH_CMD | MI_FLUSH_STATE_INST_CACHE);
-	queue.Write(MI_NOOP);
+		// 1. MI_FLUSH to switch from BLT to 3D
+		queue.MakeSpace(2);
+		queue.Write(MI_FLUSH_CMD | MI_FLUSH_STATE_INST_CACHE);
+		queue.Write(MI_NOOP);
 
-	// 2. PIPELINE_SELECT = 3D
-	queue.MakeSpace(2);
-	queue.Write(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
-	queue.Write(MI_NOOP);
+		// 2. PIPELINE_SELECT = 3D
+		queue.MakeSpace(2);
+		queue.Write(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
+		queue.Write(MI_NOOP);
 
-	// 3. STATE_BASE_ADDRESS
-	queue.MakeSpace(8);
-	queue.Write(CMD_STATE_BASE_ADDRESS);
-	queue.Write(stateBase | 1);		// general state base (valid)
-	queue.Write(stateBase | 1);		// surface state base (valid)
-	queue.Write(0);					// indirect object base
-	queue.Write(stateBase | 1);		// instruction base (valid)
-	queue.Write(0);					// general state upper bound
-	queue.Write(0);					// indirect object upper bound
-	queue.Write(0);					// instruction upper bound
+		// 3. STATE_BASE_ADDRESS - all bases = 0 so all pointers are
+		//    absolute GTT offsets (same approach as SNA/xf86-video-intel)
+		queue.MakeSpace(8);
+		queue.Write(CMD_STATE_BASE_ADDRESS);
+		queue.Write(0 | 1);				// general state base = 0 (valid)
+		queue.Write(0 | 1);				// surface state base = 0 (valid)
+		queue.Write(0);					// indirect object base
+		queue.Write(0 | 1);				// instruction base = 0 (valid)
+		queue.Write(0);					// general state upper bound
+		queue.Write(0);					// indirect object upper bound
+		queue.Write(0);					// instruction upper bound
 
-	// 4. 3DSTATE_PIPELINED_POINTERS (7 DWORDs)
-	queue.MakeSpace(8);
-	queue.Write(CMD_PIPELINED_POINTERS);
-	queue.Write(stateBase + STATE_VS_OFFSET);	// VS state
-	queue.Write(0);								// GS disabled
-	queue.Write(0);								// CLIP disabled
-	queue.Write(stateBase + STATE_SF_OFFSET);	// SF state
-	queue.Write(stateBase + STATE_WM_OFFSET);	// WM state
-	queue.Write(stateBase + STATE_CC_OFFSET);	// CC state
-	queue.Write(MI_NOOP);
+		// 4. 3DSTATE_PIPELINED_POINTERS (7 DWORDs)
+		queue.MakeSpace(8);
+		queue.Write(CMD_PIPELINED_POINTERS);
+		queue.Write(stateBase + STATE_VS_OFFSET);	// VS state
+		queue.Write(0);								// GS disabled
+		queue.Write(0);								// CLIP disabled
+		queue.Write(stateBase + STATE_SF_OFFSET);	// SF state
+		queue.Write(stateBase + STATE_WM_OFFSET);	// WM state
+		queue.Write(stateBase + STATE_CC_OFFSET);	// CC state
+		queue.Write(MI_NOOP);
 
-	// 5. 3DSTATE_BINDING_TABLE_POINTERS
-	queue.MakeSpace(2);
-	queue.Write(CMD_BINDING_TABLE_PTRS);
-	queue.Write(STATE_BIND_OFFSET);		// relative to surface state base
+		// 5. 3DSTATE_BINDING_TABLE_POINTERS
+		queue.MakeSpace(2);
+		queue.Write(CMD_BINDING_TABLE_PTRS);
+		queue.Write(stateBase + STATE_BIND_OFFSET);
 
-	// 6. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
-	queue.MakeSpace(6);
-	queue.Write(CMD_VERTEX_BUFFERS | (3 - 2));	// length = 3
-	queue.Write((0 << 26)					// buffer index 0
-		| (8 << 0));						// pitch = 8 bytes (2 floats)
-	queue.Write(stateBase + STATE_VERTEX_OFFSET);  // buffer start
-	queue.Write(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);  // buffer end
+		// 6. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
+		queue.MakeSpace(6);
+		queue.Write(CMD_VERTEX_BUFFERS | (3 - 2));
+		queue.Write((0 << 26) | (8 << 0));
+		queue.Write(stateBase + STATE_VERTEX_OFFSET);
+		queue.Write(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);
 
-	// 7. 3DSTATE_VERTEX_ELEMENTS (position only)
-	queue.MakeSpace(4);
-	queue.Write(CMD_VERTEX_ELEMENTS | (2 - 2));  // length = 2
-	queue.Write((0 << 26)					// buffer index 0
-		| (0 << 0)							// src offset 0
-		| (FORMAT_R32G32_FLOAT << 16)		// format
-		| (1 << 25));						// valid
-	queue.Write((VFCOMP_STORE_SRC << 28)	// X from buffer
-		| (VFCOMP_STORE_SRC << 24)			// Y from buffer
-		| (VFCOMP_STORE_0 << 20)			// Z = 0
-		| (VFCOMP_STORE_1_FP << 16));		// W = 1.0
+		// 7. 3DSTATE_VERTEX_ELEMENTS (position only)
+		queue.MakeSpace(4);
+		queue.Write(CMD_VERTEX_ELEMENTS | (2 - 2));
+		queue.Write((0 << 26) | (FORMAT_R32G32_FLOAT << 16) | (1 << 25));
+		queue.Write((VFCOMP_STORE_SRC << 28) | (VFCOMP_STORE_SRC << 24)
+			| (VFCOMP_STORE_0 << 20) | (VFCOMP_STORE_1_FP << 16));
 
-	// 8. 3DPRIMITIVE (draw RECTLIST, 3 vertices)
-	queue.MakeSpace(6);
-	queue.Write(CMD_3DPRIMITIVE
-		| (PRIM_RECTLIST << 10)
-		| (6 - 2));						// length = 6
-	queue.Write(3);							// vertex count
-	queue.Write(0);							// start vertex
-	queue.Write(1);							// instance count
-	queue.Write(0);							// start instance
-	queue.Write(0);							// base vertex location
+		// 8. 3DPRIMITIVE (draw RECTLIST, 3 vertices)
+		queue.MakeSpace(6);
+		queue.Write(CMD_3DPRIMITIVE | (PRIM_RECTLIST << 10) | (6 - 2));
+		queue.Write(3);		// vertex count
+		queue.Write(0);		// start vertex
+		queue.Write(1);		// instance count
+		queue.Write(0);		// start instance
+		queue.Write(0);		// base vertex location
 
-	// MI_FLUSH to complete 3D and allow BLT again
-	queue.MakeSpace(2);
-	queue.Write(MI_FLUSH_CMD);
-	queue.Write(MI_NOOP);
+		// MI_FLUSH to complete 3D and allow BLT again
+		queue.MakeSpace(2);
+		queue.Write(MI_FLUSH_CMD);
+		queue.Write(MI_NOOP);
+	}
+	// QueueCommands destructor has now written TAIL → commands submitted
 
 	TRACE("render_fill_rect: %d,%d - %d,%d color 0x%08" B_PRIx32 "\n",
 		left, top, right, bottom, color);
+
+	// Wait for GPU to process, then dump error registers
+	snooze(10000);
+	uint32 instdone = read32(0x206C);
+	uint32 ipeir = read32(0x2064);
+	uint32 ipehr = read32(0x2068);
+	uint32 eir = read32(0x20B0);
+	TRACE("GPU diag: INSTDONE=0x%08" B_PRIx32 " IPEIR=0x%08" B_PRIx32
+		" IPEHR=0x%08" B_PRIx32 " EIR=0x%08" B_PRIx32 "\n",
+		instdone, ipeir, ipehr, eir);
 
 	return B_OK;
 }

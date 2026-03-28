@@ -14,6 +14,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <Debug.h>
 
@@ -26,6 +27,8 @@
 #include "accelerant.h"
 #include "pll.h"
 #include "Ports.h"
+#include "commands.h"
+#include "render.h"
 #include "utility.h"
 
 
@@ -505,6 +508,44 @@ intel_set_display_mode(display_mode* mode)
 
 	set_frame_buffer_base();
 		// triggers writing back double-buffered registers
+
+	// Render engine test: draw colored rectangles after mode set.
+	// Three tests: CPU fill (baseline), BLT fill, render 3D fill.
+	if (sharedInfo.device_type.InGroup(INTEL_GROUP_ILK)
+		&& access("/boot/home/Desktop/render_test", F_OK) == 0) {
+
+		// Wait a moment for display to stabilize
+		snooze(100000);
+
+		// Test 1: CPU fill (green) - proves framebuffer is writable
+		uint32* fb = (uint32*)sharedInfo.frame_buffer;
+		uint32 stride = sharedInfo.bytes_per_row / 4;
+		for (int y = 50; y < 150; y++)
+			for (int x = 50; x < 150; x++)
+				fb[y * stride + x] = 0xFF00FF00;  // green
+		_sPrintf("intel_extreme: render test: CPU fill done (green 50,50-150,150)\n");
+
+		// Test 2: BLT fill (blue) - proves BLT engine works
+		{
+			QueueCommands queue(sharedInfo.primary_ring_buffer);
+			xy_color_blit_command blit(false);
+			blit.color = 0xFF0000FF;  // blue
+			blit.dest_left = 160;
+			blit.dest_top = 50;
+			blit.dest_right = 260;
+			blit.dest_bottom = 150;
+			queue.Put(blit, sizeof(blit));
+		}
+		_sPrintf("intel_extreme: render test: BLT fill done (blue 160,50-260,150)\n");
+
+		snooze(50000);
+
+		// Test 3: Render 3D fill (red) - the one we're testing
+		status_t err = render_fill_rect(0xFFFF0000,  // red
+			270, 50, 370, 150);
+		_sPrintf("intel_extreme: render test: 3D fill result = 0x%"
+			B_PRIx32 "\n", (uint32)err);
+	}
 
 	// Second register dump
 	//dump_registers();

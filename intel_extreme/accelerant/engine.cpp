@@ -335,6 +335,11 @@ intel_acquire_engine(uint32 capabilities, uint32 maxWait, sync_token* syncToken,
 	engine_token** _engineToken)
 {
 	CALLED();
+	static bool sFirstAcquire = true;
+	if (sFirstAcquire) {
+		_sPrintf("intel_extreme: intel_acquire_engine CALLED\n");
+		sFirstAcquire = false;
+	}
 	*_engineToken = &sEngineToken;
 
 	if (acquire_lock(&gInfo->shared_info->engine_lock) != B_OK)
@@ -482,8 +487,12 @@ check_render_mode()
 	if (sRenderMode != -1)
 		return;
 
-	if (gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)
-		&& access("/boot/home/Desktop/render_test", F_OK) == 0) {
+	bool isILK = gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK);
+	int fileOK = access("/boot/home/Desktop/render_test", F_OK);
+	_sPrintf("intel_extreme: check_render_mode: ILK=%d, file=%d\n",
+		isILK, fileOK);
+
+	if (isILK && fileOK == 0) {
 		sRenderMode = 1;
 		_sPrintf("intel_extreme: 3D render engine ENABLED for fills "
 			"(delete /boot/home/Desktop/render_test to disable)\n");
@@ -497,6 +506,14 @@ void
 intel_fill_rectangle(engine_token* token, uint32 color,
 	fill_rect_params* params, uint32 count)
 {
+	static bool sFirstCall = true;
+	if (sFirstCall) {
+		_sPrintf("intel_extreme: intel_fill_rectangle CALLED "
+			"(count=%" B_PRIu32 ", color=0x%08" B_PRIx32 ")\n",
+			count, color);
+		sFirstCall = false;
+	}
+
 	check_render_mode();
 
 	if (sRenderMode == 1) {
