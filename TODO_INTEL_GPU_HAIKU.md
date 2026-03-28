@@ -49,35 +49,37 @@ Mesa crocus, seguendo l'architettura di X547 (RadeonGfx/libdrm2/accelerant2).
 
 ---
 
-## Fase 1: Kernel driver `intel_gfx` (1-2 settimane)
+## Fase 1: Accesso GPU dal server userspace (1 settimana)
 
-Il kernel driver e' minimale (modello RadeonGfx): PCI setup, MMIO
-mapping, shared_info.  Basato sull'attuale intel_extreme.
+**Decisione architetturale:** NON serve un kernel driver separato.
+Il kernel driver `intel_extreme` esistente fornisce gia' tutto:
+MMIO registers, GTT aperture, ring buffer, HWS page.  Il server GPU
+accede al device esistente `/dev/graphics/intel_extreme_*` via ioctl
+`INTEL_GET_PRIVATE_DATA` e `clone_area()`, come fa l'accelerant.
 
-### 1.1 Fork del kernel driver
-- [ ] Copiare intel_extreme kernel driver come `intel_gfx`
-- [ ] Rimuovere il codice display (gestito dall'accelerant esistente)
-- [ ] Mantenere: PCI probe, BAR mapping, interrupt setup
+### 1.1 Struttura progetto IntelGfx
+- [ ] Creare directory `intel_gfx_server/`
+- [ ] Struttura base: BApplication con thread di ascolto IPC
+- [ ] Aprire `/dev/graphics/intel_extreme_*` come device fd
+- [ ] Ottenere shared_info via `ioctl(INTEL_GET_PRIVATE_DATA)`
+- [ ] Clonare aree: shared_info, registers, graphics_memory
 
-### 1.2 shared_info per GPU server
-- [ ] Definire `intel_gfx_shared_info` con:
-  - Indirizzo base registri MMIO
-  - GTT base address e dimensione
-  - Aperture base address e dimensione
-  - Ring buffer offset e dimensione
-  - Status page offset
-  - Device ID e stepping
-- [ ] Creare area condivisa kernel ↔ userspace
+### 1.2 Verifica accesso hardware
+- [ ] Leggere registri MMIO (device ID, GTT size, ring status)
+- [ ] Verificare accesso GTT aperture (leggere/scrivere pixel framebuffer)
+- [ ] Verificare che il ring buffer lock funzioni cross-process
+- [ ] Test: scrivere un pixel al framebuffer via MI_STORE_DATA_IMM
+      dal server (non dall'accelerant)
 
-### 1.3 IOCTL minimali
-- [ ] `INTEL_GFX_GET_SHARED_INFO` - ottieni shared_info
-- [ ] `INTEL_GFX_ALLOC_GTT` - alloca pagine GTT (o gestire in userspace)
-- [ ] `INTEL_GFX_MAP_GTT` - mappa pagine fisiche nel GTT
-
-### 1.4 Build e test
-- [ ] Makefile per kernel driver (_KERNEL_MODE, -nostdlib)
-- [ ] Verificare che il driver si carica senza conflitto con intel_extreme
-- [ ] Strategia di coesistenza: intel_extreme per display, intel_gfx per 3D
+### 1.3 Gestione conflitti con accelerant
+- [ ] L'accelerant (in app_server) e il server GPU condividono:
+  - Ring buffer RCS (serializzato via benaphore in shared_info)
+  - GTT aperture (allocazioni separate, no overlap)
+  - Registri MMIO (letture concorrenti ok, scritture serializzate)
+- [ ] Definire protocollo di allocazione GTT (server alloca dalla fine,
+      accelerant dall'inizio, o usa allocatore condiviso)
+- [ ] Test: BLT fill da accelerant + MI_STORE da server, verificare
+      che non si corrompano
 
 ---
 
