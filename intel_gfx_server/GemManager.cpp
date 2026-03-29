@@ -152,6 +152,20 @@ GemManager::ExecCommands(const uint32* cmds, uint32 count)
 	if (cmds == NULL || count == 0)
 		return B_BAD_VALUE;
 
+	// Check GPU error state before submitting
+	uint32 esr = _ReadReg(0x20b8);	// ESR - error status
+	if (esr != 0) {
+		printf("GEM: GPU error state (ESR=0x%x), cannot exec\n", esr);
+		return B_DEV_NOT_READY;
+	}
+
+	// Verify ring is enabled
+	uint32 ringCtl = _ReadReg(fRing->register_base + RING_BUFFER_CONTROL);
+	if (!(ringCtl & 1)) {
+		printf("GEM: Ring not enabled (CTL=0x%x)\n", ringCtl);
+		return B_DEV_NOT_READY;
+	}
+
 	// Align to even number of DWORDs (QWord alignment)
 	uint32 totalDW = count;
 	if (totalDW & 1)
