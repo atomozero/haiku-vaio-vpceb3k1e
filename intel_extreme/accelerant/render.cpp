@@ -257,10 +257,13 @@ render_init()
 			snooze(100);
 		}
 
-		// 4. Set TAIL = 0
+		// 4. Zero ring buffer memory (stale commands persist across reboots!)
+		memset((void*)ring.base, 0, ring.size);
+
+		// 5. Set TAIL = 0
 		write32(ringReg + RING_BUFFER_TAIL, 0);
 
-		// 5. Set ring start address (preserve existing)
+		// 6. Set ring start address (preserve existing)
 		write32(ringReg + RING_BUFFER_START, ring.offset);
 
 		// 6. Re-enable ring

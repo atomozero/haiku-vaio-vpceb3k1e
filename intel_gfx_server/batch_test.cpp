@@ -23,13 +23,15 @@ int main() {
 
     ring_buffer& ring = si->primary_ring_buffer;
 
-    // Use scratch page (GTT 0x10000) as batch buffer location
-    // We know the GPU can access this (MI_STORE_DATA_IMM proved it)
-    uint32 batchGTT = 0x10000;
-    uint32 targetGTT = 0x10800;  // target within same page (offset 0x800)
-    
+    // Strategy: put the batch buffer at the END of the ring buffer
+    // (which we KNOW has valid GTT entries for instruction fetch).
+    // Ring is 64KB at GTT 0x0000. Use the last 4KB (0xF000-0xFFFF)
+    // as batch space, and scratch (0x10000) as target.
+    uint32 batchGTT = ring.offset + ring.size - 0x1000;  // last 4KB of ring
+    uint32 targetGTT = 0x10000;  // scratch (proven accessible by MI_STORE)
+
     volatile uint32* batchCPU = (volatile uint32*)(
-        (uint8*)si->graphics_memory + batchGTT);
+        (uint8*)ring.base + ring.size - 0x1000);
     volatile uint32* targetCPU = (volatile uint32*)(
         (uint8*)si->graphics_memory + targetGTT);
 
@@ -57,13 +59,18 @@ int main() {
     acquire_lock(&ring.lock);
 
     uint32* cmd = (uint32*)(ring.base + ring.position);
-    cmd[0] = 0x18800000 | (1 << 8);  // MI_BATCH_BUFFER_START | NON_SECURE
-    cmd[1] = batchGTT;    // GTT offset
-    cmd[2] = 0x02000000;  // MI_FLUSH
-    cmd[3] = 0;            // MI_NOOP
+    // MI_FLUSH with instruction cache invalidate (before batch fetch)
+    cmd[0] = 0x02000002;  // MI_FLUSH | STATE_INSTRUCTION_CACHE_INVALIDATE
+    cmd[1] = 0;           // MI_NOOP
+    // MI_BATCH_BUFFER_START
+    cmd[2] = 0x18800100;  // MI_BATCH_BUFFER_START | NON_SECURE
+    cmd[3] = batchGTT;    // GTT offset
+    // MI_FLUSH after batch returns
+    cmd[4] = 0x02000000;  // MI_FLUSH
+    cmd[5] = 0;           // MI_NOOP
 
-    ring.position = (ring.position + 16) & (ring.size - 1);
-    ring.space_left -= 16;
+    ring.position = (ring.position + 24) & (ring.size - 1);
+    ring.space_left -= 24;
 
     __asm__ __volatile__("sfence" ::: "memory");
     W32(ring.register_base + 0, ring.position);

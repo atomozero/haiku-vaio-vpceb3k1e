@@ -4,8 +4,10 @@
 
 #include "GemManager.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 
 GemManager::GemManager()
@@ -14,8 +16,7 @@ GemManager::GemManager()
 	fRegs(NULL),
 	fRing(NULL),
 	fNextHandle(1),
-	fAllocNext(GEM_ALLOC_START),
-	fAllocEnd(0),
+	fDeviceFd(-1),
 	fLastSeq(0),
 	fScratch(NULL)
 {
@@ -29,38 +30,17 @@ GemManager::~GemManager()
 
 
 status_t
-GemManager::Init(intel_shared_info* sharedInfo, volatile uint8* regs)
+GemManager::Init(intel_shared_info* sharedInfo, volatile uint8* regs,
+	int deviceFd)
 {
 	fSharedInfo = sharedInfo;
 	fRegs = regs;
 	fRing = &sharedInfo->primary_ring_buffer;
+	fDeviceFd = deviceFd;
 
-	// Determine allocatable GTT region.
-	// Only GTT offsets with valid entries are usable by the GPU.
-	// Known mapped regions (from kernel driver):
-	//   0x00000-0x0FFFF: Ring buffer (64KB)
-	//   0x10000-0x10FFF: Scratch page
-	//   0x11000-0x1FFFF: Free (60KB)
-	//   0x20000-0x20FFF: Render state (if allocated)
-	//   0x21000-~0x428000: Framebuffer
-	// GTT entries after framebuffer are NOT mapped - GPU hangs if accessed!
-	//
-	// For the prototype, allocate from 0x11000 to 0x20000 (60KB).
-	// TODO: use intel_allocate_memory() or map new GTT entries for more space.
-	fAllocNext = 0x11000;
-	fAllocEnd = 0x20000;
-
-	printf("  GEM: alloc region 0x%x - 0x%x (%.1f MB free)\n",
-		fAllocNext, fAllocEnd,
-		(float)(fAllocEnd - fAllocNext) / (1024 * 1024));
-
-	// Map scratch page (for fence sequence tracking)
-	fScratch = (volatile uint32*)(
-		(uint8*)sharedInfo->graphics_memory + GEM_SCRATCH_GTT);
-
-	// Clear scratch
-	for (int i = 0; i < 256; i++)
-		fScratch[i] = 0;
+	printf("  GEM: using kernel ioctl INTEL_ALLOCATE_GRAPHICS_MEMORY\n");
+	printf("  GEM: graphics_memory_size = %" B_PRIu32 " MB\n",
+		sharedInfo->graphics_memory_size / (1024 * 1024));
 
 	return B_OK;
 }
@@ -87,17 +67,30 @@ GemManager::CreateBuffer(uint32 size, uint32* outHandle)
 	if (slot < 0)
 		return B_NO_MEMORY;
 
-	// Allocate GTT space
-	uint32 offset = _AllocGTT(size);
-	if (offset == 0)
+	// Allocate via kernel driver ioctl (programs GTT entries properly)
+	intel_allocate_graphics_memory allocMem;
+	allocMem.magic = INTEL_PRIVATE_DATA_MAGIC;
+	allocMem.size = size;
+	allocMem.alignment = 0;
+	allocMem.flags = 0;
+
+	if (ioctl(fDeviceFd, INTEL_ALLOCATE_GRAPHICS_MEMORY, &allocMem,
+			sizeof(allocMem)) < 0) {
+		printf("  GEM: INTEL_ALLOCATE_GRAPHICS_MEMORY failed (errno=%d)\n",
+			errno);
 		return B_NO_MEMORY;
+	}
+
+	// Compute GTT offset from virtual address
+	addr_t base = allocMem.buffer_base;
+	uint32 offset = base - (addr_t)fSharedInfo->graphics_memory;
 
 	// Fill in buffer object
 	gem_buffer& bo = fObjects[slot];
 	bo.handle = fNextHandle++;
 	bo.gtt_offset = offset;
 	bo.size = size;
-	bo.cpu_addr = (addr_t)fSharedInfo->graphics_memory + offset;
+	bo.cpu_addr = base;
 	bo.in_use = true;
 
 	// Zero the buffer
@@ -135,7 +128,12 @@ GemManager::CloseBuffer(uint32 handle)
 {
 	for (int i = 0; i < GEM_MAX_OBJECTS; i++) {
 		if (fObjects[i].in_use && fObjects[i].handle == handle) {
-			_FreeGTT(fObjects[i].gtt_offset, fObjects[i].size);
+			// Free via kernel ioctl
+			intel_free_graphics_memory freeMem;
+			freeMem.magic = INTEL_PRIVATE_DATA_MAGIC;
+			freeMem.buffer_base = fObjects[i].cpu_addr;
+			ioctl(fDeviceFd, INTEL_FREE_GRAPHICS_MEMORY, &freeMem,
+				sizeof(freeMem));
 			fObjects[i].in_use = false;
 			return B_OK;
 		}
@@ -230,30 +228,8 @@ GemManager::WaitIdle(bigtime_t timeout)
 }
 
 
-// ---------------------------------------------------------------
-// GTT allocator (simple bump allocator)
-// ---------------------------------------------------------------
-
-uint32
-GemManager::_AllocGTT(uint32 size)
-{
-	if (fAllocNext + size > fAllocEnd)
-		return 0;
-
-	uint32 offset = fAllocNext;
-	fAllocNext += size;
-	return offset;
-}
-
-
-void
-GemManager::_FreeGTT(uint32 offset, uint32 size)
-{
-	// Simple bump allocator: no real free (leak is OK for prototype).
-	// A real implementation would use a free list or bitmap.
-	(void)offset;
-	(void)size;
-}
+// GTT allocation is handled by the kernel driver via ioctl.
+// No userspace allocator needed.
 
 
 // ---------------------------------------------------------------

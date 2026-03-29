@@ -428,7 +428,7 @@ main(int argc, char* argv[])
 	printf("\n---- Phase 2: GEM Manager & Batch Execution ----\n");
 
 	GemManager gem;
-	if (gem.Init(sGPU.shared_info, sGPU.registers) == B_OK) {
+	if (gem.Init(sGPU.shared_info, sGPU.registers, sGPU.device_fd) == B_OK) {
 
 		// Test 5: GEM buffer allocation
 		printf("\n--- Test 5: GEM buffer create/map ---\n");

@@ -37,7 +37,8 @@ public:
 					GemManager();
 					~GemManager();
 
-	status_t		Init(intel_shared_info* sharedInfo, volatile uint8* regs);
+	status_t		Init(intel_shared_info* sharedInfo, volatile uint8* regs,
+						int deviceFd);
 
 	// Buffer object operations (GEM-like)
 	status_t		CreateBuffer(uint32 size, uint32* outHandle);
@@ -53,9 +54,6 @@ public:
 	uint32			GetLastSeq() const { return fLastSeq; }
 
 private:
-	uint32			_AllocGTT(uint32 size);
-	void			_FreeGTT(uint32 offset, uint32 size);
-
 	void			_RingWrite(uint32 value);
 	void			_RingFlush();
 
@@ -71,9 +69,7 @@ private:
 	gem_buffer		fObjects[GEM_MAX_OBJECTS];
 	uint32			fNextHandle;
 
-	// Simple bump allocator for GTT space
-	uint32			fAllocNext;		// next free GTT offset
-	uint32			fAllocEnd;		// end of allocatable region
+	int				fDeviceFd;		// device fd for kernel ioctls
 
 	// Fencing
 	uint32			fLastSeq;
