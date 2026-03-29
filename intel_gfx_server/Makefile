@@ -20,16 +20,23 @@ CXXFLAGS = -Wall -O2 $(INCLUDES) -std=c++17
 LDFLAGS = -lbe
 
 TARGET = IntelGfxServer
+SRCS = IntelGfxServer.cpp GemManager.cpp
 
-all: $(TARGET)
+all: $(TARGET) bench_gpu
 
-$(TARGET): IntelGfxServer.cpp
+$(TARGET): $(SRCS) GemManager.h
+	g++ $(CXXFLAGS) -o $@ $(SRCS) $(LDFLAGS)
+
+bench_gpu: bench_gpu.cpp
 	g++ $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) bench_gpu
 
 run: $(TARGET)
 	./$(TARGET)
 
-.PHONY: all clean run
+bench: bench_gpu
+	./bench_gpu
+
+.PHONY: all clean run bench
