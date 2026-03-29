@@ -21,8 +21,10 @@ LDFLAGS = -lbe
 
 TARGET = IntelGfxServer
 SRCS = IntelGfxServer.cpp GemManager.cpp
+ADDON_SRCS = AccelerantAddon.cpp AccelerantIntel.cpp GemManager.cpp
+ADDON_LIB = intel_gfx.accelerant2
 
-all: $(TARGET) bench_gpu accel_test
+all: $(TARGET) bench_gpu accel_test $(ADDON_LIB)
 
 $(TARGET): $(SRCS) GemManager.h
 	g++ $(CXXFLAGS) -o $@ $(SRCS) $(LDFLAGS)
@@ -33,8 +35,17 @@ bench_gpu: bench_gpu.cpp
 accel_test: accel_test.cpp AccelerantIntel.cpp GemManager.cpp AccelerantIntel.h GemManager.h
 	g++ $(CXXFLAGS) -o $@ accel_test.cpp AccelerantIntel.cpp GemManager.cpp $(LDFLAGS)
 
+$(ADDON_LIB): $(ADDON_SRCS) AccelerantIntel.h GemManager.h
+	g++ $(CXXFLAGS) -shared -fPIC -o $@ $(ADDON_SRCS) $(LDFLAGS)
+
+addon_test: addon_test.cpp $(ADDON_LIB)
+	g++ $(CXXFLAGS) -o $@ addon_test.cpp $(LDFLAGS)
+
+install-addon: $(ADDON_LIB)
+	cp $(ADDON_LIB) /boot/system/non-packaged/add-ons/accelerants/
+
 clean:
-	rm -f $(TARGET) bench_gpu accel_test
+	rm -f $(TARGET) bench_gpu accel_test $(ADDON_LIB) addon_test
 
 run: $(TARGET)
 	./$(TARGET)
@@ -42,4 +53,4 @@ run: $(TARGET)
 bench: bench_gpu
 	./bench_gpu
 
-.PHONY: all clean run bench
+.PHONY: all clean run bench install-addon
