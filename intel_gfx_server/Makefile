@@ -52,6 +52,9 @@ drm_test: drm_test.cpp drm_intel_shim.h $(DRM_SHIM)
 install-addon: $(ADDON_LIB)
 	cp $(ADDON_LIB) /boot/system/non-packaged/add-ons/accelerants/
 
+bench_shim: bench_shim.cpp drm_intel_shim.h $(DRM_SHIM)
+	g++ $(CXXFLAGS) -o $@ bench_shim.cpp -L. -ldrm_intel $(LDFLAGS) -Wl,-rpath,.
+
 blt_diag: blt_diag.cpp GemManager.cpp GemManager.h
 	g++ $(CXXFLAGS) -o $@ blt_diag.cpp GemManager.cpp $(LDFLAGS)
 
