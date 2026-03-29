@@ -458,118 +458,91 @@ main(int argc, char* argv[])
 			}
 		}
 
-		// Test 6: Batch buffer with MI_STORE_DATA_IMM
-		printf("\n--- Test 6: Batch buffer execution ---\n");
+		// Test 6: Direct ring MI_STORE_DATA_IMM via ExecCommands
+		printf("\n--- Test 6: ExecCommands (MI_STORE_DATA_IMM) ---\n");
 		{
-			uint32 batchHandle = 0, targetHandle = 0;
-			gem.CreateBuffer(4096, &batchHandle);
+			uint32 targetHandle = 0;
 			gem.CreateBuffer(4096, &targetHandle);
-
-			uint32* batch = (uint32*)gem.MapBuffer(batchHandle);
 			uint32* target = (uint32*)gem.MapBuffer(targetHandle);
 			uint32 targetGTT = gem.GetOffset(targetHandle);
 
-			if (batch && target && targetGTT) {
-				// Clear target
+			if (target && targetGTT) {
 				*target = 0;
+				__asm__ __volatile__("sfence" ::: "memory");
 
-				// Build batch: MI_STORE_DATA_IMM to target buffer
-				int i = 0;
-				batch[i++] = 0x10400002;	// MI_STORE_DATA_IMM | GGTT
-				batch[i++] = 0;				// reserved
-				batch[i++] = targetGTT;		// address
-				batch[i++] = 0xBAADF00D;	// value
-				batch[i++] = 0x05000000;	// MI_BATCH_BUFFER_END
-				batch[i++] = 0;				// padding
+				printf("  Target at GTT 0x%x\n", targetGTT);
 
-				printf("  Batch at GTT 0x%x, target at GTT 0x%x\n",
-					gem.GetOffset(batchHandle), targetGTT);
-
-				// Execute batch
-				status_t err = gem.ExecBatch(batchHandle, i * 4);
+				// Submit MI_STORE_DATA_IMM via ring
+				uint32 cmds[] = {
+					0x10400002,		// MI_STORE_DATA_IMM | GGTT
+					0,				// reserved
+					targetGTT,		// address
+					0xBAADF00D,		// value
+				};
+				status_t err = gem.ExecCommands(cmds, 4);
 				if (err == B_OK) {
-					// Wait for completion
-					gem.WaitIdle(100000);
-					snooze(5000);
-
-					int32 flush = 0;
-					atomic_add(&flush, 1);
+					snooze(10000);
+					__asm__ __volatile__("lfence" ::: "memory");
 					uint32 result = *(volatile uint32*)target;
-					printf("  Target after batch: 0x%08x (expect 0xbaadf00d)\n",
-						result);
+					printf("  Target: 0x%08x (expect 0xbaadf00d)\n", result);
 
 					if (result == 0xBAADF00D) {
-						printf("[OK] Batch buffer execution works!\n");
+						printf("[OK] ExecCommands + GEM buffer works!\n");
 						passed++;
 					} else {
-						printf("[FAIL] Batch did not write expected value\n");
+						printf("[FAIL] Target not written\n");
 						failed++;
 					}
 				} else {
-					printf("[FAIL] ExecBatch failed (err=0x%x)\n", err);
+					printf("[FAIL] ExecCommands failed (err=0x%x)\n", err);
 					failed++;
 				}
 			} else {
 				printf("[FAIL] Buffer setup failed\n");
 				failed++;
 			}
-
 			gem.CloseBuffer(targetHandle);
-			gem.CloseBuffer(batchHandle);
 		}
 
-		// Test 7: Batch BLT fill to framebuffer
-		printf("\n--- Test 7: Batch BLT fill ---\n");
+		// Test 7: Direct ring BLT fill via ExecCommands
+		printf("\n--- Test 7: ExecCommands (BLT fill) ---\n");
 		{
-			uint32 batchHandle = 0;
-			gem.CreateBuffer(4096, &batchHandle);
-			uint32* batch = (uint32*)gem.MapBuffer(batchHandle);
+			uint32 fbOff = sGPU.shared_info->frame_buffer_offset;
+			uint32 bpr = sGPU.shared_info->bytes_per_row;
 
-			if (batch) {
-				uint32 fbOff = sGPU.shared_info->frame_buffer_offset;
-				uint32 bpr = sGPU.shared_info->bytes_per_row;
+			// Cyan rect (450,50)-(550,100) via ring
+			uint32 cmds[] = {
+				XY_COMMAND_COLOR_BLIT | COMMAND_BLIT_RGBA,
+				(COMMAND_MODE_RGB32 << 24) | (0xF0 << 16) | (bpr & 0xFFFF),
+				(50 << 16) | 450,		// top=50, left=450
+				(100 << 16) | 550,		// bottom=100, right=550
+				fbOff,
+				0xFF00FFFF,				// cyan
+			};
+			status_t err = gem.ExecCommands(cmds, 6);
+			if (err == B_OK) {
+				snooze(5000);
 
-				// Build batch: XY_COLOR_BLT (cyan rect 450,50 - 550,100)
-				int i = 0;
-				batch[i++] = XY_COMMAND_COLOR_BLIT | COMMAND_BLIT_RGBA;
-				batch[i++] = (COMMAND_MODE_RGB32 << 24) | (0xF0 << 16)
-					| (bpr & 0xFFFF);
-				batch[i++] = (50 << 16) | 450;		// top=50, left=450
-				batch[i++] = (100 << 16) | 550;	// bottom=100, right=550
-				batch[i++] = fbOff;
-				batch[i++] = 0xFF00FFFF;			// cyan
-				batch[i++] = 0x05000000;			// MI_BATCH_BUFFER_END
-				batch[i++] = 0;						// padding
+				uint32* fb = (uint32*)sGPU.shared_info->frame_buffer;
+				uint32 stride = bpr / 4;
+				__asm__ __volatile__("lfence" ::: "memory");
+				uint32 pixel = *(volatile uint32*)&fb[75 * stride + 500];
+				printf("  Pixel (500,75): 0x%08x (%s)\n",
+					pixel,
+					(pixel & 0x00FFFFFF) == 0x0000FFFF
+						? "CYAN - OK!" : "not cyan");
 
-				status_t err = gem.ExecBatch(batchHandle, i * 4);
-				if (err == B_OK) {
-					gem.WaitIdle(100000);
-					snooze(5000);
-
-					// Read pixel (500, 75)
-					uint32* fb = (uint32*)sGPU.shared_info->frame_buffer;
-					uint32 stride = bpr / 4;
-					int32 flush = 0;
-					atomic_add(&flush, 1);
-					uint32 pixel = *(volatile uint32*)&fb[75 * stride + 500];
-					printf("  Pixel (500,75): 0x%08x (%s)\n",
-						pixel,
-						(pixel & 0x00FFFFFF) == 0x0000FFFF
-							? "CYAN - OK!" : "not cyan");
-
-					if ((pixel & 0x00FFFFFF) == 0x0000FFFF) {
-						printf("[OK] Batch BLT fill works!\n");
-						passed++;
-					} else {
-						printf("[WARN] Pixel may have been overwritten by desktop\n");
-						passed++;  // count as pass if no crash
-					}
+				if ((pixel & 0x00FFFFFF) == 0x0000FFFF) {
+					printf("[OK] BLT via ExecCommands works!\n");
+					passed++;
 				} else {
-					printf("[FAIL] ExecBatch failed\n");
-					failed++;
+					printf("[WARN] Pixel may have been overwritten by desktop\n");
+					passed++;
 				}
+			} else {
+				printf("[FAIL] ExecCommands failed\n");
+				failed++;
 			}
-			gem.CloseBuffer(batchHandle);
 		}
 	} else {
 		printf("[FAIL] GEM manager init failed\n");

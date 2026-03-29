@@ -147,30 +147,21 @@ GemManager::CloseBuffer(uint32 handle)
 // ---------------------------------------------------------------
 
 status_t
-GemManager::ExecBatch(uint32 batchHandle, uint32 batchLen)
+GemManager::ExecCommands(const uint32* cmds, uint32 count)
 {
-	uint32 batchOffset = GetOffset(batchHandle);
-	if (batchOffset == 0)
+	if (cmds == NULL || count == 0)
 		return B_BAD_VALUE;
 
-	// Ensure batch ends with MI_BATCH_BUFFER_END
-	void* batchPtr = MapBuffer(batchHandle);
-	if (batchPtr == NULL)
-		return B_BAD_VALUE;
+	// Align to even number of DWORDs (QWord alignment)
+	uint32 totalDW = count;
+	if (totalDW & 1)
+		totalDW++;
 
-	// Flush Write-Combining buffers so batch data is visible to GPU.
-	// WC writes to GTT aperture aren't flushed by atomic_add on stack.
-	// sfence ensures all prior stores (including WC) are globally visible.
-	__asm__ __volatile__("sfence" ::: "memory");
+	uint32 needed = totalDW * sizeof(uint32);
 
-	// Increment fence sequence
-	uint32 seq = ++fLastSeq;
-
-	// Submit via ring: MI_BATCH_BUFFER_START + fence write
 	acquire_lock(&fRing->lock);
 
-	// Check space (need 6 DWORDs: batch_start + store_dword + noop)
-	uint32 needed = 8 * sizeof(uint32);
+	// MakeSpace: poll HEAD until enough room (matching QueueCommands)
 	bigtime_t start = system_time();
 	while (fRing->space_left < needed) {
 		uint32 head = _ReadReg(fRing->register_base + RING_BUFFER_HEAD)
@@ -179,25 +170,21 @@ GemManager::ExecBatch(uint32 batchHandle, uint32 batchLen)
 			head += fRing->size;
 		fRing->space_left = head - fRing->position;
 		if (fRing->space_left < needed) {
-			if (system_time() > start + 1000000LL)
-				break;
+			if (system_time() > start + 1000000LL) {
+				release_lock(&fRing->lock);
+				return B_TIMED_OUT;
+			}
 			snooze(10);
 		}
 	}
 
-	// MI_BATCH_BUFFER_START (with NON_SECURE bit for Gen4/5)
-	_RingWrite(0x18800000 | (1 << 8));
-	_RingWrite(batchOffset);	// GTT offset of batch
+	// Write commands to ring (with wrap-around handling)
+	for (uint32 i = 0; i < count; i++)
+		_RingWrite(cmds[i]);
 
-	// MI_STORE_DWORD_INDEX: write sequence to scratch for fencing
-	_RingWrite((0x21 << 23) | 1);	// MI_STORE_DWORD_INDEX
-	_RingWrite(0);					// offset 0 in HWS/scratch
-	_RingWrite(seq);				// sequence number
-
-	// MI_FLUSH + NOOP for alignment
-	_RingWrite(0x02000000);		// MI_FLUSH
-	_RingWrite(0);				// MI_NOOP
-	_RingWrite(0);				// MI_NOOP (QWord align)
+	// Pad to QWord alignment
+	if (count & 1)
+		_RingWrite(0);  // MI_NOOP
 
 	_RingFlush();
 

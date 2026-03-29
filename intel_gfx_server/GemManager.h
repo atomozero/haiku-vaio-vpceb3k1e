@@ -46,8 +46,8 @@ public:
 	uint32			GetOffset(uint32 handle);
 	status_t		CloseBuffer(uint32 handle);
 
-	// Batch buffer execution
-	status_t		ExecBatch(uint32 batchHandle, uint32 batchLen);
+	// Direct ring command submission (no batch buffers)
+	status_t		ExecCommands(const uint32* cmds, uint32 count);
 
 	// Sync
 	status_t		WaitIdle(bigtime_t timeout = 1000000);
