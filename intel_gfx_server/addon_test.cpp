@@ -5,8 +5,14 @@
  * 1. dlopen the add-on
  * 2. dlsym("instantiate_accelerant")
  * 3. Call it with device fd
- * 4. Use the returned object's C++ vtable for QueryInterface
- * 5. Get i915/v1 C vtable and use the GPU
+ * 4. Use the C helper accelerant_query_interface() for i915/v1
+ * 5. Exercise GPU ops through C vtable
+ *
+ * NOTE: Do NOT cast accRaw to a C++ AccelerantBase* and call
+ * virtual methods across the dlopen boundary. With multiple
+ * inheritance (BReferenceable + AccelerantBase), the vtable
+ * layout differs between compilation units → GPF.
+ * Always use the C helper or link against a shared framework.
  */
 
 #include <stdio.h>
