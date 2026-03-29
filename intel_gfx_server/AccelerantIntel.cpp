@@ -227,6 +227,12 @@ IntelAccelerant::GetParam(uint32 param, int32* value)
 		case I915_PARAM_GENERATION:
 			*value = fSharedInfo->device_type.Generation();
 			return 0;
+		case I915_PARAM_FB_OFFSET:
+			*value = (int32)fSharedInfo->frame_buffer_offset;
+			return 0;
+		case I915_PARAM_FB_PITCH:
+			*value = (int32)fSharedInfo->bytes_per_row;
+			return 0;
 		default:
 			return -1;
 	}

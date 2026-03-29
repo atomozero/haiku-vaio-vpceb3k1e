@@ -53,6 +53,8 @@ typedef struct accelerant_i915 {
 #define I915_PARAM_NUM_FENCES		3
 #define I915_PARAM_GTT_SIZE			4
 #define I915_PARAM_GENERATION		5
+#define I915_PARAM_FB_OFFSET		100
+#define I915_PARAM_FB_PITCH			101
 
 
 // ---------------------------------------------------------------

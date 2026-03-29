@@ -24,7 +24,9 @@ SRCS = IntelGfxServer.cpp GemManager.cpp
 ADDON_SRCS = AccelerantAddon.cpp AccelerantIntel.cpp GemManager.cpp
 ADDON_LIB = intel_gfx.accelerant2
 
-all: $(TARGET) bench_gpu accel_test $(ADDON_LIB)
+DRM_SHIM = libdrm_intel.so
+
+all: $(TARGET) bench_gpu accel_test $(ADDON_LIB) $(DRM_SHIM)
 
 $(TARGET): $(SRCS) GemManager.h
 	g++ $(CXXFLAGS) -o $@ $(SRCS) $(LDFLAGS)
@@ -41,11 +43,20 @@ $(ADDON_LIB): $(ADDON_SRCS) AccelerantIntel.h GemManager.h
 addon_test: addon_test.cpp $(ADDON_LIB)
 	g++ $(CXXFLAGS) -o $@ addon_test.cpp $(LDFLAGS)
 
+$(DRM_SHIM): drm_intel_shim.cpp drm_intel_shim.h AccelerantIntel.h
+	g++ $(CXXFLAGS) -shared -fPIC -o $@ drm_intel_shim.cpp $(LDFLAGS)
+
+drm_test: drm_test.cpp drm_intel_shim.h $(DRM_SHIM)
+	g++ $(CXXFLAGS) -o $@ drm_test.cpp -L. -ldrm_intel $(LDFLAGS) -Wl,-rpath,.
+
 install-addon: $(ADDON_LIB)
 	cp $(ADDON_LIB) /boot/system/non-packaged/add-ons/accelerants/
 
+blt_diag: blt_diag.cpp GemManager.cpp GemManager.h
+	g++ $(CXXFLAGS) -o $@ blt_diag.cpp GemManager.cpp $(LDFLAGS)
+
 clean:
-	rm -f $(TARGET) bench_gpu accel_test $(ADDON_LIB) addon_test
+	rm -f $(TARGET) bench_gpu accel_test $(ADDON_LIB) addon_test $(DRM_SHIM) drm_test blt_diag
 
 run: $(TARGET)
 	./$(TARGET)
