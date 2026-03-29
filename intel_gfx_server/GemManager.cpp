@@ -152,10 +152,11 @@ GemManager::ExecCommands(const uint32* cmds, uint32 count)
 	if (cmds == NULL || count == 0)
 		return B_BAD_VALUE;
 
-	// Check GPU error state before submitting
+	// Check for fatal GPU error (bit 0 = instruction error / ring hang).
+	// Non-fatal errors (e.g. bit 4 from bad 2D command) don't block.
 	uint32 esr = _ReadReg(0x20b8);	// ESR - error status
-	if (esr != 0) {
-		printf("GEM: GPU error state (ESR=0x%x), cannot exec\n", esr);
+	if (esr & 0x01) {
+		printf("GEM: GPU fatal error (ESR=0x%x), ring may be hung\n", esr);
 		return B_DEV_NOT_READY;
 	}
 
@@ -166,8 +167,10 @@ GemManager::ExecCommands(const uint32* cmds, uint32 count)
 		return B_DEV_NOT_READY;
 	}
 
-	// Align to even number of DWORDs (QWord alignment)
-	uint32 totalDW = count;
+	// Add MI_FLUSH before and after commands to serialize the
+	// pipeline. Without this, XY_COLOR_BLT and other 2D commands
+	// are silently dropped on Gen5.
+	uint32 totalDW = count + 4;	// +2 MI_FLUSH/NOOP before, +2 after
 	if (totalDW & 1)
 		totalDW++;
 
@@ -192,12 +195,20 @@ GemManager::ExecCommands(const uint32* cmds, uint32 count)
 		}
 	}
 
+	// MI_FLUSH before commands (serializes pipeline for 2D BLT)
+	_RingWrite(0x02000000);	// MI_FLUSH
+	_RingWrite(0x00000000);	// MI_NOOP (pad to qword)
+
 	// Write commands to ring (with wrap-around handling)
 	for (uint32 i = 0; i < count; i++)
 		_RingWrite(cmds[i]);
 
+	// MI_FLUSH after commands
+	_RingWrite(0x02000000);	// MI_FLUSH
+	_RingWrite(0x00000000);	// MI_NOOP
+
 	// Pad to QWord alignment
-	if (count & 1)
+	if (totalDW & 1)
 		_RingWrite(0);  // MI_NOOP
 
 	_RingFlush();
