@@ -22,7 +22,7 @@ LDFLAGS = -lbe
 TARGET = IntelGfxServer
 SRCS = IntelGfxServer.cpp GemManager.cpp
 
-all: $(TARGET) bench_gpu
+all: $(TARGET) bench_gpu accel_test
 
 $(TARGET): $(SRCS) GemManager.h
 	g++ $(CXXFLAGS) -o $@ $(SRCS) $(LDFLAGS)
@@ -30,8 +30,11 @@ $(TARGET): $(SRCS) GemManager.h
 bench_gpu: bench_gpu.cpp
 	g++ $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
+accel_test: accel_test.cpp AccelerantIntel.cpp GemManager.cpp AccelerantIntel.h GemManager.h
+	g++ $(CXXFLAGS) -o $@ accel_test.cpp AccelerantIntel.cpp GemManager.cpp $(LDFLAGS)
+
 clean:
-	rm -f $(TARGET) bench_gpu
+	rm -f $(TARGET) bench_gpu accel_test
 
 run: $(TARGET)
 	./$(TARGET)
