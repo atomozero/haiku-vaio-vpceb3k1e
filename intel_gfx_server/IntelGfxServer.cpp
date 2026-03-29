@@ -320,10 +320,10 @@ test_blt_fill()
 		return false;
 	}
 
-	// Build XY_COLOR_BLT manually (matching xy_color_blit_command struct)
+	// Build XY_COLOR_BLT using exact defines from intel_extreme.h
 	uint32* cmd = (uint32*)(ring.base + ring.position);
-	cmd[0] = (2 << 29) | (0x50 << 22) | (1 << 21) | 4;
-	cmd[1] = (3 << 24) | (0xF0 << 16) | (bpr & 0xFFFF);
+	cmd[0] = XY_COMMAND_COLOR_BLIT | COMMAND_BLIT_RGBA;  // 0x54300004
+	cmd[1] = (COMMAND_MODE_RGB32 << 24) | (0xF0 << 16) | (bpr & 0xFFFF);
 	cmd[2] = (50 << 16) | 380;		// top=50, left=380
 	cmd[3] = (90 << 16) | 420;		// bottom=90, right=420
 	cmd[4] = fbOffset;
