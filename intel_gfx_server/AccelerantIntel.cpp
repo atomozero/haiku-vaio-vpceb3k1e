@@ -60,6 +60,12 @@ _ExecCommands(accelerant_i915* a, const uint32* c, uint32 n)
 }
 
 static int
+_ExecBatch(accelerant_i915* a, uint32 h, uint32 used)
+{
+	return _Self(a)->ExecBatch(h, used);
+}
+
+static int
 _WaitIdle(accelerant_i915* a, int64 t)
 {
 	return _Self(a)->WaitIdle(t);
@@ -90,6 +96,7 @@ IntelAccelerant::IntelAccelerant()
 	fI915Vtable.GemGetOffset = _GemGetOffset;
 	fI915Vtable.GemClose = _GemClose;
 	fI915Vtable.ExecCommands = _ExecCommands;
+	fI915Vtable.ExecBatch = _ExecBatch;
 	fI915Vtable.WaitIdle = _WaitIdle;
 	fI915Vtable.GetParam = _GetParam;
 
@@ -198,6 +205,13 @@ int
 IntelAccelerant::ExecCommands(const uint32* cmds, uint32 count)
 {
 	return fGem.ExecCommands(cmds, count) == B_OK ? 0 : -1;
+}
+
+
+int
+IntelAccelerant::ExecBatch(uint32 handle, uint32 usedBytes)
+{
+	return fGem.ExecBatch(handle, usedBytes) == B_OK ? 0 : -1;
 }
 
 

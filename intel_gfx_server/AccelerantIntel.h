@@ -32,9 +32,13 @@ typedef struct accelerant_i915_vtable {
 	uint32 (*GemGetOffset)(accelerant_i915* acc, uint32 handle);
 	int (*GemClose)(accelerant_i915* acc, uint32 handle);
 
-	// Command execution
+	// Command execution (copies into ring)
 	int (*ExecCommands)(accelerant_i915* acc, const uint32* cmds,
 		uint32 count);
+
+	// Batch buffer execution (GPU reads from GEM buffer)
+	int (*ExecBatch)(accelerant_i915* acc, uint32 handle,
+		uint32 usedBytes);
 
 	// Sync
 	int (*WaitIdle)(accelerant_i915* acc, int64 timeout_us);
@@ -79,6 +83,7 @@ public:
 	uint32				GemGetOffset(uint32 handle);
 	int					GemClose(uint32 handle);
 	int					ExecCommands(const uint32* cmds, uint32 count);
+	int					ExecBatch(uint32 handle, uint32 usedBytes);
 	int					WaitIdle(int64 timeout_us);
 	int					GetParam(uint32 param, int32* value);
 

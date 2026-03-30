@@ -46,8 +46,11 @@ public:
 	uint32			GetOffset(uint32 handle);
 	status_t		CloseBuffer(uint32 handle);
 
-	// Direct ring command submission (no batch buffers)
+	// Direct ring command submission (copies cmds into ring)
 	status_t		ExecCommands(const uint32* cmds, uint32 count);
+
+	// Batch buffer execution (GPU reads from GEM buffer directly)
+	status_t		ExecBatch(uint32 handle, uint32 usedBytes);
 
 	// Sync
 	status_t		WaitIdle(bigtime_t timeout = 1000000);

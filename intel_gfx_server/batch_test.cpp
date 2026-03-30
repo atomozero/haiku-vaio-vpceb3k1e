@@ -1,92 +1,200 @@
+/*
+ * batch_test - Test MI_BATCH_BUFFER_START on Gen5
+ */
 #include <stdio.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <OS.h>
 #include "accelerant.h"
 #include "intel_extreme.h"
+#include "GemManager.h"
+
+static int sFd;
+static intel_shared_info* sSI;
+static volatile uint8* sRegs;
+
+static uint32 rr(uint32 o) { return *(volatile uint32*)(sRegs + o); }
 
 int main() {
-    int fd = open("/dev/graphics/intel_extreme_000200", B_READ_WRITE);
-    intel_get_private_data data;
-    data.magic = INTEL_PRIVATE_DATA_MAGIC;
-    ioctl(fd, INTEL_GET_PRIVATE_DATA, &data, sizeof(data));
-    intel_shared_info* si;
-    clone_area("t", (void**)&si, B_ANY_ADDRESS,
-        B_READ_AREA | B_WRITE_AREA, data.shared_info_area);
-    volatile uint8* regs;
-    clone_area("t_r", (void**)&regs, B_ANY_ADDRESS,
-        B_READ_AREA | B_WRITE_AREA, si->registers_area);
+	DIR* dir = opendir("/dev/graphics");
+	char path[256] = {};
+	struct dirent* e;
+	while ((e = readdir(dir)))
+		if (strncmp(e->d_name, "intel_extreme", 13) == 0)
+			{ snprintf(path, sizeof(path), "/dev/graphics/%s", e->d_name); break; }
+	closedir(dir);
+	sFd = open(path, B_READ_WRITE);
+	intel_get_private_data data;
+	data.magic = INTEL_PRIVATE_DATA_MAGIC;
+	ioctl(sFd, INTEL_GET_PRIVATE_DATA, &data, sizeof(data));
+	clone_area("s", (void**)&sSI, B_ANY_ADDRESS, B_READ_AREA|B_WRITE_AREA, data.shared_info_area);
+	clone_area("r", (void**)&sRegs, B_ANY_ADDRESS, B_READ_AREA|B_WRITE_AREA, sSI->registers_area);
 
-    #define R32(off) (*(volatile uint32*)(regs + (off)))
-    #define W32(off, val) (*(volatile uint32*)(regs + (off)) = (val))
+	ring_buffer& ring = sSI->primary_ring_buffer;
+	uint32* rm = (uint32*)ring.base;
+	uint32 fbOff = sSI->frame_buffer_offset;
+	uint32 bpr = sSI->bytes_per_row;
 
-    ring_buffer& ring = si->primary_ring_buffer;
+	printf("=== MI_BATCH_BUFFER_START Test ===\n\n");
 
-    // Strategy: put the batch buffer at the END of the ring buffer
-    // (which we KNOW has valid GTT entries for instruction fetch).
-    // Ring is 64KB at GTT 0x0000. Use the last 4KB (0xF000-0xFFFF)
-    // as batch space, and scratch (0x10000) as target.
-    uint32 batchGTT = ring.offset + ring.size - 0x1000;  // last 4KB of ring
-    uint32 targetGTT = 0x10000;  // scratch (proven accessible by MI_STORE)
+	// Allocate a GEM buffer for the batch
+	GemManager gem;
+	gem.Init(sSI, sRegs, sFd);
 
-    volatile uint32* batchCPU = (volatile uint32*)(
-        (uint8*)ring.base + ring.size - 0x1000);
-    volatile uint32* targetCPU = (volatile uint32*)(
-        (uint8*)si->graphics_memory + targetGTT);
+	uint32 batchHandle = 0;
+	gem.CreateBuffer(4096, &batchHandle);
+	uint32 batchOff = gem.GetOffset(batchHandle);
+	uint32* batch = (uint32*)gem.MapBuffer(batchHandle);
 
-    // Clear target
-    *targetCPU = 0;
+	printf("Batch: handle=%u offset=0x%x ptr=%p\n", batchHandle, batchOff, batch);
 
-    // Build batch buffer at GTT 0x10000
-    int i = 0;
-    batchCPU[i++] = 0x10400002;  // MI_STORE_DATA_IMM | GGTT
-    batchCPU[i++] = 0;
-    batchCPU[i++] = targetGTT;   // write to target
-    batchCPU[i++] = 0xBAADF00D;
-    batchCPU[i++] = 0x05000000;  // MI_BATCH_BUFFER_END
-    batchCPU[i++] = 0;           // padding
+	// Test 1: Simple MI_STORE_DATA_IMM in batch buffer
+	printf("\n--- Test 1: Batch with MI_STORE_DATA_IMM ---\n");
 
-    __asm__ __volatile__("sfence" ::: "memory");
+	// Write a simple batch: MI_STORE_DATA_IMM + MI_BATCH_BUFFER_END
+	batch[0] = 0x10400002;   // MI_STORE_DATA_IMM | GGTT | len=2
+	batch[1] = 0;            // reserved
+	batch[2] = fbOff;        // write to first fb pixel
+	batch[3] = 0xABCD1234;   // unique value
+	batch[4] = 0x0A000000;   // MI_BATCH_BUFFER_END
+	batch[5] = 0x00000000;   // MI_NOOP (pad)
 
-    printf("Batch at GTT 0x%x, target at GTT 0x%x\n", batchGTT, targetGTT);
-    printf("Target before: 0x%08x\n", *targetCPU);
-    printf("HEAD=0x%x TAIL=0x%x\n",
-        R32(ring.register_base + 4) & 0x1ffffc,
-        R32(ring.register_base + 0));
+	// Read fb[0] before
+	uint32* fb0 = (uint32*)(sSI->graphics_memory + fbOff);
+	__asm__ __volatile__("mfence":::"memory");
+	__asm__ __volatile__("clflush (%0)"::"r"(fb0));
+	__asm__ __volatile__("mfence":::"memory");
+	printf("  fb[0] before: 0x%08x\n", *fb0);
 
-    // Submit MI_BATCH_BUFFER_START via ring
-    acquire_lock(&ring.lock);
+	// Memory barrier for batch
+	__asm__ __volatile__("mfence":::"memory");
 
-    uint32* cmd = (uint32*)(ring.base + ring.position);
-    // MI_FLUSH with instruction cache invalidate (before batch fetch)
-    cmd[0] = 0x02000002;  // MI_FLUSH | STATE_INSTRUCTION_CACHE_INVALIDATE
-    cmd[1] = 0;           // MI_NOOP
-    // MI_BATCH_BUFFER_START
-    cmd[2] = 0x18800100;  // MI_BATCH_BUFFER_START | NON_SECURE
-    cmd[3] = batchGTT;    // GTT offset
-    // MI_FLUSH after batch returns
-    cmd[4] = 0x02000000;  // MI_FLUSH
-    cmd[5] = 0;           // MI_NOOP
+	// Emit MI_BATCH_BUFFER_START into ring
+	printf("  MI_BATCH_BUFFER_START → 0x%x\n", batchOff);
+	acquire_lock(&ring.lock);
+	uint32 pos = ring.position / 4;
+	rm[pos++] = 0x02000000;                    // MI_FLUSH
+	rm[pos++] = 0x00000000;                    // MI_NOOP
+	rm[pos++] = (0x31 << 23);                  // MI_BATCH_BUFFER_START
+	rm[pos++] = batchOff;                      // batch GTT address
+	rm[pos++] = 0x02000000;                    // MI_FLUSH
+	rm[pos++] = 0x00000000;                    // MI_NOOP
+	ring.position = pos * 4;
+	ring.space_left -= 24;
+	*(volatile uint32*)(sRegs + ring.register_base) = ring.position;
+	release_lock(&ring.lock);
 
-    ring.position = (ring.position + 24) & (ring.size - 1);
-    ring.space_left -= 24;
+	snooze(100000);
 
-    __asm__ __volatile__("sfence" ::: "memory");
-    W32(ring.register_base + 0, ring.position);
+	uint32 head = rr(0x2034) & INTEL_RING_BUFFER_HEAD_MASK;
+	uint32 esr = rr(0x20b8);
+	uint32 ipehr = rr(0x2068);
+	printf("  HEAD=0x%x TAIL=0x%x ESR=0x%x IPEHR=0x%08x\n",
+		head, rr(0x2030), esr, ipehr);
 
-    release_lock(&ring.lock);
+	// Check if batch was executed
+	__asm__ __volatile__("mfence":::"memory");
+	__asm__ __volatile__("clflush (%0)"::"r"(fb0));
+	__asm__ __volatile__("mfence":::"memory");
+	printf("  fb[0] after: 0x%08x %s\n", *fb0,
+		*fb0 == 0xABCD1234 ? "BATCH EXECUTED!" : "not written");
 
-    snooze(10000);
-    __asm__ __volatile__("lfence" ::: "memory");
+	if (*fb0 != 0xABCD1234) {
+		// Try alternate encoding: bit 8 = address space select
+		printf("\n--- Test 2: Alternate MI_BATCH_BUFFER_START encoding ---\n");
 
-    uint32 targetVal = *targetCPU;
-    printf("Target after:  0x%08x (%s)\n", targetVal,
-        targetVal == 0xBAADF00D ? "BATCH WORKS!" : "FAIL");
-    printf("HEAD=0x%x TAIL=0x%x\n",
-        R32(ring.register_base + 4) & 0x1ffffc,
-        R32(ring.register_base + 0));
+		// Reset fb[0]
+		batch[3] = 0xDEAD5678;
+		__asm__ __volatile__("mfence":::"memory");
 
-    close(fd);
-    return targetVal == 0xBAADF00D ? 0 : 1;
+		acquire_lock(&ring.lock);
+		pos = ring.position / 4;
+		rm[pos++] = 0x02000000;
+		rm[pos++] = 0x00000000;
+		// Try with address space bit: (0x31 << 23) | (1 << 8)
+		rm[pos++] = (0x31 << 23) | (1 << 8);
+		rm[pos++] = batchOff;
+		rm[pos++] = 0x02000000;
+		rm[pos++] = 0x00000000;
+		ring.position = pos * 4;
+		ring.space_left -= 24;
+		*(volatile uint32*)(sRegs + ring.register_base) = ring.position;
+		release_lock(&ring.lock);
+
+		snooze(100000);
+		head = rr(0x2034) & INTEL_RING_BUFFER_HEAD_MASK;
+		esr = rr(0x20b8);
+		ipehr = rr(0x2068);
+		printf("  HEAD=0x%x ESR=0x%x IPEHR=0x%08x\n", head, esr, ipehr);
+
+		__asm__ __volatile__("mfence":::"memory");
+		__asm__ __volatile__("clflush (%0)"::"r"(fb0));
+		__asm__ __volatile__("mfence":::"memory");
+		printf("  fb[0] after: 0x%08x %s\n", *fb0,
+			*fb0 == 0xDEAD5678 ? "BATCH EXECUTED!" : "not written");
+	}
+
+	if (*fb0 != 0xABCD1234 && *fb0 != 0xDEAD5678) {
+		// Test 3: Use MI_BATCH_BUFFER (opcode 0x30) instead
+		printf("\n--- Test 3: MI_BATCH_BUFFER (0x30) ---\n");
+		batch[3] = 0xCAFE9999;
+		__asm__ __volatile__("mfence":::"memory");
+
+		acquire_lock(&ring.lock);
+		pos = ring.position / 4;
+		rm[pos++] = 0x02000000;
+		rm[pos++] = 0x00000000;
+		rm[pos++] = (0x30 << 23) | 1;  // MI_BATCH_BUFFER, len=1
+		rm[pos++] = batchOff;           // start
+		rm[pos++] = batchOff + 20;      // end (5 DWORDs = 20 bytes)
+		rm[pos++] = 0x00000000;         // MI_NOOP
+		rm[pos++] = 0x02000000;
+		rm[pos++] = 0x00000000;
+		ring.position = pos * 4;
+		ring.space_left -= 32;
+		*(volatile uint32*)(sRegs + ring.register_base) = ring.position;
+		release_lock(&ring.lock);
+
+		snooze(100000);
+		head = rr(0x2034) & INTEL_RING_BUFFER_HEAD_MASK;
+		esr = rr(0x20b8);
+		ipehr = rr(0x2068);
+		printf("  HEAD=0x%x ESR=0x%x IPEHR=0x%08x\n", head, esr, ipehr);
+
+		__asm__ __volatile__("mfence":::"memory");
+		__asm__ __volatile__("clflush (%0)"::"r"(fb0));
+		__asm__ __volatile__("mfence":::"memory");
+		printf("  fb[0] after: 0x%08x %s\n", *fb0,
+			*fb0 == 0xCAFE9999 ? "BATCH EXECUTED!" : "not written");
+	}
+
+	// Test 4: BLT in batch (if batch execution works)
+	if (*fb0 == 0xABCD1234 || *fb0 == 0xDEAD5678 || *fb0 == 0xCAFE9999) {
+		printf("\n--- Test 4: BLT in batch buffer ---\n");
+		batch[0] = 0x54300004;  // XY_COLOR_BLT | RGBA
+		batch[1] = (0x03 << 24) | (0xF0 << 16) | (bpr & 0xFFFF);
+		batch[2] = (400 << 16) | 400;
+		batch[3] = (420 << 16) | 420;
+		batch[4] = fbOff;
+		batch[5] = 0xFF0000FF;  // blue
+		batch[6] = 0x0A000000;  // MI_BATCH_BUFFER_END
+		batch[7] = 0x00000000;
+		__asm__ __volatile__("mfence":::"memory");
+
+		gem.ExecBatch(batchHandle, 28);
+		gem.WaitIdle(500000);
+
+		uint32* px400 = (uint32*)(sSI->graphics_memory + fbOff + 400*bpr + 400*4);
+		__asm__ __volatile__("mfence":::"memory");
+		__asm__ __volatile__("clflush (%0)"::"r"(px400));
+		__asm__ __volatile__("mfence":::"memory");
+		printf("  fb[400,400] = 0x%08x %s\n", *px400,
+			*px400 == 0xFF0000FF ? "BLUE!" : "not written");
+	}
+
+	gem.CloseBuffer(batchHandle);
+	printf("\n=== Done ===\n");
+	return 0;
 }

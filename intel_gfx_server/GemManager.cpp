@@ -219,6 +219,105 @@ GemManager::ExecCommands(const uint32* cmds, uint32 count)
 }
 
 
+// Gen5 MI_BATCH_BUFFER_START: tells GPU to execute commands
+// directly from a GEM buffer. The batch must end with
+// MI_BATCH_BUFFER_END (0x0A000000).
+//
+// DW0: (0x31 << 23) | 0  — opcode, GGTT address space, length=0
+// DW1: GTT offset of batch buffer (QWORD aligned)
+//
+#define MI_BATCH_BUFFER_START	((0x31 << 23) | 0)
+#define MI_BATCH_BUFFER_END		0x0A000000
+
+status_t
+GemManager::ExecBatch(uint32 handle, uint32 usedBytes)
+{
+	if (usedBytes == 0)
+		return B_BAD_VALUE;
+
+	// Find the buffer
+	gem_buffer* bo = NULL;
+	for (int i = 0; i < GEM_MAX_OBJECTS; i++) {
+		if (fObjects[i].in_use && fObjects[i].handle == handle) {
+			bo = &fObjects[i];
+			break;
+		}
+	}
+	if (bo == NULL)
+		return B_BAD_VALUE;
+
+	// Batch address must be QWORD aligned
+	uint32 batchAddr = bo->gtt_offset;
+	if (batchAddr & 0x7) {
+		printf("GEM: batch address 0x%x not QWORD aligned\n", batchAddr);
+		return B_NOT_ALLOWED;
+	}
+
+	// Check for fatal GPU error
+	uint32 esr = _ReadReg(0x20b8);
+	if (esr & 0x01) {
+		printf("GEM: GPU fatal error (ESR=0x%x)\n", esr);
+		return B_DEV_NOT_READY;
+	}
+
+	// Verify ring is enabled
+	uint32 ringCtl = _ReadReg(fRing->register_base + RING_BUFFER_CONTROL);
+	if (!(ringCtl & 1))
+		return B_DEV_NOT_READY;
+
+	// Ensure batch ends with MI_BATCH_BUFFER_END
+	uint32* batchMem = (uint32*)bo->cpu_addr;
+	uint32 lastDW = usedBytes / sizeof(uint32);
+	if (lastDW > 0 && batchMem[lastDW - 1] != MI_BATCH_BUFFER_END) {
+		// Append MI_BATCH_BUFFER_END
+		batchMem[lastDW] = MI_BATCH_BUFFER_END;
+		usedBytes += sizeof(uint32);
+		// Pad to QWORD
+		if ((usedBytes / sizeof(uint32)) & 1) {
+			batchMem[lastDW + 1] = 0;	// MI_NOOP
+			usedBytes += sizeof(uint32);
+		}
+	}
+
+	// Memory barrier: ensure batch contents are visible to GPU
+	__asm__ __volatile__("mfence" ::: "memory");
+
+	// Emit into ring: MI_FLUSH + MI_BATCH_BUFFER_START + MI_FLUSH
+	// Total: 6 DWORDs
+	uint32 needed = 6 * sizeof(uint32);
+
+	acquire_lock(&fRing->lock);
+
+	bigtime_t start = system_time();
+	while (fRing->space_left < needed) {
+		uint32 head = _ReadReg(fRing->register_base + RING_BUFFER_HEAD)
+			& INTEL_RING_BUFFER_HEAD_MASK;
+		if (head <= fRing->position)
+			head += fRing->size;
+		fRing->space_left = head - fRing->position;
+		if (fRing->space_left < needed) {
+			if (system_time() > start + 1000000LL) {
+				release_lock(&fRing->lock);
+				return B_TIMED_OUT;
+			}
+			snooze(10);
+		}
+	}
+
+	_RingWrite(0x02000000);				// MI_FLUSH
+	_RingWrite(0x00000000);				// MI_NOOP
+	_RingWrite(MI_BATCH_BUFFER_START);	// start batch
+	_RingWrite(batchAddr);				// GTT offset
+	_RingWrite(0x02000000);				// MI_FLUSH
+	_RingWrite(0x00000000);				// MI_NOOP
+
+	_RingFlush();
+	release_lock(&fRing->lock);
+
+	return B_OK;
+}
+
+
 status_t
 GemManager::WaitIdle(bigtime_t timeout)
 {

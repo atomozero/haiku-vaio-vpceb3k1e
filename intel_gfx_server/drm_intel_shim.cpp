@@ -308,11 +308,11 @@ drm_intel_bo_exec(struct drm_intel_bo* bo, int used,
 	if (bo->virtual_ptr == NULL)
 		return -1;
 
-	/* Submit the batch buffer contents as ring commands.
-	 * 'used' is the number of bytes used in the batch buffer. */
-	uint32 count = used / sizeof(uint32);
-	return bo->bufmgr->i915->vt->ExecCommands(bo->bufmgr->i915,
-		(const uint32*)bo->virtual_ptr, count);
+	/* Use MI_BATCH_BUFFER_START: GPU reads directly from the
+	 * GEM buffer instead of copying commands into the ring.
+	 * This is how real Mesa/crocus batch submission works. */
+	return bo->bufmgr->i915->vt->ExecBatch(bo->bufmgr->i915,
+		bo->handle, used);
 }
 
 
