@@ -226,8 +226,8 @@ GemManager::ExecCommands(const uint32* cmds, uint32 count)
 // DW0: (0x31 << 23) | 0  — opcode, GGTT address space, length=0
 // DW1: GTT offset of batch buffer (QWORD aligned)
 //
-#define MI_BATCH_BUFFER_START	((0x31 << 23) | 0)
-#define MI_BATCH_BUFFER_END		0x0A000000
+// MI_BATCH_BUFFER_START/END from intel_extreme.h
+// MI_BATCH_BUFFER_END = (0x0A << 23) = 0x05000000, NOT 0x0A000000!
 
 status_t
 GemManager::ExecBatch(uint32 handle, uint32 usedBytes)
