@@ -187,13 +187,14 @@ static const uint32 gen5_wm_kernel_solid[] = {
 
 static void
 write_surface_state(uint32 offset, uint32 format, uint32 base_addr,
-	uint32 width, uint32 height, uint32 pitch)
+	uint32 width, uint32 height, uint32 pitch, bool is_dst)
 {
 	uint32* ss = (uint32*)(sRenderState.base + offset);
-	ss[0] = (SURFACE_2D << 29) | (format << 18);
+	ss[0] = (SURFACE_2D << 29) | (format << 18)
+		| (is_dst ? (1 << 8) : 0);  // RC_READ_WRITE for render targets
 	ss[1] = base_addr;
 	ss[2] = ((width - 1) << 6) | ((height - 1) << 19);
-	ss[3] = (pitch - 1);  // pitch in bytes - 1
+	ss[3] = ((pitch - 1) << 3);  // pitch in bytes - 1, bits [19:3]
 	ss[4] = 0;
 	ss[5] = 0;
 	ss[6] = 0;
@@ -356,7 +357,7 @@ render_init()
 	wm[2] = 0;				// no scratch space
 	wm[3] = (3 << 0)		// dispatch_grf_start_reg = 3 (must match SF)
 		| (0 << 4)			// urb_entry_read_offset = 0
-		| (1 << 11);		// urb_entry_read_length = 1
+		| (2 << 11);		// urb_entry_read_length = 2 (matching SNA)
 	wm[4] = 0;				// no samplers
 	wm[5] = ((ILK_WM_MAX_THREADS - 1) << 25)
 		| (1 << 19)			// thread_dispatch_enable
@@ -422,7 +423,7 @@ render_update_surface()
 		info.frame_buffer_offset,
 		info.current_mode.timing.h_display,
 		info.current_mode.timing.v_display,
-		info.bytes_per_row);
+		info.bytes_per_row, true);
 }
 
 

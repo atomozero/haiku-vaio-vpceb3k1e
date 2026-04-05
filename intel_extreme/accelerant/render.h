@@ -55,7 +55,7 @@
 
 // 3DPRIMITIVE (3D, opcode 3, subopcode 0)
 #define CMD_3DPRIMITIVE				GEN5_3D(3, 3, 0)			// 0x7B000000
-#define PRIM_RECTLIST				3
+#define PRIM_RECTLIST				0x0F
 
 // PIPE_CONTROL (3D, opcode 2, subopcode 0)
 #define CMD_PIPE_CONTROL			(GEN5_3D(3, 2, 0) | 0x02)	// 0x7A000002
