@@ -610,17 +610,36 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		queue.Write(0);		// base vertex location
 
 		// PIPE_CONTROL: write marker to verify 3D pipeline is active
-		// Opcode from Linux kernel: (3<<29)|(3<<27)|(2<<24)|length
+		// CS_STALL is required on Gen5 for Post-Sync writes
 		queue.MakeSpace(4);
 		queue.Write(0x7A000002);			// PIPE_CONTROL, length=2
-		queue.Write((1 << 14));				// Post-Sync: Write Immediate Data
-		queue.Write((stateBase & ~0x7) | (1 << 2));	// QWord aligned + Global GTT
+		queue.Write((1 << 20) | (1 << 14));	// CS_STALL + Write Immediate
+		queue.Write((stateBase & ~0x7) | (1 << 2));	// QWord aligned + GGTT
 		queue.Write(0xDEADBEEF);			// marker value
 
 		// MI_FLUSH to complete 3D and allow BLT again
 		queue.MakeSpace(2);
 		queue.Write(MI_FLUSH_CMD);
 		queue.Write(MI_NOOP);
+
+		// MI_STORE_DATA_IMM: write a white pixel directly to framebuffer
+		// This bypasses the entire 3D/BLT pipeline - pure command streamer
+		{
+			intel_shared_info &info = *gInfo->shared_info;
+			uint32 fbOff = info.frame_buffer_offset;
+			uint32 bpr = info.bytes_per_row;
+			// Write 20x20 white block at (380,50) as ring-write test
+			for (int y = 50; y < 70; y++) {
+				for (int x = 380; x < 400; x++) {
+					uint32 addr = fbOff + y * bpr + x * 4;
+					queue.MakeSpace(4);
+					queue.Write((0x20 << 23) | (1 << 22) | 2);  // MI_STORE_DATA_IMM|GGTT
+					queue.Write(0);            // reserved
+					queue.Write(addr);         // GTT address
+					queue.Write(0xFFFFFFFF);   // white
+				}
+			}
+		}
 	}
 	// QueueCommands destructor has now written TAIL → commands submitted
 
