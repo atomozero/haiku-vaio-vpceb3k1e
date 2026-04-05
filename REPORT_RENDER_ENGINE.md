@@ -77,15 +77,22 @@ silenziosamente.
 Introdotto il macro `GEN5_3D(pipeline, opcode, subopcode)` allineato
 a xf86-video-intel SNA:
 
-| Comando | Prima (sbagliato) | Dopo (corretto) |
-|---|---|---|
-| PIPELINE_SELECT | `0x20800000` (type=001!) | `0x00800000` (type=000) |
-| VERTEX_BUFFERS | `0x68000000` | `0x68080000` |
-| VERTEX_ELEMENTS | `0x69000000` | `0x68090000` |
-| 3DPRIMITIVE | `0x78000000` | `0x7B000000` |
-| BINDING_TABLE_PTRS | `0x69000001` (2 DW) | `0x69010000` (6 DW) |
-| URB_FENCE | `0x02800000` (MI Type 0!) | `0x60050000` (3D Type 3) |
-| CS_URB_STATE | `0x00800000` (MI Type 0!) | `0x61000000` (3D Type 3) |
+Tabella completa verificata contro Mesa gen5.xml, brw_defines.h e
+Linux i915 intel_gpu_commands.h:
+
+| Comando | Sbagliato | Corretto | Errore |
+|---|---|---|---|
+| PIPELINE_SELECT | `0x00800000` (MI!) | `0x69040000` (3D SubType=1) | Non e MI su Gen5 |
+| PIPELINED_POINTERS | `0x68000005` (SubType=1) | `0x78000005` (SubType=3) | SubType errato |
+| DRAWING_RECTANGLE | `0x69000002` (SubType=1) | `0x79000002` (SubType=3) | SubType errato |
+| BINDING_TABLE_PTRS | `0x69010000` (SubType=1) | `0x78010000` (SubType=3) | SubType+Opcode |
+| VERTEX_BUFFERS | `0x68080000` (SubType=1) | `0x78080000` (SubType=3) | SubType errato |
+| VERTEX_ELEMENTS | `0x68090000` (SubType=1) | `0x78090000` (SubType=3) | SubType errato |
+| URB_FENCE | `0x60050000` (SubOp=5) | `0x60000000` (SubOp=0) | SubOpcode errato |
+| CS_URB_STATE | `0x61000000` (Op=1,SubOp=0) | `0x60010000` (Op=0,SubOp=1) | Op/SubOp invertiti |
+
+Comandi gia corretti: STATE_BASE_ADDRESS (`0x61010006`), 3DPRIMITIVE
+(`0x7B000000`), PIPE_CONTROL (`0x7A000002`), PRIM_RECTLIST (`0x0F`).
 
 ### STATE_BASE_ADDRESS opcode
 
