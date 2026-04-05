@@ -95,6 +95,18 @@ come `3DSTATE_DRAWING_RECTANGLE` con lunghezza sbagliata, non come
 non venivano mai impostate e un DRAWING_RECTANGLE malformato con clip
 rect (1,0)-(1,0) veniva emesso, clippando tutto.
 
+### SF state bitfield positions (7 campi sbagliati)
+
+Tutti i campi dello SF state (DW3, DW4, DW6) avevano shift errati
+rispetto a `brw_structs.h` (`brw_sf_unit_state`):
+- DW3: `dispatch_grf_start_reg` bits[3:0] non [4:1],
+  `urb_entry_read_offset` bits[9:4] non [10:5],
+  `urb_entry_read_length` bits[16:11] non [18:12]
+- DW4: `nr_urb_entries` bits[17:11] non [16:9],
+  `urb_entry_allocation_size` bits[23:19] non [22:18]
+- DW6: `dest_org_vbias` bits[12:9] non [25:22],
+  `dest_org_hbias` bits[16:13] non [19:16]
+
 ### WM state bit positions
 
 - `thread_dispatch_enable` era al bit 29 (DW5) - corretto al bit 19
@@ -102,6 +114,12 @@ rect (1,0)-(1,0) veniva emesso, clippando tutto.
 - `binding_table_entry_count` deve essere 0 su Ironlake (requisito HW)
 - `dispatch_grf_start_reg` corretto da 1 a 3 (matching SNA)
 - `grf_reg_count` corretto da 0 a 2
+
+### RECTLIST vertex order
+
+Ordine vertici era (left,bottom), (left,top), (right,bottom) — due vertici
+con lo stesso X. SNA usa (right,bottom), (left,bottom), (left,top) e il
+rasterizer inferisce il quarto vertice (right,top).
 
 ### SEND instruction msg_reg_nr
 
