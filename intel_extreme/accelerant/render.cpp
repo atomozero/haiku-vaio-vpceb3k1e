@@ -336,16 +336,23 @@ render_init()
 	sf[0] = sfKernelOff;	// kernel pointer (grf_count=0)
 	sf[1] = 0;
 	sf[2] = 0;
-	sf[3] = (3 << 1)		// dispatch_grf_start_reg = 3
-		| (1 << 5)			// urb_entry_read_offset = 1
-		| (1 << 12);		// urb_entry_read_length = 1
+	// SF thread3 (brw_structs.h brw_sf_unit_state.thread3):
+	//   dispatch_grf_start_reg: bits[3:0], urb_entry_read_offset: bits[9:4],
+	//   urb_entry_read_length: bits[16:11]
+	sf[3] = (3 << 0)		// dispatch_grf_start_reg = 3
+		| (1 << 4)			// urb_entry_read_offset = 1
+		| (1 << 11);		// urb_entry_read_length = 1
+	// SF thread4: nr_urb_entries: bits[17:11], urb_entry_alloc_size: bits[23:19],
+	//   max_threads: bits[30:25]
 	sf[4] = ((ILK_SF_MAX_THREADS - 1) << 25)
-		| (1 << 18)			// urb_entry_allocation_size = 2-1 = 1
-		| (URB_SF_ENTRIES << 9);
+		| (1 << 19)			// urb_entry_allocation_size = 2-1 = 1
+		| (URB_SF_ENTRIES << 11);
 	sf[5] = 0;				// viewport_transform = false
-	sf[6] = (1 << 29)		// cull_mode = NONE (SNA uses 1 for GEN5_CULLMODE_NONE)
-		| (0x8 << 22)		// dest_org_vbias
-		| (0x8 << 16);		// dest_org_hbias
+	// SF sf6: dest_org_vbias: bits[12:9], dest_org_hbias: bits[16:13],
+	//   cull_mode: bits[30:29]
+	sf[6] = (1 << 29)		// cull_mode = NONE (GEN5_CULLMODE_NONE = 1)
+		| (0x8 << 9)		// dest_org_vbias
+		| (0x8 << 13);		// dest_org_hbias
 	sf[7] = (2 << 12);		// trifan_pv = 2
 
 	// ----- WM state (matching SNA gen5_init_wm_state) -----
@@ -444,17 +451,18 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		kw[WM_KERNEL_BLUE_OFFSET / 4], kw[WM_KERNEL_ALPHA_OFFSET / 4]);
 
 	// Write vertex data for RECTLIST (3 vertices per rect)
-	// Format: X, Y (float)
+	// Format: X, Y (float).  Order matches SNA gen5_emit_composite_primitive:
+	// v0=(x2,y2), v1=(x1,y2), v2=(x1,y1) → hardware infers v3=(x2,y1)
 	float* vb = (float*)(sRenderState.base + STATE_VERTEX_OFFSET);
-	// v0: bottom-left
-	vb[0] = (float)left;
+	// v0: bottom-right
+	vb[0] = (float)right;
 	vb[1] = (float)bottom;
-	// v1: top-left
+	// v1: bottom-left
 	vb[2] = (float)left;
-	vb[3] = (float)top;
-	// v2: bottom-right
-	vb[4] = (float)right;
-	vb[5] = (float)bottom;
+	vb[3] = (float)bottom;
+	// v2: top-left
+	vb[4] = (float)left;
+	vb[5] = (float)top;
 
 	// Memory barrier
 	int32 flush = 0;
@@ -527,35 +535,26 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 
 		// 3. STATE_BASE_ADDRESS - all bases = 0 so all pointers are
 		//    absolute GTT offsets (same approach as SNA/xf86-video-intel)
+		//    Gen5: 8 DWORDs (length=6), all Modify Enable bits set
 		queue.MakeSpace(8);
 		queue.Write(CMD_STATE_BASE_ADDRESS);
-		queue.Write(0 | 1);				// general state base = 0 (valid)
-		queue.Write(0 | 1);				// surface state base = 0 (valid)
-		queue.Write(0);					// indirect object base
-		queue.Write(0 | 1);				// instruction base = 0 (valid)
-		queue.Write(0);					// general state upper bound
-		queue.Write(0);					// indirect object upper bound
-		queue.Write(0);					// instruction upper bound
+		queue.Write(0 | 1);		// general state base = 0 (modify)
+		queue.Write(0 | 1);		// surface state base = 0 (modify)
+		queue.Write(0 | 1);		// indirect object base = 0 (modify)
+		queue.Write(0 | 1);		// instruction base = 0 (modify)
+		queue.Write(0 | 1);		// general state upper = 0 = no limit (modify)
+		queue.Write(0 | 1);		// indirect obj upper = 0 = no limit (modify)
+		queue.Write(0 | 1);		// instruction upper = 0 = no limit (modify)
 
-		// 4. 3DSTATE_PIPELINED_POINTERS (7 DWORDs)
-		queue.MakeSpace(8);
-		queue.Write(CMD_PIPELINED_POINTERS);
-		queue.Write(stateBase + STATE_VS_OFFSET);	// VS state
-		queue.Write(0);								// GS disabled
-		queue.Write(0);								// CLIP disabled
-		queue.Write(stateBase + STATE_SF_OFFSET);	// SF state
-		queue.Write(stateBase + STATE_WM_OFFSET);	// WM state
-		queue.Write(stateBase + STATE_CC_OFFSET);	// CC state
-		queue.Write(MI_NOOP);
-
-		// 5. URB_FENCE - partition URB (SNA gen5_emit_urb)
-		//    VS: entries 0-255 (256 entries × 1 row)
-		//    SF: entries 256-383 (64 entries × 2 rows)
+		// 4. URB_FENCE - partition URB (SNA gen5_emit_urb)
+		//    Must be set BEFORE pipelined pointers (SF/WM need URB entries)
+		//    VS: entries 0-255 (256 entries x 1 row)
+		//    SF: entries 256-383 (64 entries x 2 rows)
 		{
 			uint32 vsFence = URB_VS_ENTRIES * URB_VS_ENTRY_SIZE;	// 256
 			uint32 sfFence = vsFence + URB_SF_ENTRIES * URB_SF_ENTRY_SIZE; // 384
 
-			queue.MakeSpace(4);
+			queue.MakeSpace(6);
 			queue.Write(CMD_URB_FENCE
 				| UF0_CS_REALLOC | UF0_SF_REALLOC
 				| UF0_CLIP_REALLOC | UF0_GS_REALLOC
@@ -570,7 +569,19 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 			queue.Write(CMD_CS_URB_STATE);
 			queue.Write(((URB_CS_ENTRY_SIZE - 1) << 4)
 				| (URB_CS_ENTRIES << 0));
+			queue.Write(MI_NOOP);
 		}
+
+		// 5. 3DSTATE_PIPELINED_POINTERS (7 DWORDs)
+		queue.MakeSpace(8);
+		queue.Write(CMD_PIPELINED_POINTERS);
+		queue.Write(stateBase + STATE_VS_OFFSET);	// VS state
+		queue.Write(0);								// GS disabled
+		queue.Write(0);								// CLIP disabled
+		queue.Write(stateBase + STATE_SF_OFFSET);	// SF state
+		queue.Write(stateBase + STATE_WM_OFFSET);	// WM state
+		queue.Write(stateBase + STATE_CC_OFFSET);	// CC state
+		queue.Write(MI_NOOP);
 
 		// 6. 3DSTATE_DRAWING_RECTANGLE - set clip rect to framebuffer
 		{
@@ -583,7 +594,7 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 			queue.Write(0);		// origin: (0, 0)
 		}
 
-		// 6. 3DSTATE_BINDING_TABLE_POINTERS (6 DWORDs)
+		// 7. 3DSTATE_BINDING_TABLE_POINTERS (6 DWORDs)
 		queue.MakeSpace(6);
 		queue.Write(CMD_BINDING_TABLE_PTRS | 4);	// length = 4
 		queue.Write(0);								// VS binding table
@@ -592,21 +603,30 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		queue.Write(0);								// SF binding table
 		queue.Write(stateBase + STATE_BIND_OFFSET);	// WM binding table
 
-		// 7. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
+		// 8. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
+		//    Gen5: 4 DWORDs per VB entry, length = 4*1 - 1 = 3
 		queue.MakeSpace(6);
-		queue.Write(CMD_VERTEX_BUFFERS | (3 - 2));
-		queue.Write((0 << 26) | (8 << 0));
-		queue.Write(stateBase + STATE_VERTEX_OFFSET);
-		queue.Write(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);
+		queue.Write(CMD_VERTEX_BUFFERS | 3);
+		queue.Write((0 << 26) | (8 << 0));					// VB0: pitch=8
+		queue.Write(stateBase + STATE_VERTEX_OFFSET);		// start address
+		queue.Write(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);	// end addr
+		queue.Write(0);										// instance step rate
 
-		// 7. 3DSTATE_VERTEX_ELEMENTS (position only)
+		// 9. 3DSTATE_VERTEX_ELEMENTS (1 element: X,Y position)
+		//    Gen5: 2 DWORDs per element, length = 2*1 - 1 = 1
+		//    DW0: VB_index[31:27], Valid[26], Format[25:16], Offset[11:0]
 		queue.MakeSpace(4);
-		queue.Write(CMD_VERTEX_ELEMENTS | (2 - 2));
-		queue.Write((0 << 26) | (FORMAT_R32G32_FLOAT << 16) | (1 << 25));
-		queue.Write((VFCOMP_STORE_SRC << 28) | (VFCOMP_STORE_SRC << 24)
-			| (VFCOMP_STORE_0 << 20) | (VFCOMP_STORE_1_FP << 16));
+		queue.Write(CMD_VERTEX_ELEMENTS | 1);
+		queue.Write((0 << 27)					// VB index = 0
+			| (1 << 26)						// Valid = 1
+			| (FORMAT_R32G32_FLOAT << 16)		// source format
+			| (0 << 0));						// source offset = 0
+		queue.Write((VFCOMP_STORE_SRC << 28)	// comp0 = X
+			| (VFCOMP_STORE_SRC << 24)			// comp1 = Y
+			| (VFCOMP_STORE_0 << 20)			// comp2 = 0.0
+			| (VFCOMP_STORE_1_FP << 16));		// comp3 = 1.0
 
-		// 8. 3DPRIMITIVE (draw RECTLIST, 3 vertices)
+		// 10. 3DPRIMITIVE (draw RECTLIST, 3 vertices)
 		queue.MakeSpace(6);
 		queue.Write(CMD_3DPRIMITIVE | (PRIM_RECTLIST << 10) | (6 - 2));
 		queue.Write(3);		// vertex count
@@ -616,10 +636,10 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		queue.Write(0);		// base vertex location
 
 		// PIPE_CONTROL: write marker to verify 3D pipeline is active
-		// CS_STALL is required on Gen5 for Post-Sync writes
+		// Gen5 needs WC_FLUSH (bit 12) for Post-Sync data to reach memory
 		queue.MakeSpace(4);
-		queue.Write(0x7A000002);			// PIPE_CONTROL, length=2
-		queue.Write((1 << 20) | (1 << 14));	// CS_STALL + Write Immediate
+		queue.Write(CMD_PIPE_CONTROL);
+		queue.Write((1 << 20) | (1 << 14) | (1 << 12));	// CS_STALL + Write Immediate + WC_FLUSH
 		queue.Write((stateBase & ~0x7) | (1 << 2));	// QWord aligned + GGTT
 		queue.Write(0xDEADBEEF);			// marker value
 
