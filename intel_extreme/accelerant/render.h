@@ -26,10 +26,17 @@
 #define GEN5_3D(pipeline, opcode, subopcode) \
 	((0x3 << 29) | ((pipeline) << 27) | ((opcode) << 24) | ((subopcode) << 16))
 
-// Pipeline select: choose between 3D and media pipeline
-// MI command: type=000 (MI), opcode=0x01 at bits[28:23]
-// Matching Linux i915 MI_INSTR(0x01, 0) and SNA MI_PIPELINE_SELECT
-#define CMD_PIPELINE_SELECT			(0x01 << 23)	// 0x00800000
+// Gen5 Command SubType values:
+//   0 = Non-pipelined (STATE_BASE_ADDRESS, URB_FENCE, CS_URB_STATE)
+//   1 = Single-DWord (PIPELINE_SELECT, VF_STATISTICS)
+//   3 = Pipelined 3DSTATE (PIPELINED_POINTERS, DRAWING_RECTANGLE,
+//       VERTEX_BUFFERS, VERTEX_ELEMENTS, BINDING_TABLE_PTRS,
+//       3DPRIMITIVE, PIPE_CONTROL)
+
+// PIPELINE_SELECT: 3D single-DW command (NOT MI on Gen5!)
+// SubType=1, Opcode=1, SubOpcode=4.  bits[1:0] = pipeline (0=3D, 1=media)
+// Verified: Mesa genxml gen5.xml, Linux i915 intel_gpu_commands.h
+#define CMD_PIPELINE_SELECT			GEN5_3D(1, 1, 4)			// 0x69040000
 #define PIPELINE_SELECT_3D			0
 
 // MI_FLUSH - flush caches between BLT and 3D
@@ -37,29 +44,29 @@
 #define MI_FLUSH_STATE_INST_CACHE	(1 << 1)
 #define MI_FLUSH_RENDER_CACHE		(1 << 2)
 
-// STATE_BASE_ADDRESS (non-pipelined, opcode 1, subopcode 1)
+// STATE_BASE_ADDRESS (non-pipelined, SubType=0, Opcode=1, SubOpcode=1)
 #define CMD_STATE_BASE_ADDRESS		(GEN5_3D(0, 1, 1) | 0x06)	// 0x61010006
 
-// 3DSTATE_DRAWING_RECTANGLE (pipelined, opcode 1, subopcode 0)
-#define CMD_DRAWING_RECTANGLE		(GEN5_3D(1, 1, 0) | 0x02)	// 0x69000002
+// 3DSTATE_DRAWING_RECTANGLE (SubType=3, Opcode=1, SubOpcode=0)
+#define CMD_DRAWING_RECTANGLE		(GEN5_3D(3, 1, 0) | 0x02)	// 0x79000002
 
-// 3DSTATE_PIPELINED_POINTERS (pipelined, opcode 0, subopcode 0)
-#define CMD_PIPELINED_POINTERS		(GEN5_3D(1, 0, 0) | 0x05)	// 0x68000005
+// 3DSTATE_PIPELINED_POINTERS (SubType=3, Opcode=0, SubOpcode=0)
+#define CMD_PIPELINED_POINTERS		(GEN5_3D(3, 0, 0) | 0x05)	// 0x78000005
 
-// 3DSTATE_BINDING_TABLE_POINTERS (pipelined, opcode 1, subopcode 1)
-#define CMD_BINDING_TABLE_PTRS		GEN5_3D(1, 1, 1)			// 0x69010000
+// 3DSTATE_BINDING_TABLE_POINTERS (SubType=3, Opcode=0, SubOpcode=1)
+#define CMD_BINDING_TABLE_PTRS		GEN5_3D(3, 0, 1)			// 0x78010000
 
-// 3DSTATE_VERTEX_BUFFERS (pipelined, opcode 0, subopcode 8)
-#define CMD_VERTEX_BUFFERS			GEN5_3D(1, 0, 8)			// 0x68080000
+// 3DSTATE_VERTEX_BUFFERS (SubType=3, Opcode=0, SubOpcode=8)
+#define CMD_VERTEX_BUFFERS			GEN5_3D(3, 0, 8)			// 0x78080000
 
-// 3DSTATE_VERTEX_ELEMENTS (pipelined, opcode 0, subopcode 9)
-#define CMD_VERTEX_ELEMENTS			GEN5_3D(1, 0, 9)			// 0x68090000
+// 3DSTATE_VERTEX_ELEMENTS (SubType=3, Opcode=0, SubOpcode=9)
+#define CMD_VERTEX_ELEMENTS			GEN5_3D(3, 0, 9)			// 0x78090000
 
-// 3DPRIMITIVE (3D, opcode 3, subopcode 0)
+// 3DPRIMITIVE (SubType=3, Opcode=3, SubOpcode=0)
 #define CMD_3DPRIMITIVE				GEN5_3D(3, 3, 0)			// 0x7B000000
 #define PRIM_RECTLIST				0x0F
 
-// PIPE_CONTROL (3D, opcode 2, subopcode 0)
+// PIPE_CONTROL (SubType=3, Opcode=2, SubOpcode=0)
 #define CMD_PIPE_CONTROL			(GEN5_3D(3, 2, 0) | 0x02)	// 0x7A000002
 #define PIPE_CONTROL_CS_STALL		(1 << 20)
 #define PIPE_CONTROL_FLUSH			(1 << 12)

@@ -173,16 +173,18 @@ static const uint32 gen5_wm_kernel_solid[] = {
 #define URB_CS_ENTRIES			0
 #define URB_CS_ENTRY_SIZE		1
 
-// URB_FENCE: Type 3 non-pipelined (opcode 0, subopcode 5)
-#define CMD_URB_FENCE			GEN5_3D(0, 0, 5)	// 0x60050000
+// URB_FENCE: non-pipelined (SubType=0, Opcode=0, SubOpcode=0)
+// Mesa brw_defines.h: CMD_URB_FENCE = 0x6000, genxml: SubOpcode=0
+#define CMD_URB_FENCE			GEN5_3D(0, 0, 0)	// 0x60000000
 #define UF0_VS_REALLOC			(1 << 9)
 #define UF0_GS_REALLOC			(1 << 10)
 #define UF0_CLIP_REALLOC		(1 << 11)
 #define UF0_SF_REALLOC			(1 << 12)
 #define UF0_CS_REALLOC			(1 << 13)
 
-// CS_URB_STATE: Type 3 non-pipelined (opcode 1, subopcode 0)
-#define CMD_CS_URB_STATE		GEN5_3D(0, 1, 0)	// 0x61000000
+// CS_URB_STATE: non-pipelined (SubType=0, Opcode=0, SubOpcode=1)
+// Mesa brw_defines.h: CMD_CS_URB_STATE = 0x6001
+#define CMD_CS_URB_STATE		GEN5_3D(0, 0, 1)	// 0x60010000
 
 
 static void
