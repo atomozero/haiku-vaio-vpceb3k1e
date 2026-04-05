@@ -27,9 +27,9 @@
 	((0x3 << 29) | ((pipeline) << 27) | ((opcode) << 24) | ((subopcode) << 16))
 
 // Pipeline select: choose between 3D and media pipeline
-// This is an MI command (type=1), NOT a 3D command!
-// MI_PIPELINE_SELECT: (1<<29) | (opcode 0x01 << 23)
-#define CMD_PIPELINE_SELECT			((0x1 << 29) | (0x01 << 23))	// 0x20800000
+// MI command: type=000 (MI), opcode=0x01 at bits[28:23]
+// Matching Linux i915 MI_INSTR(0x01, 0) and SNA MI_PIPELINE_SELECT
+#define CMD_PIPELINE_SELECT			(0x01 << 23)	// 0x00800000
 #define PIPELINE_SELECT_3D			0
 
 // MI_FLUSH - flush caches between BLT and 3D
