@@ -174,12 +174,14 @@ static const uint32 gen5_wm_kernel_solid[] = {
 #define URB_CS_ENTRY_SIZE		1
 
 // URB_FENCE: non-pipelined (SubType=0, Opcode=0, SubOpcode=0)
-// Mesa brw_defines.h: CMD_URB_FENCE = 0x6000, genxml: SubOpcode=0
+// DW0 bits[7:0]=length, bits[13:8]=realloc flags, bits[31:16]=opcode
+// Verified against Mesa brw_structs.h, SNA gen5_render.h, intel-vaapi-driver
 #define CMD_URB_FENCE			GEN5_3D(0, 0, 0)	// 0x60000000
-#define UF0_VS_REALLOC			(1 << 9)
-#define UF0_GS_REALLOC			(1 << 10)
-#define UF0_CLIP_REALLOC		(1 << 11)
-#define UF0_SF_REALLOC			(1 << 12)
+#define UF0_VS_REALLOC			(1 << 8)
+#define UF0_GS_REALLOC			(1 << 9)
+#define UF0_CLIP_REALLOC		(1 << 10)
+#define UF0_SF_REALLOC			(1 << 11)
+#define UF0_VFE_REALLOC			(1 << 12)
 #define UF0_CS_REALLOC			(1 << 13)
 
 // CS_URB_STATE: non-pipelined (SubType=0, Opcode=0, SubOpcode=1)
@@ -548,26 +550,29 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 		queue.Write(0 | 1);		// indirect obj upper = 0 = no limit (modify)
 		queue.Write(0 | 1);		// instruction upper = 0 = no limit (modify)
 
-		// 4. URB_FENCE - partition URB (SNA gen5_emit_urb)
-		//    Must be set BEFORE pipelined pointers (SF/WM need URB entries)
-		//    VS: entries 0-255 (256 entries x 1 row)
-		//    SF: entries 256-383 (64 entries x 2 rows)
+		// 4. URB_FENCE - partition URB between pipeline stages
+		//    ILK has 1024 rows; VS=256×1=256 rows, SF=64×2=128 rows
+		//    DW0: opcode | realloc_flags | length(1)
+		//    DW1: clip_fence[29:20] | gs_fence[19:10] | vs_fence[9:0]
+		//    DW2: cs_fence[30:20] | vfe_fence[19:10] | sf_fence[9:0]
 		{
 			uint32 vsFence = URB_VS_ENTRIES * URB_VS_ENTRY_SIZE;	// 256
 			uint32 sfFence = vsFence + URB_SF_ENTRIES * URB_SF_ENTRY_SIZE; // 384
 
 			queue.MakeSpace(6);
 			queue.Write(CMD_URB_FENCE
-				| UF0_CS_REALLOC | UF0_SF_REALLOC
-				| UF0_CLIP_REALLOC | UF0_GS_REALLOC
-				| UF0_VS_REALLOC | 1);
-			queue.Write((vsFence << 20)		// CLIP fence = VS fence
-				| (vsFence << 10)			// GS fence = VS fence
-				| (vsFence << 0));			// VS fence
-			queue.Write((sfFence << 10)		// CS fence = SF fence
-				| (sfFence << 0));			// SF fence
+				| UF0_VS_REALLOC | UF0_GS_REALLOC
+				| UF0_CLIP_REALLOC | UF0_SF_REALLOC
+				| UF0_VFE_REALLOC | UF0_CS_REALLOC
+				| 1);								// length = 1 (3 DWords)
+			queue.Write((vsFence << 20)				// CLIP fence
+				| (vsFence << 10)					// GS fence
+				| (vsFence << 0));					// VS fence
+			queue.Write((sfFence << 20)				// CS fence
+				| (sfFence << 10)					// VFE fence
+				| (sfFence << 0));					// SF fence
 
-			// CS_URB_STATE
+			// CS_URB_STATE (2 DWords)
 			queue.Write(CMD_CS_URB_STATE);
 			queue.Write(((URB_CS_ENTRY_SIZE - 1) << 4)
 				| (URB_CS_ENTRIES << 0));
