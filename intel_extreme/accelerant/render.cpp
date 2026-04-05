@@ -437,6 +437,12 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 	render_update_surface();
 	render_patch_color(color);
 
+	// Verify patched kernel color values
+	uint32* kw = (uint32*)(sRenderState.base + STATE_WM_KERNEL_OFFSET);
+	TRACE("Patched kernel: R=0x%08x G=0x%08x B=0x%08x A=0x%08x\n",
+		kw[WM_KERNEL_RED_OFFSET / 4], kw[WM_KERNEL_GREEN_OFFSET / 4],
+		kw[WM_KERNEL_BLUE_OFFSET / 4], kw[WM_KERNEL_ALPHA_OFFSET / 4]);
+
 	// Write vertex data for RECTLIST (3 vertices per rect)
 	// Format: X, Y (float)
 	float* vb = (float*)(sRenderState.base + STATE_VERTEX_OFFSET);

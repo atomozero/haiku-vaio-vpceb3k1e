@@ -1,0 +1,17 @@
+========================================
+0Bit Benchmark - Run #1
+Date:     2026-03-30 00:53:58
+OS:       Haiku hrev59543 Mar 26 2026 06:25:41
+GPU:      Intel HD Graphics (Ironlake Mobile) [0046]
+Driver:   Patched (non-packaged)
+Window:   680x680
+----------------------------------------
+  FillRect          22211.2 rects/s     (5000 ops, 225112 us)
+  CopyBits          10730.5 blits/s     (2000 ops, 186385 us)
+  InvertRect        14688.3 rects/s     (5000 ops, 340407 us)
+  Full Clear         1240.4 MB/s        (500 ops, 745538 us)
+  Sync Latency         34.7 µs/sync    (1000 ops, 34680 us)
+  Small 16x16       76893.5 rects/s     (10000 ops, 130050 us)
+  Large Fill         1193.0 MB/s        (100 ops, 155034 us)
+========================================
+

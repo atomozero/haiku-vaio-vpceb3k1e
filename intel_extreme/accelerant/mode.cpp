@@ -571,6 +571,9 @@ intel_set_display_mode(display_mode* mode)
 		uint32 px_corner = *(volatile uint32*)&fb[51 * stride + 271];
 		uint32 px_outside = *(volatile uint32*)&fb[45 * stride + 320];
 
+		// Check MI_STORE_DATA_IMM test area (382,52) - should be white
+		uint32 px_mi = *(volatile uint32*)&fb[52 * stride + 382];
+
 		if (diagFile) {
 			fprintf(diagFile, "3D fill err=0x%08x\n", (uint32)err);
 			fprintf(diagFile, "Pixel readback:\n");
@@ -580,15 +583,28 @@ intel_set_display_mode(display_mode* mode)
 				px_center == 0xFF000000 ? "BLACK-no draw" : "OTHER");
 			fprintf(diagFile, "  corner(271,51):  0x%08x\n", px_corner);
 			fprintf(diagFile, "  outside(320,45): 0x%08x\n", px_outside);
+			fprintf(diagFile, "  MI_SDI(382,52):  0x%08x %s\n",
+				px_mi,
+				px_mi == 0xFFFFFFFF ? "WHITE-MI_STORE works!" :
+				px_mi == 0xFF000000 ? "BLACK-MI_STORE failed" :
+				px_mi == 0x00000000 ? "ZERO-not initialized" : "OTHER");
 			fprintf(diagFile, "IPEHR=0x%08x IPEIR=0x%08x EIR=0x%08x\n",
 				read32(0x2068), read32(0x2064), read32(0x20b0));
 			fprintf(diagFile, "INSTDONE=0x%08x\n", read32(0x206c));
+
+			// Read PIPE_CONTROL marker from state block
+			volatile uint32* stateBlock =
+				(volatile uint32*)gInfo->shared_info->graphics_memory;
+			// stateOff is typically 0x20000, marker written at stateBase
+			// Read first few DWords of state block for marker check
+			fprintf(diagFile, "State[0]=0x%08x (PIPE_CONTROL marker if 0xDEADBEEF)\n",
+				*(volatile uint32*)(sharedInfo.frame_buffer - sharedInfo.bytes_per_row * sharedInfo.current_mode.timing.v_display + 0x20000));
 			fclose(diagFile);
 		}
 
 		_sPrintf("intel_extreme: render test: err=0x%" B_PRIx32
-			" pixel(320,100)=0x%08" B_PRIx32 "\n",
-			(uint32)err, px_center);
+			" px3D=0x%08" B_PRIx32 " pxMI=0x%08" B_PRIx32 "\n",
+			(uint32)err, px_center, px_mi);
 	}
 
 	// Second register dump
