@@ -27,7 +27,9 @@
 	((0x3 << 29) | ((pipeline) << 27) | ((opcode) << 24) | ((subopcode) << 16))
 
 // Pipeline select: choose between 3D and media pipeline
-#define CMD_PIPELINE_SELECT			GEN5_3D(1, 1, 4)	// 0x69040000
+// This is an MI command (type=1), NOT a 3D command!
+// MI_PIPELINE_SELECT: (1<<29) | (opcode 0x01 << 23)
+#define CMD_PIPELINE_SELECT			((0x1 << 29) | (0x01 << 23))	// 0x20800000
 #define PIPELINE_SELECT_3D			0
 
 // MI_FLUSH - flush caches between BLT and 3D
