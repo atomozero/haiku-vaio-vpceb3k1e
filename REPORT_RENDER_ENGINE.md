@@ -1,6 +1,6 @@
 # Report: Render Engine 3D Gen5 (Ironlake) su Haiku
 
-**Data:** 28 Marzo 2026
+**Data:** 5 Aprile 2026 (aggiornato)
 **Hardware:** Sony Vaio VPCEB3K1E, Intel HD Graphics 0x0046 (Ironlake Mobile)
 **OS:** Haiku R1~beta5+development (hrev59506)
 
@@ -37,25 +37,37 @@ gradienti. Il BLT engine gestisce solo fill solidi e blit rettangolari.
    surface state, vertex buffer, CC viewport. Tutti i puntatori
    verificati via dump diagnostico.
 
-### Cosa non funziona
+### Cosa non funziona (al 5 Aprile 2026)
 
 1. **3D draw non produce pixel**: i comandi 3D vengono processati dal
    parser (IPEHR lo conferma, INSTDONE=0xFFFFFFFF, nessun errore GPU),
    ma nessun pixel viene scritto al framebuffer.
 
-2. **Causa probabile**: il SF kernel (Setup/Rasterizer) non genera gli
-   span di dispatch per il WM (fragment shader). Il kernel SF dal
-   vaapi-driver (7 istruzioni: math_inv + delta computation + URB_WRITE)
-   potrebbe non corrispondere al vertex format usato, oppure il WM kernel
-   (6 istruzioni: MOV immediati + FB_WRITE SIMD8) ha errori di encoding.
+2. **Causa trovata: MI_PIPELINE_SELECT aveva type bits errati**.
+   Il define aveva `(0x1 << 29)` che imposta type=001, ma PIPELINE_SELECT
+   e un comando MI che richiede type=000 (bits[31:29]=0). Il GPU non
+   riconosceva il comando e non passava mai dalla pipeline BLT alla 3D.
+   Tutti i comandi 3D pipelined venivano ignorati silenziosamente.
+   Fix: `CMD_PIPELINE_SELECT = (0x01 << 23)` = 0x00800000 (matching
+   Linux i915 `MI_INSTR(0x01, 0)` e SNA `MI_PIPELINE_SELECT`).
 
-3. **PIPE_CONTROL Write Immediate**: non scrive dati in memoria. Potrebbe
-   richiedere flag aggiuntivi su Gen5 o un pipeline state completamente
-   valido per funzionare.
+3. **PIPE_CONTROL Write Immediate**: non scriveva il marker 0xDEADBEEF
+   perche la pipeline 3D non era attiva (conseguenza del bug #2).
+
+**Stato dopo la fix PIPELINE_SELECT**: da verificare al prossimo riavvio.
 
 ## Bug trovati e corretti
 
-### Opcode dei comandi 3D (critico)
+### MI_PIPELINE_SELECT type bits (critico — root cause)
+
+`CMD_PIPELINE_SELECT` aveva `(0x1 << 29) | (0x01 << 23)` = `0x20800000`,
+impostando type=001 (bits[31:29]). Ma PIPELINE_SELECT e un comando MI
+che richiede type=000. Senza questo comando riconosciuto, la GPU restava
+in modalita BLT e tutti i comandi 3D pipelined venivano ignorati.
+
+Corretto a `(0x01 << 23)` = `0x00800000` (matching Linux i915 e SNA).
+
+### Opcode dei comandi 3D
 
 Quasi tutti gli opcode dei comandi 3D avevano encoding errato. Il campo
 SubOpcode (bits[23:16]) era posizionato nel campo Opcode (bits[26:24]),
@@ -67,7 +79,7 @@ a xf86-video-intel SNA:
 
 | Comando | Prima (sbagliato) | Dopo (corretto) |
 |---|---|---|
-| PIPELINE_SELECT | `0x61040000` | `0x69040000` |
+| PIPELINE_SELECT | `0x20800000` (type=001!) | `0x00800000` (type=000) |
 | VERTEX_BUFFERS | `0x68000000` | `0x68080000` |
 | VERTEX_ELEMENTS | `0x69000000` | `0x68090000` |
 | 3DPRIMITIVE | `0x78000000` | `0x7B000000` |
@@ -301,7 +313,14 @@ DMA-BUF).  Compositing multi-surface con dirty region tracking.
 
 ## Lavoro futuro sul render engine 3D
 
-Se si vuole completare il render engine 3D attuale (senza Mesa):
+### Priorita 1: verificare fix PIPELINE_SELECT
+
+La fix `CMD_PIPELINE_SELECT = (0x01 << 23)` dovrebbe risolvere il
+problema principale.  Dopo il riavvio, verificare:
+- PIPE_CONTROL marker = 0xDEADBEEF (3D pipeline attiva)
+- Rettangolo rosso visibile nel test a (270,50)-(370,150)
+
+### Se il 3D produce pixel ma con artefatti
 
 1. **SF kernel**: il kernel SF dal vaapi-driver potrebbe non corrispondere
    al vertex format (2 float position-only senza UV).  Alternativa:

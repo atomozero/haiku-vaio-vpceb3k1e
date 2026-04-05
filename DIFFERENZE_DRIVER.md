@@ -1,5 +1,5 @@
 # Differenze rispetto ai driver originali Haiku
-# Sony Vaio VPCEB3K1E — 22 Marzo 2026
+# Sony Vaio VPCEB3K1E — 5 Aprile 2026 (aggiornato)
 
 Questo documento elenca tutte le modifiche apportate ai driver
 `intel_extreme` (GPU) e `hda` (audio) rispetto alla versione
@@ -82,12 +82,31 @@ Implementata classe `BatchCommands` e funzioni `init_batch_buffer()`/
 Attualmente disabilitata nelle funzioni BLT perche l'overhead per
 operazioni singole (count=1) supera il beneficio.
 
-### 1.8 render.cpp/render.h — Render Engine (infrastruttura)
+### 1.8 render.cpp/render.h — Render Engine 3D Gen5
 
-Implementata infrastruttura per rendering 2D via pipeline 3D Gen5:
-- Allocazione stato GPU (VS/WM/CC, binding table, surface state, kernel EU)
-- Funzione `render_fill_rect()` proof-of-concept
-- Inizializzata al boot, pronta per future operazioni di compositing
+Implementato rendering 2D via pipeline 3D Gen5 (Ironlake):
+- Re-inizializzazione ring buffer (disable/reset HEAD/re-enable) matching
+  Linux i915 `init_ring_common()` — necessario per comandi Type 3
+- Workaround Gen5: MI_MODE, _3D_CHICKEN2, CACHE_MODE_0
+- Macro `GEN5_3D(pipeline, opcode, subopcode)` per encoding comandi
+- SF kernel da intel-vaapi-driver (7 istruzioni: delta attributi + URB_WRITE)
+- WM kernel solid fill (6 istruzioni: MOV immediati RGBA + FB_WRITE SIMD8)
+- Color patching: converte BGRA uint32 a 4 float e patcha il kernel binario
+- URB_FENCE + CS_URB_STATE per partizionamento URB (VS:256, SF:64)
+- State setup: VS/SF/WM/CC, binding table, surface state, CC viewport
+- Funzione `render_fill_rect()` con sequenza comandi completa:
+  MI_FLUSH → MI_LRI workarounds → PIPELINE_SELECT → STATE_BASE_ADDRESS →
+  URB_FENCE → PIPELINED_POINTERS → DRAWING_RECTANGLE → BINDING_TABLE_PTRS →
+  VERTEX_BUFFERS → VERTEX_ELEMENTS → 3DPRIMITIVE → PIPE_CONTROL → MI_FLUSH
+- Diagnostica GPU: dump INSTDONE/IPEIR/IPEHR/EIR, PIPE_CONTROL marker
+
+**Bug critici corretti:**
+- `CMD_STATE_BASE_ADDRESS` era `0x69000006` (DRAWING_RECTANGLE) anziche
+  `0x61010006` — le basi indirizzi non venivano mai impostate
+- `CMD_PIPELINE_SELECT` aveva `(0x1<<29)` impostando type=001 anziche
+  type=000 (MI) — la GPU non entrava mai in modalita 3D
+- Tutti gli opcode 3D avevano SubOpcode nel campo Opcode (bit positions errate)
+- SEND `msg_reg_nr` era 0 in SF e WM kernel (doveva essere 1)
 
 ### 1.9 hooks.cpp — Fill Span abilitato
 
@@ -198,6 +217,7 @@ case 0x10ec0269:
 | `hda/ANALISI_HDA_ALC269.md` | Analisi codec audio ALC269 |
 | `bench/bench_2d.cpp` | Benchmark 2D (7 test) |
 | `VPCEB3K1E_Haiku_Driver_Report.md` | Report compatibilita hardware |
+| `REPORT_RENDER_ENGINE.md` | Report render engine 3D Gen5 |
 | `DIFFERENZE_DRIVER.md` | Questo documento |
 
 ---
