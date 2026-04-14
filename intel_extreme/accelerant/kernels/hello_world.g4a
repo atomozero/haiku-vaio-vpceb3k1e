@@ -1,0 +1,22 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 hello-world EU kernel: single instruction, signals end-of-thread
+ * immediately. Dispatched by MEDIA_OBJECT from media_pipeline.cpp, this
+ * kernel's purpose is purely to prove that:
+ *
+ *   1. the VFE accepted our state blob,
+ *   2. an interface descriptor correctly pointed at this kernel,
+ *   3. the EU fetched and decoded at least one instruction,
+ *   4. the thread reached EOT so VFE could free the URB entry.
+ *
+ * It writes nothing. The fact that a subsequent MI_FLUSH / marker in the
+ * batch completes (observable via media_pipeline_dump_markers) is what
+ * tells us the kernel ran.
+ *
+ * Syntax mirrors libva-intel-driver's null.g4a, which is the same pattern.
+ */
+
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

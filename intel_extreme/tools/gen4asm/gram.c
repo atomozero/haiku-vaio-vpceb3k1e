@@ -1,0 +1,6133 @@
+/* A Bison parser, made by GNU Bison 3.8.2.  */
+
+/* Bison implementation for Yacc-like parsers in C
+
+   Copyright (C) 1984, 1989-1990, 2000-2015, 2018-2021 Free Software Foundation,
+   Inc.
+
+   This program is free software: you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation, either version 3 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program.  If not, see <https://www.gnu.org/licenses/>.  */
+
+/* As a special exception, you may create a larger work that contains
+   part or all of the Bison parser skeleton and distribute that work
+   under terms of your choice, so long as that work isn't itself a
+   parser generator using the skeleton or a modified version thereof
+   as a parser skeleton.  Alternatively, if you modify or redistribute
+   the parser skeleton itself, you may (at your option) remove this
+   special exception, which will cause the skeleton and the resulting
+   Bison output files to be licensed under the GNU General Public
+   License without this special exception.
+
+   This special exception was added by the Free Software Foundation in
+   version 2.2 of Bison.  */
+
+/* C LALR(1) parser skeleton written by Richard Stallman, by
+   simplifying the original so-called "semantic" parser.  */
+
+/* DO NOT RELY ON FEATURES THAT ARE NOT DOCUMENTED in the manual,
+   especially those whose name start with YY_ or yy_.  They are
+   private implementation details that can be changed or removed.  */
+
+/* All symbols defined below should begin with yy or YY, to avoid
+   infringing on user name space.  This should be done even for local
+   variables, as they might otherwise be expanded by user macros.
+   There are some unavoidable exceptions within include files to
+   define necessary library symbols; they are noted "INFRINGES ON
+   USER NAME SPACE" below.  */
+
+/* Identify Bison output, and Bison version.  */
+#define YYBISON 30802
+
+/* Bison version string.  */
+#define YYBISON_VERSION "3.8.2"
+
+/* Skeleton name.  */
+#define YYSKELETON_NAME "yacc.c"
+
+/* Pure parsers.  */
+#define YYPURE 0
+
+/* Push parsers.  */
+#define YYPUSH 0
+
+/* Pull parsers.  */
+#define YYPULL 1
+
+
+
+
+/* First part of user prologue.  */
+#line 1 "gram.y"
+
+/*
+ * Copyright © 2006 Intel Corporation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * Authors:
+ *    Eric Anholt <eric@anholt.net>
+ *
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <stdarg.h>
+#include <assert.h>
+#include "gen4asm.h"
+#include "brw_eu.h"
+#include "gen8_instruction.h"
+
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+
+#define DEFAULT_EXECSIZE (ffs(program_defaults.execute_size) - 1)
+#define DEFAULT_DSTREGION -1
+
+#define SWIZZLE(reg) (reg.dw1.bits.swizzle)
+
+#define GEN(i)	(&(i)->insn.gen)
+#define GEN8(i)	(&(i)->insn.gen8)
+
+#define YYLTYPE YYLTYPE
+typedef struct YYLTYPE
+{
+ int first_line;
+ int first_column;
+ int last_line;
+ int last_column;
+} YYLTYPE;
+
+extern int need_export;
+static struct src_operand src_null_reg =
+{
+    .reg.file = BRW_ARCHITECTURE_REGISTER_FILE,
+    .reg.nr = BRW_ARF_NULL,
+    .reg.type = BRW_REGISTER_TYPE_UD,
+};
+static struct brw_reg dst_null_reg =
+{
+    .file = BRW_ARCHITECTURE_REGISTER_FILE,
+    .nr = BRW_ARF_NULL,
+};
+static struct brw_reg ip_dst =
+{
+    .file = BRW_ARCHITECTURE_REGISTER_FILE,
+    .nr = BRW_ARF_IP,
+    .type = BRW_REGISTER_TYPE_UD,
+    .address_mode = BRW_ADDRESS_DIRECT,
+    .hstride = 1,
+    .dw1.bits.writemask = BRW_WRITEMASK_XYZW,
+};
+static struct src_operand ip_src =
+{
+    .reg.file = BRW_ARCHITECTURE_REGISTER_FILE,
+    .reg.nr = BRW_ARF_IP,
+    .reg.type = BRW_REGISTER_TYPE_UD,
+    .reg.address_mode = BRW_ADDRESS_DIRECT,
+    .reg.dw1.bits.swizzle = BRW_SWIZZLE_NOOP,
+};
+
+static int get_type_size(unsigned type);
+static void set_instruction_opcode(struct brw_program_instruction *instr,
+				   unsigned opcode);
+static int set_instruction_dest(struct brw_program_instruction *instr,
+				struct brw_reg *dest);
+static int set_instruction_src0(struct brw_program_instruction *instr,
+				struct src_operand *src,
+				YYLTYPE *location);
+static int set_instruction_src1(struct brw_program_instruction *instr,
+				struct src_operand *src,
+				YYLTYPE *location);
+static int set_instruction_dest_three_src(struct brw_program_instruction *instr,
+					  struct brw_reg *dest);
+static int set_instruction_src0_three_src(struct brw_program_instruction *instr,
+					  struct src_operand *src);
+static int set_instruction_src1_three_src(struct brw_program_instruction *instr,
+					  struct src_operand *src);
+static int set_instruction_src2_three_src(struct brw_program_instruction *instr,
+					  struct src_operand *src);
+static void set_instruction_saturate(struct brw_program_instruction *instr,
+				     int saturate);
+static void set_instruction_options(struct brw_program_instruction *instr,
+				    struct options options);
+static void set_instruction_predicate(struct brw_program_instruction *instr,
+				      struct predicate *p);
+static void set_instruction_pred_cond(struct brw_program_instruction *instr,
+				      struct predicate *p,
+				      struct condition *c,
+				      YYLTYPE *location);
+static void set_direct_dst_operand(struct brw_reg *dst, struct brw_reg *reg,
+				   int type);
+static void set_direct_src_operand(struct src_operand *src, struct brw_reg *reg,
+				   int type);
+
+void set_branch_two_offsets(struct brw_program_instruction *insn, int jip_offset, int uip_offset);
+void set_branch_one_offset(struct brw_program_instruction *insn, int jip_offset);
+
+enum message_level {
+    WARN,
+    ERROR,
+};
+
+static void message(enum message_level level, YYLTYPE *location,
+		    const char *fmt, ...)
+{
+    static const char *level_str[] = { "warning", "error" };
+    va_list args;
+
+    if (location)
+	fprintf(stderr, "%s:%d:%d: %s: ", input_filename, location->first_line,
+		location->first_column, level_str[level]);
+    else
+	fprintf(stderr, "%s:%s: ", input_filename, level_str[level]);
+
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+}
+
+#define warn(flag, l, fmt, ...)					\
+    do {							\
+	if (warning_flags & WARN_ ## flag)			\
+	    message(WARN, l, fmt, ## __VA_ARGS__);	\
+    } while(0)
+
+#define error(l, fmt, ...)			\
+    do {					\
+	message(ERROR, l, fmt, ## __VA_ARGS__);	\
+    } while(0)
+
+/* like strcmp, but handles NULL pointers */
+static bool strcmp0(const char *s1, const char* s2)
+{
+    if (!s1)
+	return -(s1 != s2);
+    if (!s2)
+	return s1 != s2;
+    return strcmp (s1, s2);
+}
+
+static bool region_equal(struct region *r1, struct region *r2)
+{
+    return memcmp(r1, r2, sizeof(struct region)) == 0;
+}
+
+static bool reg_equal(struct brw_reg *r1, struct brw_reg *r2)
+{
+    return memcmp(r1, r2, sizeof(struct brw_reg)) == 0;
+}
+
+static bool declared_register_equal(struct declared_register *r1,
+				     struct declared_register *r2)
+{
+    if (strcmp0(r1->name, r2->name) != 0)
+	return false;
+
+    if (!reg_equal(&r1->reg, &r2->reg))
+	return false;
+
+    if (!region_equal(&r1->src_region, &r2->src_region))
+	return false;
+
+    if (r1->element_size != r2->element_size ||
+        r1->dst_region != r2->dst_region)
+	return false;
+
+    return true;
+}
+
+static void brw_program_init(struct brw_program *p)
+{
+   memset(p, 0, sizeof(struct brw_program));
+}
+
+static void brw_program_append_entry(struct brw_program *p,
+				     struct brw_program_instruction *entry)
+{
+    entry->next = NULL;
+    if (p->last)
+	p->last->next = entry;
+    else
+	p->first = entry;
+    p->last = entry;
+}
+
+static void
+brw_program_add_instruction(struct brw_program *p,
+			    struct brw_program_instruction *instruction)
+{
+    struct brw_program_instruction *list_entry;
+
+    list_entry = calloc(1, sizeof(struct brw_program_instruction));
+    list_entry->type = GEN4ASM_INSTRUCTION_GEN;
+    list_entry->insn.gen = instruction->insn.gen;
+    brw_program_append_entry(p, list_entry);
+}
+
+static void
+brw_program_add_relocatable(struct brw_program *p,
+			    struct brw_program_instruction *instruction)
+{
+    struct brw_program_instruction *list_entry;
+
+    list_entry = calloc(1, sizeof(struct brw_program_instruction));
+    list_entry->type = GEN4ASM_INSTRUCTION_GEN_RELOCATABLE;
+    list_entry->insn.gen = instruction->insn.gen;
+    list_entry->reloc = instruction->reloc;
+    brw_program_append_entry(p, list_entry);
+}
+
+static void brw_program_add_label(struct brw_program *p, const char *label)
+{
+    struct brw_program_instruction *list_entry;
+
+    list_entry = calloc(1, sizeof(struct brw_program_instruction));
+    list_entry->type = GEN4ASM_INSTRUCTION_LABEL;
+    list_entry->insn.label.name = strdup(label);
+    brw_program_append_entry(p, list_entry);
+}
+
+static int resolve_dst_region(struct declared_register *reference, int region)
+{
+    int resolved = region;
+
+    if (resolved == DEFAULT_DSTREGION) {
+	if (reference)
+	    resolved = reference->dst_region;
+        else
+            resolved = 1;
+    }
+
+    assert(resolved == 1 || resolved == 2 || resolved == 3);
+    return resolved;
+}
+
+static inline int access_mode(struct brw_program_instruction *insn)
+{
+    if (IS_GENp(8))
+	return gen8_access_mode(GEN8(insn));
+    else
+	return GEN(insn)->header.access_mode;
+}
+
+static inline int exec_size(struct brw_program_instruction *insn)
+{
+    if (IS_GENp(8))
+	return gen8_exec_size(GEN8(insn));
+    else
+	return GEN(insn)->header.execution_size;
+}
+
+static void set_execsize(struct brw_program_instruction *insn, int execsize)
+{
+    if (IS_GENp(8))
+	gen8_set_exec_size(GEN8(insn), execsize);
+    else
+	GEN(insn)->header.execution_size = execsize;
+}
+
+static bool validate_dst_reg(struct brw_program_instruction *insn, struct brw_reg *reg)
+{
+
+    if (reg->address_mode == BRW_ADDRESS_DIRECT &&
+	access_mode(insn) == BRW_ALIGN_1 &&
+	reg->dw1.bits.writemask != 0 &&
+	reg->dw1.bits.writemask != BRW_WRITEMASK_XYZW)
+    {
+	fprintf(stderr, "error: write mask set in align1 instruction\n");
+	return false;
+    }
+
+    if (reg->address_mode == BRW_ADDRESS_REGISTER_INDIRECT_REGISTER &&
+	access_mode(insn) == BRW_ALIGN_16) {
+	fprintf(stderr, "error: indirect Dst addr mode in align16 instruction\n");
+	return false;
+    }
+
+    return true;
+}
+
+static bool validate_src_reg(struct brw_program_instruction *insn,
+			     struct brw_reg reg,
+			     YYLTYPE *location)
+{
+    int hstride_for_reg[] = {0, 1, 2, 4};
+    int vstride_for_reg[] = {0, 1, 2, 4, 8, 16, 32, 64, 128, 256};
+    int width_for_reg[] = {1, 2, 4, 8, 16};
+    int execsize_for_reg[] = {1, 2, 4, 8, 16, 32};
+    int width, hstride, vstride, execsize;
+
+    if (reg.file == BRW_IMMEDIATE_VALUE)
+	return true;
+
+    if (access_mode(insn) == BRW_ALIGN_1 &&
+	SWIZZLE(reg) && SWIZZLE(reg) != BRW_SWIZZLE_NOOP)
+    {
+	error(location, "swizzle bits set in align1 instruction\n");
+	return false;
+    }
+
+    if (reg.address_mode == BRW_ADDRESS_REGISTER_INDIRECT_REGISTER &&
+	access_mode(insn) == BRW_ALIGN_16) {
+	fprintf(stderr, "error: indirect Source addr mode in align16 instruction\n");
+	return false;
+    }
+
+    assert(reg.hstride >= 0 && reg.hstride < ARRAY_SIZE(hstride_for_reg));
+    hstride = hstride_for_reg[reg.hstride];
+
+    if (reg.vstride == 0xf) {
+	vstride = -1;
+    } else {
+	assert(reg.vstride >= 0 && reg.vstride < ARRAY_SIZE(vstride_for_reg));
+	vstride = vstride_for_reg[reg.vstride];
+    }
+
+    assert(reg.width >= 0 && reg.width < ARRAY_SIZE(width_for_reg));
+    width = width_for_reg[reg.width];
+
+    assert(exec_size(insn) >= 0 &&
+	   exec_size(insn) < ARRAY_SIZE(execsize_for_reg));
+    execsize = execsize_for_reg[exec_size(insn)];
+
+    /* Register Region Restrictions */
+
+    /* B. If ExecSize = Width and HorzStride ≠ 0, VertStride must be set to
+     * Width * HorzStride. */
+    if (execsize == width && hstride != 0) {
+	if (vstride != -1 && vstride != width * hstride)
+	    warn(ALL, location, "execution size == width and hstride != 0 but "
+		 "vstride is not width * hstride\n");
+    }
+
+    /* D. If Width = 1, HorzStride must be 0 regardless of the values of
+     * ExecSize and VertStride.
+     *
+     * FIXME: In "advanced mode" hstride is set to 1, this is probably a bug
+     * to fix, but it changes the generated opcodes and thus needs validation.
+     */
+    if (width == 1 && hstride != 0)
+	warn(ALL, location, "region width is 1 but horizontal stride is %d "
+	     " (should be 0)\n", hstride);
+
+    /* E. If ExecSize = Width = 1, both VertStride and HorzStride must be 0.
+     * This defines a scalar. */
+    if (execsize == 1 && width == 1) {
+        if (hstride != 0)
+	    warn(ALL, location, "execution size and region width are 1 but "
+		 "horizontal stride is %d (should be 0)\n", hstride);
+        if (vstride != 0)
+	    warn(ALL, location, "execution size and region width are 1 but "
+		 "vertical stride is %d (should be 0)\n", vstride);
+    }
+
+    return true;
+}
+
+static int get_subreg_address(unsigned regfile, unsigned type, unsigned subreg, unsigned address_mode)
+{
+    int unit_size = 1;
+
+    assert(address_mode == BRW_ADDRESS_DIRECT);
+    assert(regfile != BRW_IMMEDIATE_VALUE);
+
+    if (advanced_flag)
+	unit_size = get_type_size(type);
+
+    return subreg * unit_size;
+}
+
+/* only used in indirect address mode.
+ * input: sub-register number of an address register
+ * output: the value of AddrSubRegNum in the instruction binary code
+ *
+ * input  output(advanced_flag==0)  output(advanced_flag==1)
+ *  a0.0             0                         0
+ *  a0.1        invalid input                  1
+ *  a0.2             1                         2
+ *  a0.3        invalid input                  3
+ *  a0.4             2                         4
+ *  a0.5        invalid input                  5
+ *  a0.6             3                         6
+ *  a0.7        invalid input                  7
+ *  a0.8             4                  invalid input
+ *  a0.10            5                  invalid input
+ *  a0.12            6                  invalid input
+ *  a0.14            7                  invalid input
+ */
+static int get_indirect_subreg_address(unsigned subreg)
+{
+    return advanced_flag == 0 ? subreg / 2 : subreg;
+}
+
+static void resolve_subnr(struct brw_reg *reg)
+{
+   if (reg->file == BRW_IMMEDIATE_VALUE)
+	return;
+
+   if (reg->address_mode == BRW_ADDRESS_DIRECT)
+	reg->subnr = get_subreg_address(reg->file, reg->type, reg->subnr,
+					reg->address_mode);
+   else
+        reg->subnr = get_indirect_subreg_address(reg->subnr);
+}
+
+
+
+#line 506 "gram.c"
+
+# ifndef YY_CAST
+#  ifdef __cplusplus
+#   define YY_CAST(Type, Val) static_cast<Type> (Val)
+#   define YY_REINTERPRET_CAST(Type, Val) reinterpret_cast<Type> (Val)
+#  else
+#   define YY_CAST(Type, Val) ((Type) (Val))
+#   define YY_REINTERPRET_CAST(Type, Val) ((Type) (Val))
+#  endif
+# endif
+# ifndef YY_NULLPTR
+#  if defined __cplusplus
+#   if 201103L <= __cplusplus
+#    define YY_NULLPTR nullptr
+#   else
+#    define YY_NULLPTR 0
+#   endif
+#  else
+#   define YY_NULLPTR ((void*)0)
+#  endif
+# endif
+
+#include "gram.h"
+/* Symbol kind.  */
+enum yysymbol_kind_t
+{
+  YYSYMBOL_YYEMPTY = -2,
+  YYSYMBOL_YYEOF = 0,                      /* "end of file"  */
+  YYSYMBOL_YYerror = 1,                    /* error  */
+  YYSYMBOL_YYUNDEF = 2,                    /* "invalid token"  */
+  YYSYMBOL_COLON = 3,                      /* COLON  */
+  YYSYMBOL_SEMICOLON = 4,                  /* SEMICOLON  */
+  YYSYMBOL_LPAREN = 5,                     /* LPAREN  */
+  YYSYMBOL_RPAREN = 6,                     /* RPAREN  */
+  YYSYMBOL_LANGLE = 7,                     /* LANGLE  */
+  YYSYMBOL_RANGLE = 8,                     /* RANGLE  */
+  YYSYMBOL_LCURLY = 9,                     /* LCURLY  */
+  YYSYMBOL_RCURLY = 10,                    /* RCURLY  */
+  YYSYMBOL_LSQUARE = 11,                   /* LSQUARE  */
+  YYSYMBOL_RSQUARE = 12,                   /* RSQUARE  */
+  YYSYMBOL_COMMA = 13,                     /* COMMA  */
+  YYSYMBOL_EQ = 14,                        /* EQ  */
+  YYSYMBOL_ABS = 15,                       /* ABS  */
+  YYSYMBOL_DOT = 16,                       /* DOT  */
+  YYSYMBOL_PLUS = 17,                      /* PLUS  */
+  YYSYMBOL_MINUS = 18,                     /* MINUS  */
+  YYSYMBOL_MULTIPLY = 19,                  /* MULTIPLY  */
+  YYSYMBOL_DIVIDE = 20,                    /* DIVIDE  */
+  YYSYMBOL_TYPE_UD = 21,                   /* TYPE_UD  */
+  YYSYMBOL_TYPE_D = 22,                    /* TYPE_D  */
+  YYSYMBOL_TYPE_UW = 23,                   /* TYPE_UW  */
+  YYSYMBOL_TYPE_W = 24,                    /* TYPE_W  */
+  YYSYMBOL_TYPE_UB = 25,                   /* TYPE_UB  */
+  YYSYMBOL_TYPE_B = 26,                    /* TYPE_B  */
+  YYSYMBOL_TYPE_VF = 27,                   /* TYPE_VF  */
+  YYSYMBOL_TYPE_HF = 28,                   /* TYPE_HF  */
+  YYSYMBOL_TYPE_V = 29,                    /* TYPE_V  */
+  YYSYMBOL_TYPE_F = 30,                    /* TYPE_F  */
+  YYSYMBOL_ALIGN1 = 31,                    /* ALIGN1  */
+  YYSYMBOL_ALIGN16 = 32,                   /* ALIGN16  */
+  YYSYMBOL_SECHALF = 33,                   /* SECHALF  */
+  YYSYMBOL_COMPR = 34,                     /* COMPR  */
+  YYSYMBOL_SWITCH = 35,                    /* SWITCH  */
+  YYSYMBOL_ATOMIC = 36,                    /* ATOMIC  */
+  YYSYMBOL_NODDCHK = 37,                   /* NODDCHK  */
+  YYSYMBOL_NODDCLR = 38,                   /* NODDCLR  */
+  YYSYMBOL_MASK_DISABLE = 39,              /* MASK_DISABLE  */
+  YYSYMBOL_BREAKPOINT = 40,                /* BREAKPOINT  */
+  YYSYMBOL_ACCWRCTRL = 41,                 /* ACCWRCTRL  */
+  YYSYMBOL_EOT = 42,                       /* EOT  */
+  YYSYMBOL_SEQ = 43,                       /* SEQ  */
+  YYSYMBOL_ANY2H = 44,                     /* ANY2H  */
+  YYSYMBOL_ALL2H = 45,                     /* ALL2H  */
+  YYSYMBOL_ANY4H = 46,                     /* ANY4H  */
+  YYSYMBOL_ALL4H = 47,                     /* ALL4H  */
+  YYSYMBOL_ANY8H = 48,                     /* ANY8H  */
+  YYSYMBOL_ALL8H = 49,                     /* ALL8H  */
+  YYSYMBOL_ANY16H = 50,                    /* ANY16H  */
+  YYSYMBOL_ALL16H = 51,                    /* ALL16H  */
+  YYSYMBOL_ANYV = 52,                      /* ANYV  */
+  YYSYMBOL_ALLV = 53,                      /* ALLV  */
+  YYSYMBOL_ZERO = 54,                      /* ZERO  */
+  YYSYMBOL_EQUAL = 55,                     /* EQUAL  */
+  YYSYMBOL_NOT_ZERO = 56,                  /* NOT_ZERO  */
+  YYSYMBOL_NOT_EQUAL = 57,                 /* NOT_EQUAL  */
+  YYSYMBOL_GREATER = 58,                   /* GREATER  */
+  YYSYMBOL_GREATER_EQUAL = 59,             /* GREATER_EQUAL  */
+  YYSYMBOL_LESS = 60,                      /* LESS  */
+  YYSYMBOL_LESS_EQUAL = 61,                /* LESS_EQUAL  */
+  YYSYMBOL_ROUND_INCREMENT = 62,           /* ROUND_INCREMENT  */
+  YYSYMBOL_OVERFLOW = 63,                  /* OVERFLOW  */
+  YYSYMBOL_UNORDERED = 64,                 /* UNORDERED  */
+  YYSYMBOL_GENREG = 65,                    /* GENREG  */
+  YYSYMBOL_MSGREG = 66,                    /* MSGREG  */
+  YYSYMBOL_ADDRESSREG = 67,                /* ADDRESSREG  */
+  YYSYMBOL_ACCREG = 68,                    /* ACCREG  */
+  YYSYMBOL_FLAGREG = 69,                   /* FLAGREG  */
+  YYSYMBOL_MASKREG = 70,                   /* MASKREG  */
+  YYSYMBOL_AMASK = 71,                     /* AMASK  */
+  YYSYMBOL_IMASK = 72,                     /* IMASK  */
+  YYSYMBOL_LMASK = 73,                     /* LMASK  */
+  YYSYMBOL_CMASK = 74,                     /* CMASK  */
+  YYSYMBOL_MASKSTACKREG = 75,              /* MASKSTACKREG  */
+  YYSYMBOL_LMS = 76,                       /* LMS  */
+  YYSYMBOL_IMS = 77,                       /* IMS  */
+  YYSYMBOL_MASKSTACKDEPTHREG = 78,         /* MASKSTACKDEPTHREG  */
+  YYSYMBOL_IMSD = 79,                      /* IMSD  */
+  YYSYMBOL_LMSD = 80,                      /* LMSD  */
+  YYSYMBOL_NOTIFYREG = 81,                 /* NOTIFYREG  */
+  YYSYMBOL_STATEREG = 82,                  /* STATEREG  */
+  YYSYMBOL_CONTROLREG = 83,                /* CONTROLREG  */
+  YYSYMBOL_IPREG = 84,                     /* IPREG  */
+  YYSYMBOL_GENREGFILE = 85,                /* GENREGFILE  */
+  YYSYMBOL_MSGREGFILE = 86,                /* MSGREGFILE  */
+  YYSYMBOL_MOV = 87,                       /* MOV  */
+  YYSYMBOL_FRC = 88,                       /* FRC  */
+  YYSYMBOL_RNDU = 89,                      /* RNDU  */
+  YYSYMBOL_RNDD = 90,                      /* RNDD  */
+  YYSYMBOL_RNDE = 91,                      /* RNDE  */
+  YYSYMBOL_RNDZ = 92,                      /* RNDZ  */
+  YYSYMBOL_NOT = 93,                       /* NOT  */
+  YYSYMBOL_LZD = 94,                       /* LZD  */
+  YYSYMBOL_MUL = 95,                       /* MUL  */
+  YYSYMBOL_MAC = 96,                       /* MAC  */
+  YYSYMBOL_MACH = 97,                      /* MACH  */
+  YYSYMBOL_LINE = 98,                      /* LINE  */
+  YYSYMBOL_SAD2 = 99,                      /* SAD2  */
+  YYSYMBOL_SADA2 = 100,                    /* SADA2  */
+  YYSYMBOL_DP4 = 101,                      /* DP4  */
+  YYSYMBOL_DPH = 102,                      /* DPH  */
+  YYSYMBOL_DP3 = 103,                      /* DP3  */
+  YYSYMBOL_DP2 = 104,                      /* DP2  */
+  YYSYMBOL_AVG = 105,                      /* AVG  */
+  YYSYMBOL_ADD = 106,                      /* ADD  */
+  YYSYMBOL_SEL = 107,                      /* SEL  */
+  YYSYMBOL_AND = 108,                      /* AND  */
+  YYSYMBOL_OR = 109,                       /* OR  */
+  YYSYMBOL_XOR = 110,                      /* XOR  */
+  YYSYMBOL_SHR = 111,                      /* SHR  */
+  YYSYMBOL_SHL = 112,                      /* SHL  */
+  YYSYMBOL_ASR = 113,                      /* ASR  */
+  YYSYMBOL_CMP = 114,                      /* CMP  */
+  YYSYMBOL_CMPN = 115,                     /* CMPN  */
+  YYSYMBOL_PLN = 116,                      /* PLN  */
+  YYSYMBOL_ADDC = 117,                     /* ADDC  */
+  YYSYMBOL_BFI1 = 118,                     /* BFI1  */
+  YYSYMBOL_BFREV = 119,                    /* BFREV  */
+  YYSYMBOL_CBIT = 120,                     /* CBIT  */
+  YYSYMBOL_F16TO32 = 121,                  /* F16TO32  */
+  YYSYMBOL_F32TO16 = 122,                  /* F32TO16  */
+  YYSYMBOL_FBH = 123,                      /* FBH  */
+  YYSYMBOL_FBL = 124,                      /* FBL  */
+  YYSYMBOL_SEND = 125,                     /* SEND  */
+  YYSYMBOL_SENDC = 126,                    /* SENDC  */
+  YYSYMBOL_NOP = 127,                      /* NOP  */
+  YYSYMBOL_JMPI = 128,                     /* JMPI  */
+  YYSYMBOL_IF = 129,                       /* IF  */
+  YYSYMBOL_IFF = 130,                      /* IFF  */
+  YYSYMBOL_WHILE = 131,                    /* WHILE  */
+  YYSYMBOL_ELSE = 132,                     /* ELSE  */
+  YYSYMBOL_BREAK = 133,                    /* BREAK  */
+  YYSYMBOL_CONT = 134,                     /* CONT  */
+  YYSYMBOL_HALT = 135,                     /* HALT  */
+  YYSYMBOL_MSAVE = 136,                    /* MSAVE  */
+  YYSYMBOL_PUSH = 137,                     /* PUSH  */
+  YYSYMBOL_MREST = 138,                    /* MREST  */
+  YYSYMBOL_POP = 139,                      /* POP  */
+  YYSYMBOL_WAIT = 140,                     /* WAIT  */
+  YYSYMBOL_DO = 141,                       /* DO  */
+  YYSYMBOL_ENDIF = 142,                    /* ENDIF  */
+  YYSYMBOL_ILLEGAL = 143,                  /* ILLEGAL  */
+  YYSYMBOL_MATH_INST = 144,                /* MATH_INST  */
+  YYSYMBOL_MAD = 145,                      /* MAD  */
+  YYSYMBOL_LRP = 146,                      /* LRP  */
+  YYSYMBOL_BFE = 147,                      /* BFE  */
+  YYSYMBOL_BFI2 = 148,                     /* BFI2  */
+  YYSYMBOL_SUBB = 149,                     /* SUBB  */
+  YYSYMBOL_CALL = 150,                     /* CALL  */
+  YYSYMBOL_RET = 151,                      /* RET  */
+  YYSYMBOL_BRD = 152,                      /* BRD  */
+  YYSYMBOL_BRC = 153,                      /* BRC  */
+  YYSYMBOL_NULL_TOKEN = 154,               /* NULL_TOKEN  */
+  YYSYMBOL_MATH = 155,                     /* MATH  */
+  YYSYMBOL_SAMPLER = 156,                  /* SAMPLER  */
+  YYSYMBOL_GATEWAY = 157,                  /* GATEWAY  */
+  YYSYMBOL_READ = 158,                     /* READ  */
+  YYSYMBOL_WRITE = 159,                    /* WRITE  */
+  YYSYMBOL_URB = 160,                      /* URB  */
+  YYSYMBOL_THREAD_SPAWNER = 161,           /* THREAD_SPAWNER  */
+  YYSYMBOL_VME = 162,                      /* VME  */
+  YYSYMBOL_DATA_PORT = 163,                /* DATA_PORT  */
+  YYSYMBOL_CRE = 164,                      /* CRE  */
+  YYSYMBOL_MSGLEN = 165,                   /* MSGLEN  */
+  YYSYMBOL_RETURNLEN = 166,                /* RETURNLEN  */
+  YYSYMBOL_ALLOCATE = 167,                 /* ALLOCATE  */
+  YYSYMBOL_USED = 168,                     /* USED  */
+  YYSYMBOL_COMPLETE = 169,                 /* COMPLETE  */
+  YYSYMBOL_TRANSPOSE = 170,                /* TRANSPOSE  */
+  YYSYMBOL_INTERLEAVE = 171,               /* INTERLEAVE  */
+  YYSYMBOL_SATURATE = 172,                 /* SATURATE  */
+  YYSYMBOL_INTEGER = 173,                  /* INTEGER  */
+  YYSYMBOL_STRING = 174,                   /* STRING  */
+  YYSYMBOL_NUMBER = 175,                   /* NUMBER  */
+  YYSYMBOL_INV = 176,                      /* INV  */
+  YYSYMBOL_LOG = 177,                      /* LOG  */
+  YYSYMBOL_EXP = 178,                      /* EXP  */
+  YYSYMBOL_SQRT = 179,                     /* SQRT  */
+  YYSYMBOL_RSQ = 180,                      /* RSQ  */
+  YYSYMBOL_POW = 181,                      /* POW  */
+  YYSYMBOL_SIN = 182,                      /* SIN  */
+  YYSYMBOL_COS = 183,                      /* COS  */
+  YYSYMBOL_SINCOS = 184,                   /* SINCOS  */
+  YYSYMBOL_INTDIV = 185,                   /* INTDIV  */
+  YYSYMBOL_INTMOD = 186,                   /* INTMOD  */
+  YYSYMBOL_INTDIVMOD = 187,                /* INTDIVMOD  */
+  YYSYMBOL_SIGNED = 188,                   /* SIGNED  */
+  YYSYMBOL_SCALAR = 189,                   /* SCALAR  */
+  YYSYMBOL_X = 190,                        /* X  */
+  YYSYMBOL_Y = 191,                        /* Y  */
+  YYSYMBOL_Z = 192,                        /* Z  */
+  YYSYMBOL_W = 193,                        /* W  */
+  YYSYMBOL_KERNEL_PRAGMA = 194,            /* KERNEL_PRAGMA  */
+  YYSYMBOL_END_KERNEL_PRAGMA = 195,        /* END_KERNEL_PRAGMA  */
+  YYSYMBOL_CODE_PRAGMA = 196,              /* CODE_PRAGMA  */
+  YYSYMBOL_END_CODE_PRAGMA = 197,          /* END_CODE_PRAGMA  */
+  YYSYMBOL_REG_COUNT_PAYLOAD_PRAGMA = 198, /* REG_COUNT_PAYLOAD_PRAGMA  */
+  YYSYMBOL_REG_COUNT_TOTAL_PRAGMA = 199,   /* REG_COUNT_TOTAL_PRAGMA  */
+  YYSYMBOL_DECLARE_PRAGMA = 200,           /* DECLARE_PRAGMA  */
+  YYSYMBOL_BASE = 201,                     /* BASE  */
+  YYSYMBOL_ELEMENTSIZE = 202,              /* ELEMENTSIZE  */
+  YYSYMBOL_SRCREGION = 203,                /* SRCREGION  */
+  YYSYMBOL_DSTREGION = 204,                /* DSTREGION  */
+  YYSYMBOL_TYPE = 205,                     /* TYPE  */
+  YYSYMBOL_DEFAULT_EXEC_SIZE_PRAGMA = 206, /* DEFAULT_EXEC_SIZE_PRAGMA  */
+  YYSYMBOL_DEFAULT_REG_TYPE_PRAGMA = 207,  /* DEFAULT_REG_TYPE_PRAGMA  */
+  YYSYMBOL_SUBREGNUM = 208,                /* SUBREGNUM  */
+  YYSYMBOL_SNDOPR = 209,                   /* SNDOPR  */
+  YYSYMBOL_UMINUS = 210,                   /* UMINUS  */
+  YYSYMBOL_STR_SYMBOL_REG = 211,           /* STR_SYMBOL_REG  */
+  YYSYMBOL_EMPTEXECSIZE = 212,             /* EMPTEXECSIZE  */
+  YYSYMBOL_YYACCEPT = 213,                 /* $accept  */
+  YYSYMBOL_simple_int = 214,               /* simple_int  */
+  YYSYMBOL_exp = 215,                      /* exp  */
+  YYSYMBOL_ROOT = 216,                     /* ROOT  */
+  YYSYMBOL_label = 217,                    /* label  */
+  YYSYMBOL_declare_base = 218,             /* declare_base  */
+  YYSYMBOL_declare_elementsize = 219,      /* declare_elementsize  */
+  YYSYMBOL_declare_srcregion = 220,        /* declare_srcregion  */
+  YYSYMBOL_declare_dstregion = 221,        /* declare_dstregion  */
+  YYSYMBOL_declare_type = 222,             /* declare_type  */
+  YYSYMBOL_declare_pragma = 223,           /* declare_pragma  */
+  YYSYMBOL_reg_count_total_pragma = 224,   /* reg_count_total_pragma  */
+  YYSYMBOL_reg_count_payload_pragma = 225, /* reg_count_payload_pragma  */
+  YYSYMBOL_default_exec_size_pragma = 226, /* default_exec_size_pragma  */
+  YYSYMBOL_default_reg_type_pragma = 227,  /* default_reg_type_pragma  */
+  YYSYMBOL_pragma = 228,                   /* pragma  */
+  YYSYMBOL_instrseq = 229,                 /* instrseq  */
+  YYSYMBOL_instruction = 230,              /* instruction  */
+  YYSYMBOL_relocatableinstruction = 231,   /* relocatableinstruction  */
+  YYSYMBOL_ifelseinstruction = 232,        /* ifelseinstruction  */
+  YYSYMBOL_loopinstruction = 233,          /* loopinstruction  */
+  YYSYMBOL_haltinstruction = 234,          /* haltinstruction  */
+  YYSYMBOL_multibranchinstruction = 235,   /* multibranchinstruction  */
+  YYSYMBOL_subroutineinstruction = 236,    /* subroutineinstruction  */
+  YYSYMBOL_unaryinstruction = 237,         /* unaryinstruction  */
+  YYSYMBOL_unaryop = 238,                  /* unaryop  */
+  YYSYMBOL_binaryinstruction = 239,        /* binaryinstruction  */
+  YYSYMBOL_binaryop = 240,                 /* binaryop  */
+  YYSYMBOL_binaryaccinstruction = 241,     /* binaryaccinstruction  */
+  YYSYMBOL_binaryaccop = 242,              /* binaryaccop  */
+  YYSYMBOL_trinaryop = 243,                /* trinaryop  */
+  YYSYMBOL_trinaryinstruction = 244,       /* trinaryinstruction  */
+  YYSYMBOL_sendop = 245,                   /* sendop  */
+  YYSYMBOL_sendinstruction = 246,          /* sendinstruction  */
+  YYSYMBOL_sndopr = 247,                   /* sndopr  */
+  YYSYMBOL_jumpinstruction = 248,          /* jumpinstruction  */
+  YYSYMBOL_mathinstruction = 249,          /* mathinstruction  */
+  YYSYMBOL_breakinstruction = 250,         /* breakinstruction  */
+  YYSYMBOL_breakop = 251,                  /* breakop  */
+  YYSYMBOL_syncinstruction = 252,          /* syncinstruction  */
+  YYSYMBOL_nopinstruction = 253,           /* nopinstruction  */
+  YYSYMBOL_payload = 254,                  /* payload  */
+  YYSYMBOL_post_dst = 255,                 /* post_dst  */
+  YYSYMBOL_msgtarget = 256,                /* msgtarget  */
+  YYSYMBOL_urb_allocate = 257,             /* urb_allocate  */
+  YYSYMBOL_urb_used = 258,                 /* urb_used  */
+  YYSYMBOL_urb_complete = 259,             /* urb_complete  */
+  YYSYMBOL_urb_swizzle = 260,              /* urb_swizzle  */
+  YYSYMBOL_sampler_datatype = 261,         /* sampler_datatype  */
+  YYSYMBOL_math_function = 262,            /* math_function  */
+  YYSYMBOL_math_signed = 263,              /* math_signed  */
+  YYSYMBOL_math_scalar = 264,              /* math_scalar  */
+  YYSYMBOL_dst = 265,                      /* dst  */
+  YYSYMBOL_dstoperand = 266,               /* dstoperand  */
+  YYSYMBOL_dstoperandex = 267,             /* dstoperandex  */
+  YYSYMBOL_dstoperandex_typed = 268,       /* dstoperandex_typed  */
+  YYSYMBOL_symbol_reg = 269,               /* symbol_reg  */
+  YYSYMBOL_symbol_reg_p = 270,             /* symbol_reg_p  */
+  YYSYMBOL_dstreg = 271,                   /* dstreg  */
+  YYSYMBOL_srcaccimm = 272,                /* srcaccimm  */
+  YYSYMBOL_srcacc = 273,                   /* srcacc  */
+  YYSYMBOL_srcimm = 274,                   /* srcimm  */
+  YYSYMBOL_imm32reg = 275,                 /* imm32reg  */
+  YYSYMBOL_directsrcaccoperand = 276,      /* directsrcaccoperand  */
+  YYSYMBOL_srcarchoperandex = 277,         /* srcarchoperandex  */
+  YYSYMBOL_srcarchoperandex_typed = 278,   /* srcarchoperandex_typed  */
+  YYSYMBOL_sendleadreg = 279,              /* sendleadreg  */
+  YYSYMBOL_src = 280,                      /* src  */
+  YYSYMBOL_directsrcoperand = 281,         /* directsrcoperand  */
+  YYSYMBOL_indirectsrcoperand = 282,       /* indirectsrcoperand  */
+  YYSYMBOL_addrparam = 283,                /* addrparam  */
+  YYSYMBOL_immaddroffset = 284,            /* immaddroffset  */
+  YYSYMBOL_subregnum = 285,                /* subregnum  */
+  YYSYMBOL_directgenreg = 286,             /* directgenreg  */
+  YYSYMBOL_indirectgenreg = 287,           /* indirectgenreg  */
+  YYSYMBOL_directmsgreg = 288,             /* directmsgreg  */
+  YYSYMBOL_indirectmsgreg = 289,           /* indirectmsgreg  */
+  YYSYMBOL_addrreg = 290,                  /* addrreg  */
+  YYSYMBOL_accreg = 291,                   /* accreg  */
+  YYSYMBOL_flagreg = 292,                  /* flagreg  */
+  YYSYMBOL_maskreg = 293,                  /* maskreg  */
+  YYSYMBOL_mask_subreg = 294,              /* mask_subreg  */
+  YYSYMBOL_maskstackreg = 295,             /* maskstackreg  */
+  YYSYMBOL_maskstack_subreg = 296,         /* maskstack_subreg  */
+  YYSYMBOL_notifyreg = 297,                /* notifyreg  */
+  YYSYMBOL_statereg = 298,                 /* statereg  */
+  YYSYMBOL_controlreg = 299,               /* controlreg  */
+  YYSYMBOL_ipreg = 300,                    /* ipreg  */
+  YYSYMBOL_nullreg = 301,                  /* nullreg  */
+  YYSYMBOL_relativelocation = 302,         /* relativelocation  */
+  YYSYMBOL_relativelocation2 = 303,        /* relativelocation2  */
+  YYSYMBOL_dstregion = 304,                /* dstregion  */
+  YYSYMBOL_region = 305,                   /* region  */
+  YYSYMBOL_region_wh = 306,                /* region_wh  */
+  YYSYMBOL_indirectregion = 307,           /* indirectregion  */
+  YYSYMBOL_regtype = 308,                  /* regtype  */
+  YYSYMBOL_srcimmtype = 309,               /* srcimmtype  */
+  YYSYMBOL_swizzle = 310,                  /* swizzle  */
+  YYSYMBOL_chansel = 311,                  /* chansel  */
+  YYSYMBOL_writemask = 312,                /* writemask  */
+  YYSYMBOL_writemask_x = 313,              /* writemask_x  */
+  YYSYMBOL_writemask_y = 314,              /* writemask_y  */
+  YYSYMBOL_writemask_z = 315,              /* writemask_z  */
+  YYSYMBOL_writemask_w = 316,              /* writemask_w  */
+  YYSYMBOL_imm32 = 317,                    /* imm32  */
+  YYSYMBOL_predicate = 318,                /* predicate  */
+  YYSYMBOL_predstate = 319,                /* predstate  */
+  YYSYMBOL_predctrl = 320,                 /* predctrl  */
+  YYSYMBOL_negate = 321,                   /* negate  */
+  YYSYMBOL_abs = 322,                      /* abs  */
+  YYSYMBOL_execsize = 323,                 /* execsize  */
+  YYSYMBOL_saturate = 324,                 /* saturate  */
+  YYSYMBOL_conditionalmodifier = 325,      /* conditionalmodifier  */
+  YYSYMBOL_condition = 326,                /* condition  */
+  YYSYMBOL_instoptions = 327,              /* instoptions  */
+  YYSYMBOL_instoption_list = 328,          /* instoption_list  */
+  YYSYMBOL_instoption = 329                /* instoption  */
+};
+typedef enum yysymbol_kind_t yysymbol_kind_t;
+
+
+
+/* Unqualified %code blocks.  */
+#line 572 "gram.y"
+
+
+#undef error
+#define error(l, fmt, ...)			\
+    do {					\
+	message(ERROR, l, fmt, ## __VA_ARGS__);	\
+	YYERROR;				\
+    } while(0)
+
+static void add_option(struct options *options, int option)
+{
+    switch (option) {
+    case ALIGN1:
+	options->access_mode = BRW_ALIGN_1;
+	break;
+    case ALIGN16:
+	options->access_mode = BRW_ALIGN_16;
+	break;
+    case SECHALF:
+	options->compression_control |= BRW_COMPRESSION_2NDHALF;
+	break;
+    case COMPR:
+	if (!IS_GENp(6))
+	    options->compression_control |= BRW_COMPRESSION_COMPRESSED;
+	break;
+    case SWITCH:
+	options->thread_control |= BRW_THREAD_SWITCH;
+	break;
+    case ATOMIC:
+	options->thread_control |= BRW_THREAD_ATOMIC;
+	break;
+    case NODDCHK:
+	options->dependency_control |= BRW_DEPENDENCY_NOTCHECKED;
+	break;
+    case NODDCLR:
+	options->dependency_control |= BRW_DEPENDENCY_NOTCLEARED;
+	break;
+    case MASK_DISABLE:
+	options->mask_control = BRW_MASK_DISABLE;
+	break;
+    case BREAKPOINT:
+	options->debug_control = BRW_DEBUG_BREAKPOINT;
+	break;
+    case ACCWRCTRL:
+	options->acc_wr_control = BRW_ACCUMULATOR_WRITE_ENABLE;
+	break;
+    case EOT:
+	options->end_of_thread = 1;
+	break;
+    }
+}
+
+
+#line 924 "gram.c"
+
+#ifdef short
+# undef short
+#endif
+
+/* On compilers that do not define __PTRDIFF_MAX__ etc., make sure
+   <limits.h> and (if available) <stdint.h> are included
+   so that the code can choose integer types of a good width.  */
+
+#ifndef __PTRDIFF_MAX__
+# include <limits.h> /* INFRINGES ON USER NAME SPACE */
+# if defined __STDC_VERSION__ && 199901 <= __STDC_VERSION__
+#  include <stdint.h> /* INFRINGES ON USER NAME SPACE */
+#  define YY_STDINT_H
+# endif
+#endif
+
+/* Narrow types that promote to a signed type and that can represent a
+   signed or unsigned integer of at least N bits.  In tables they can
+   save space and decrease cache pressure.  Promoting to a signed type
+   helps avoid bugs in integer arithmetic.  */
+
+#ifdef __INT_LEAST8_MAX__
+typedef __INT_LEAST8_TYPE__ yytype_int8;
+#elif defined YY_STDINT_H
+typedef int_least8_t yytype_int8;
+#else
+typedef signed char yytype_int8;
+#endif
+
+#ifdef __INT_LEAST16_MAX__
+typedef __INT_LEAST16_TYPE__ yytype_int16;
+#elif defined YY_STDINT_H
+typedef int_least16_t yytype_int16;
+#else
+typedef short yytype_int16;
+#endif
+
+/* Work around bug in HP-UX 11.23, which defines these macros
+   incorrectly for preprocessor constants.  This workaround can likely
+   be removed in 2023, as HPE has promised support for HP-UX 11.23
+   (aka HP-UX 11i v2) only through the end of 2022; see Table 2 of
+   <https://h20195.www2.hpe.com/V2/getpdf.aspx/4AA4-7673ENW.pdf>.  */
+#ifdef __hpux
+# undef UINT_LEAST8_MAX
+# undef UINT_LEAST16_MAX
+# define UINT_LEAST8_MAX 255
+# define UINT_LEAST16_MAX 65535
+#endif
+
+#if defined __UINT_LEAST8_MAX__ && __UINT_LEAST8_MAX__ <= __INT_MAX__
+typedef __UINT_LEAST8_TYPE__ yytype_uint8;
+#elif (!defined __UINT_LEAST8_MAX__ && defined YY_STDINT_H \
+       && UINT_LEAST8_MAX <= INT_MAX)
+typedef uint_least8_t yytype_uint8;
+#elif !defined __UINT_LEAST8_MAX__ && UCHAR_MAX <= INT_MAX
+typedef unsigned char yytype_uint8;
+#else
+typedef short yytype_uint8;
+#endif
+
+#if defined __UINT_LEAST16_MAX__ && __UINT_LEAST16_MAX__ <= __INT_MAX__
+typedef __UINT_LEAST16_TYPE__ yytype_uint16;
+#elif (!defined __UINT_LEAST16_MAX__ && defined YY_STDINT_H \
+       && UINT_LEAST16_MAX <= INT_MAX)
+typedef uint_least16_t yytype_uint16;
+#elif !defined __UINT_LEAST16_MAX__ && USHRT_MAX <= INT_MAX
+typedef unsigned short yytype_uint16;
+#else
+typedef int yytype_uint16;
+#endif
+
+#ifndef YYPTRDIFF_T
+# if defined __PTRDIFF_TYPE__ && defined __PTRDIFF_MAX__
+#  define YYPTRDIFF_T __PTRDIFF_TYPE__
+#  define YYPTRDIFF_MAXIMUM __PTRDIFF_MAX__
+# elif defined PTRDIFF_MAX
+#  ifndef ptrdiff_t
+#   include <stddef.h> /* INFRINGES ON USER NAME SPACE */
+#  endif
+#  define YYPTRDIFF_T ptrdiff_t
+#  define YYPTRDIFF_MAXIMUM PTRDIFF_MAX
+# else
+#  define YYPTRDIFF_T long
+#  define YYPTRDIFF_MAXIMUM LONG_MAX
+# endif
+#endif
+
+#ifndef YYSIZE_T
+# ifdef __SIZE_TYPE__
+#  define YYSIZE_T __SIZE_TYPE__
+# elif defined size_t
+#  define YYSIZE_T size_t
+# elif defined __STDC_VERSION__ && 199901 <= __STDC_VERSION__
+#  include <stddef.h> /* INFRINGES ON USER NAME SPACE */
+#  define YYSIZE_T size_t
+# else
+#  define YYSIZE_T unsigned
+# endif
+#endif
+
+#define YYSIZE_MAXIMUM                                  \
+  YY_CAST (YYPTRDIFF_T,                                 \
+           (YYPTRDIFF_MAXIMUM < YY_CAST (YYSIZE_T, -1)  \
+            ? YYPTRDIFF_MAXIMUM                         \
+            : YY_CAST (YYSIZE_T, -1)))
+
+#define YYSIZEOF(X) YY_CAST (YYPTRDIFF_T, sizeof (X))
+
+
+/* Stored state numbers (used for stacks). */
+typedef yytype_int16 yy_state_t;
+
+/* State numbers in computations.  */
+typedef int yy_state_fast_t;
+
+#ifndef YY_
+# if defined YYENABLE_NLS && YYENABLE_NLS
+#  if ENABLE_NLS
+#   include <libintl.h> /* INFRINGES ON USER NAME SPACE */
+#   define YY_(Msgid) dgettext ("bison-runtime", Msgid)
+#  endif
+# endif
+# ifndef YY_
+#  define YY_(Msgid) Msgid
+# endif
+#endif
+
+
+#ifndef YY_ATTRIBUTE_PURE
+# if defined __GNUC__ && 2 < __GNUC__ + (96 <= __GNUC_MINOR__)
+#  define YY_ATTRIBUTE_PURE __attribute__ ((__pure__))
+# else
+#  define YY_ATTRIBUTE_PURE
+# endif
+#endif
+
+#ifndef YY_ATTRIBUTE_UNUSED
+# if defined __GNUC__ && 2 < __GNUC__ + (7 <= __GNUC_MINOR__)
+#  define YY_ATTRIBUTE_UNUSED __attribute__ ((__unused__))
+# else
+#  define YY_ATTRIBUTE_UNUSED
+# endif
+#endif
+
+/* Suppress unused-variable warnings by "using" E.  */
+#if ! defined lint || defined __GNUC__
+# define YY_USE(E) ((void) (E))
+#else
+# define YY_USE(E) /* empty */
+#endif
+
+/* Suppress an incorrect diagnostic about yylval being uninitialized.  */
+#if defined __GNUC__ && ! defined __ICC && 406 <= __GNUC__ * 100 + __GNUC_MINOR__
+# if __GNUC__ * 100 + __GNUC_MINOR__ < 407
+#  define YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN                           \
+    _Pragma ("GCC diagnostic push")                                     \
+    _Pragma ("GCC diagnostic ignored \"-Wuninitialized\"")
+# else
+#  define YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN                           \
+    _Pragma ("GCC diagnostic push")                                     \
+    _Pragma ("GCC diagnostic ignored \"-Wuninitialized\"")              \
+    _Pragma ("GCC diagnostic ignored \"-Wmaybe-uninitialized\"")
+# endif
+# define YY_IGNORE_MAYBE_UNINITIALIZED_END      \
+    _Pragma ("GCC diagnostic pop")
+#else
+# define YY_INITIAL_VALUE(Value) Value
+#endif
+#ifndef YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
+# define YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
+# define YY_IGNORE_MAYBE_UNINITIALIZED_END
+#endif
+#ifndef YY_INITIAL_VALUE
+# define YY_INITIAL_VALUE(Value) /* Nothing. */
+#endif
+
+#if defined __cplusplus && defined __GNUC__ && ! defined __ICC && 6 <= __GNUC__
+# define YY_IGNORE_USELESS_CAST_BEGIN                          \
+    _Pragma ("GCC diagnostic push")                            \
+    _Pragma ("GCC diagnostic ignored \"-Wuseless-cast\"")
+# define YY_IGNORE_USELESS_CAST_END            \
+    _Pragma ("GCC diagnostic pop")
+#endif
+#ifndef YY_IGNORE_USELESS_CAST_BEGIN
+# define YY_IGNORE_USELESS_CAST_BEGIN
+# define YY_IGNORE_USELESS_CAST_END
+#endif
+
+
+#define YY_ASSERT(E) ((void) (0 && (E)))
+
+#if !defined yyoverflow
+
+/* The parser invokes alloca or malloc; define the necessary symbols.  */
+
+# ifdef YYSTACK_USE_ALLOCA
+#  if YYSTACK_USE_ALLOCA
+#   ifdef __GNUC__
+#    define YYSTACK_ALLOC __builtin_alloca
+#   elif defined __BUILTIN_VA_ARG_INCR
+#    include <alloca.h> /* INFRINGES ON USER NAME SPACE */
+#   elif defined _AIX
+#    define YYSTACK_ALLOC __alloca
+#   elif defined _MSC_VER
+#    include <malloc.h> /* INFRINGES ON USER NAME SPACE */
+#    define alloca _alloca
+#   else
+#    define YYSTACK_ALLOC alloca
+#    if ! defined _ALLOCA_H && ! defined EXIT_SUCCESS
+#     include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
+      /* Use EXIT_SUCCESS as a witness for stdlib.h.  */
+#     ifndef EXIT_SUCCESS
+#      define EXIT_SUCCESS 0
+#     endif
+#    endif
+#   endif
+#  endif
+# endif
+
+# ifdef YYSTACK_ALLOC
+   /* Pacify GCC's 'empty if-body' warning.  */
+#  define YYSTACK_FREE(Ptr) do { /* empty */; } while (0)
+#  ifndef YYSTACK_ALLOC_MAXIMUM
+    /* The OS might guarantee only one guard page at the bottom of the stack,
+       and a page size can be as small as 4096 bytes.  So we cannot safely
+       invoke alloca (N) if N exceeds 4096.  Use a slightly smaller number
+       to allow for a few compiler-allocated temporary stack slots.  */
+#   define YYSTACK_ALLOC_MAXIMUM 4032 /* reasonable circa 2006 */
+#  endif
+# else
+#  define YYSTACK_ALLOC YYMALLOC
+#  define YYSTACK_FREE YYFREE
+#  ifndef YYSTACK_ALLOC_MAXIMUM
+#   define YYSTACK_ALLOC_MAXIMUM YYSIZE_MAXIMUM
+#  endif
+#  if (defined __cplusplus && ! defined EXIT_SUCCESS \
+       && ! ((defined YYMALLOC || defined malloc) \
+             && (defined YYFREE || defined free)))
+#   include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
+#   ifndef EXIT_SUCCESS
+#    define EXIT_SUCCESS 0
+#   endif
+#  endif
+#  ifndef YYMALLOC
+#   define YYMALLOC malloc
+#   if ! defined malloc && ! defined EXIT_SUCCESS
+void *malloc (YYSIZE_T); /* INFRINGES ON USER NAME SPACE */
+#   endif
+#  endif
+#  ifndef YYFREE
+#   define YYFREE free
+#   if ! defined free && ! defined EXIT_SUCCESS
+void free (void *); /* INFRINGES ON USER NAME SPACE */
+#   endif
+#  endif
+# endif
+#endif /* !defined yyoverflow */
+
+#if (! defined yyoverflow \
+     && (! defined __cplusplus \
+         || (defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL \
+             && defined YYSTYPE_IS_TRIVIAL && YYSTYPE_IS_TRIVIAL)))
+
+/* A type that is properly aligned for any stack member.  */
+union yyalloc
+{
+  yy_state_t yyss_alloc;
+  YYSTYPE yyvs_alloc;
+  YYLTYPE yyls_alloc;
+};
+
+/* The size of the maximum gap between one aligned stack and the next.  */
+# define YYSTACK_GAP_MAXIMUM (YYSIZEOF (union yyalloc) - 1)
+
+/* The size of an array large to enough to hold all stacks, each with
+   N elements.  */
+# define YYSTACK_BYTES(N) \
+     ((N) * (YYSIZEOF (yy_state_t) + YYSIZEOF (YYSTYPE) \
+             + YYSIZEOF (YYLTYPE)) \
+      + 2 * YYSTACK_GAP_MAXIMUM)
+
+# define YYCOPY_NEEDED 1
+
+/* Relocate STACK from its old location to the new one.  The
+   local variables YYSIZE and YYSTACKSIZE give the old and new number of
+   elements in the stack, and YYPTR gives the new location of the
+   stack.  Advance YYPTR to a properly aligned location for the next
+   stack.  */
+# define YYSTACK_RELOCATE(Stack_alloc, Stack)                           \
+    do                                                                  \
+      {                                                                 \
+        YYPTRDIFF_T yynewbytes;                                         \
+        YYCOPY (&yyptr->Stack_alloc, Stack, yysize);                    \
+        Stack = &yyptr->Stack_alloc;                                    \
+        yynewbytes = yystacksize * YYSIZEOF (*Stack) + YYSTACK_GAP_MAXIMUM; \
+        yyptr += yynewbytes / YYSIZEOF (*yyptr);                        \
+      }                                                                 \
+    while (0)
+
+#endif
+
+#if defined YYCOPY_NEEDED && YYCOPY_NEEDED
+/* Copy COUNT objects from SRC to DST.  The source and destination do
+   not overlap.  */
+# ifndef YYCOPY
+#  if defined __GNUC__ && 1 < __GNUC__
+#   define YYCOPY(Dst, Src, Count) \
+      __builtin_memcpy (Dst, Src, YY_CAST (YYSIZE_T, (Count)) * sizeof (*(Src)))
+#  else
+#   define YYCOPY(Dst, Src, Count)              \
+      do                                        \
+        {                                       \
+          YYPTRDIFF_T yyi;                      \
+          for (yyi = 0; yyi < (Count); yyi++)   \
+            (Dst)[yyi] = (Src)[yyi];            \
+        }                                       \
+      while (0)
+#  endif
+# endif
+#endif /* !YYCOPY_NEEDED */
+
+/* YYFINAL -- State number of the termination state.  */
+#define YYFINAL  61
+/* YYLAST -- Last index in YYTABLE.  */
+#define YYLAST   1033
+
+/* YYNTOKENS -- Number of terminals.  */
+#define YYNTOKENS  213
+/* YYNNTS -- Number of nonterminals.  */
+#define YYNNTS  117
+/* YYNRULES -- Number of rules.  */
+#define YYNRULES  360
+/* YYNSTATES -- Number of states.  */
+#define YYNSTATES  621
+
+/* YYMAXUTOK -- Last valid token kind.  */
+#define YYMAXUTOK   467
+
+
+/* YYTRANSLATE(TOKEN-NUM) -- Symbol number corresponding to TOKEN-NUM
+   as returned by yylex, with out-of-bounds checking.  */
+#define YYTRANSLATE(YYX)                                \
+  (0 <= (YYX) && (YYX) <= YYMAXUTOK                     \
+   ? YY_CAST (yysymbol_kind_t, yytranslate[YYX])        \
+   : YYSYMBOL_YYUNDEF)
+
+/* YYTRANSLATE[TOKEN-NUM] -- Symbol number corresponding to TOKEN-NUM
+   as returned by yylex.  */
+static const yytype_uint8 yytranslate[] =
+{
+       0,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     2,     2,     2,     2,
+       2,     2,     2,     2,     2,     2,     1,     2,     3,     4,
+       5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
+      15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
+      25,    26,    27,    28,    29,    30,    31,    32,    33,    34,
+      35,    36,    37,    38,    39,    40,    41,    42,    43,    44,
+      45,    46,    47,    48,    49,    50,    51,    52,    53,    54,
+      55,    56,    57,    58,    59,    60,    61,    62,    63,    64,
+      65,    66,    67,    68,    69,    70,    71,    72,    73,    74,
+      75,    76,    77,    78,    79,    80,    81,    82,    83,    84,
+      85,    86,    87,    88,    89,    90,    91,    92,    93,    94,
+      95,    96,    97,    98,    99,   100,   101,   102,   103,   104,
+     105,   106,   107,   108,   109,   110,   111,   112,   113,   114,
+     115,   116,   117,   118,   119,   120,   121,   122,   123,   124,
+     125,   126,   127,   128,   129,   130,   131,   132,   133,   134,
+     135,   136,   137,   138,   139,   140,   141,   142,   143,   144,
+     145,   146,   147,   148,   149,   150,   151,   152,   153,   154,
+     155,   156,   157,   158,   159,   160,   161,   162,   163,   164,
+     165,   166,   167,   168,   169,   170,   171,   172,   173,   174,
+     175,   176,   177,   178,   179,   180,   181,   182,   183,   184,
+     185,   186,   187,   188,   189,   190,   191,   192,   193,   194,
+     195,   196,   197,   198,   199,   200,   201,   202,   203,   204,
+     205,   206,   207,   208,   209,   210,   211,   212
+};
+
+#if YYDEBUG
+/* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
+static const yytype_int16 yyrline[] =
+{
+       0,   627,   627,   628,   631,   632,   633,   634,   635,   636,
+     637,   640,   647,   650,   655,   660,   668,   673,   677,   682,
+     687,   712,   714,   717,   722,   727,   728,   729,   730,   731,
+     734,   738,   743,   748,   753,   758,   762,   767,   772,   777,
+     785,   786,   787,   788,   789,   790,   791,   792,   796,   797,
+     798,   799,   800,   801,   802,   805,   817,   829,   855,   878,
+     895,   927,   934,   951,   966,   987,  1023,  1045,  1065,  1065,
+    1065,  1065,  1065,  1065,  1065,  1065,  1065,  1065,  1066,  1066,
+    1066,  1066,  1071,  1094,  1094,  1094,  1094,  1094,  1094,  1094,
+    1094,  1094,  1094,  1094,  1094,  1099,  1122,  1122,  1122,  1122,
+    1122,  1122,  1122,  1122,  1122,  1122,  1122,  1122,  1122,  1125,
+    1125,  1125,  1125,  1129,  1152,  1152,  1155,  1234,  1255,  1279,
+    1329,  1380,  1409,  1435,  1441,  1466,  1488,  1502,  1502,  1510,
+    1527,  1534,  1537,  1540,  1552,  1593,  1614,  1623,  1684,  1755,
+    1822,  1846,  1874,  1894,  1914,  1966,  1967,  1970,  1971,  1974,
+    1975,  1978,  1979,  1980,  1984,  1985,  1986,  1989,  1989,  1989,
+    1989,  1989,  1989,  1989,  1989,  1989,  1990,  1990,  1990,  1993,
+    1994,  1997,  1998,  2003,  2003,  2006,  2011,  2026,  2032,  2038,
+    2044,  2050,  2058,  2058,  2058,  2058,  2061,  2071,  2077,  2088,
+    2111,  2116,  2121,  2126,  2134,  2134,  2137,  2137,  2140,  2140,
+    2140,  2143,  2204,  2205,  2216,  2230,  2234,  2242,  2246,  2250,
+    2261,  2261,  2261,  2264,  2271,  2271,  2274,  2274,  2277,  2301,
+    2319,  2335,  2339,  2360,  2368,  2379,  2380,  2385,  2389,  2396,
+    2405,  2414,  2423,  2432,  2444,  2455,  2472,  2482,  2491,  2491,
+    2491,  2491,  2494,  2503,  2512,  2512,  2538,  2574,  2589,  2603,
+    2612,  2623,  2633,  2643,  2650,  2657,  2665,  2677,  2692,  2696,
+    2708,  2717,  2725,  2732,  2745,  2754,  2754,  2762,  2764,  2765,
+    2766,  2767,  2768,  2769,  2770,  2773,  2778,  2779,  2780,  2781,
+    2782,  2783,  2784,  2791,  2795,  2799,  2805,  2805,  2805,  2805,
+    2812,  2816,  2822,  2823,  2826,  2827,  2830,  2831,  2834,  2835,
+    2839,  2840,  2844,  2851,  2860,  2861,  2862,  2865,  2866,  2867,
+    2868,  2869,  2870,  2871,  2872,  2873,  2874,  2875,  2876,  2877,
+    2878,  2879,  2882,  2883,  2886,  2887,  2890,  2894,  2907,  2908,
+    2910,  2916,  2923,  2924,  2925,  2926,  2927,  2928,  2929,  2930,
+    2931,  2932,  2933,  2934,  2938,  2940,  2944,  2949,  2954,  2960,
+    2961,  2962,  2963,  2964,  2965,  2966,  2967,  2968,  2969,  2970,
+    2971
+};
+#endif
+
+/** Accessing symbol of state STATE.  */
+#define YY_ACCESSING_SYMBOL(State) YY_CAST (yysymbol_kind_t, yystos[State])
+
+#if YYDEBUG || 0
+/* The user-facing name of the symbol whose (internal) number is
+   YYSYMBOL.  No bounds checking.  */
+static const char *yysymbol_name (yysymbol_kind_t yysymbol) YY_ATTRIBUTE_UNUSED;
+
+/* YYTNAME[SYMBOL-NUM] -- String name of the symbol SYMBOL-NUM.
+   First, the terminals, then, starting at YYNTOKENS, nonterminals.  */
+static const char *const yytname[] =
+{
+  "\"end of file\"", "error", "\"invalid token\"", "COLON", "SEMICOLON",
+  "LPAREN", "RPAREN", "LANGLE", "RANGLE", "LCURLY", "RCURLY", "LSQUARE",
+  "RSQUARE", "COMMA", "EQ", "ABS", "DOT", "PLUS", "MINUS", "MULTIPLY",
+  "DIVIDE", "TYPE_UD", "TYPE_D", "TYPE_UW", "TYPE_W", "TYPE_UB", "TYPE_B",
+  "TYPE_VF", "TYPE_HF", "TYPE_V", "TYPE_F", "ALIGN1", "ALIGN16", "SECHALF",
+  "COMPR", "SWITCH", "ATOMIC", "NODDCHK", "NODDCLR", "MASK_DISABLE",
+  "BREAKPOINT", "ACCWRCTRL", "EOT", "SEQ", "ANY2H", "ALL2H", "ANY4H",
+  "ALL4H", "ANY8H", "ALL8H", "ANY16H", "ALL16H", "ANYV", "ALLV", "ZERO",
+  "EQUAL", "NOT_ZERO", "NOT_EQUAL", "GREATER", "GREATER_EQUAL", "LESS",
+  "LESS_EQUAL", "ROUND_INCREMENT", "OVERFLOW", "UNORDERED", "GENREG",
+  "MSGREG", "ADDRESSREG", "ACCREG", "FLAGREG", "MASKREG", "AMASK", "IMASK",
+  "LMASK", "CMASK", "MASKSTACKREG", "LMS", "IMS", "MASKSTACKDEPTHREG",
+  "IMSD", "LMSD", "NOTIFYREG", "STATEREG", "CONTROLREG", "IPREG",
+  "GENREGFILE", "MSGREGFILE", "MOV", "FRC", "RNDU", "RNDD", "RNDE", "RNDZ",
+  "NOT", "LZD", "MUL", "MAC", "MACH", "LINE", "SAD2", "SADA2", "DP4",
+  "DPH", "DP3", "DP2", "AVG", "ADD", "SEL", "AND", "OR", "XOR", "SHR",
+  "SHL", "ASR", "CMP", "CMPN", "PLN", "ADDC", "BFI1", "BFREV", "CBIT",
+  "F16TO32", "F32TO16", "FBH", "FBL", "SEND", "SENDC", "NOP", "JMPI", "IF",
+  "IFF", "WHILE", "ELSE", "BREAK", "CONT", "HALT", "MSAVE", "PUSH",
+  "MREST", "POP", "WAIT", "DO", "ENDIF", "ILLEGAL", "MATH_INST", "MAD",
+  "LRP", "BFE", "BFI2", "SUBB", "CALL", "RET", "BRD", "BRC", "NULL_TOKEN",
+  "MATH", "SAMPLER", "GATEWAY", "READ", "WRITE", "URB", "THREAD_SPAWNER",
+  "VME", "DATA_PORT", "CRE", "MSGLEN", "RETURNLEN", "ALLOCATE", "USED",
+  "COMPLETE", "TRANSPOSE", "INTERLEAVE", "SATURATE", "INTEGER", "STRING",
+  "NUMBER", "INV", "LOG", "EXP", "SQRT", "RSQ", "POW", "SIN", "COS",
+  "SINCOS", "INTDIV", "INTMOD", "INTDIVMOD", "SIGNED", "SCALAR", "X", "Y",
+  "Z", "W", "KERNEL_PRAGMA", "END_KERNEL_PRAGMA", "CODE_PRAGMA",
+  "END_CODE_PRAGMA", "REG_COUNT_PAYLOAD_PRAGMA", "REG_COUNT_TOTAL_PRAGMA",
+  "DECLARE_PRAGMA", "BASE", "ELEMENTSIZE", "SRCREGION", "DSTREGION",
+  "TYPE", "DEFAULT_EXEC_SIZE_PRAGMA", "DEFAULT_REG_TYPE_PRAGMA",
+  "SUBREGNUM", "SNDOPR", "UMINUS", "STR_SYMBOL_REG", "EMPTEXECSIZE",
+  "$accept", "simple_int", "exp", "ROOT", "label", "declare_base",
+  "declare_elementsize", "declare_srcregion", "declare_dstregion",
+  "declare_type", "declare_pragma", "reg_count_total_pragma",
+  "reg_count_payload_pragma", "default_exec_size_pragma",
+  "default_reg_type_pragma", "pragma", "instrseq", "instruction",
+  "relocatableinstruction", "ifelseinstruction", "loopinstruction",
+  "haltinstruction", "multibranchinstruction", "subroutineinstruction",
+  "unaryinstruction", "unaryop", "binaryinstruction", "binaryop",
+  "binaryaccinstruction", "binaryaccop", "trinaryop", "trinaryinstruction",
+  "sendop", "sendinstruction", "sndopr", "jumpinstruction",
+  "mathinstruction", "breakinstruction", "breakop", "syncinstruction",
+  "nopinstruction", "payload", "post_dst", "msgtarget", "urb_allocate",
+  "urb_used", "urb_complete", "urb_swizzle", "sampler_datatype",
+  "math_function", "math_signed", "math_scalar", "dst", "dstoperand",
+  "dstoperandex", "dstoperandex_typed", "symbol_reg", "symbol_reg_p",
+  "dstreg", "srcaccimm", "srcacc", "srcimm", "imm32reg",
+  "directsrcaccoperand", "srcarchoperandex", "srcarchoperandex_typed",
+  "sendleadreg", "src", "directsrcoperand", "indirectsrcoperand",
+  "addrparam", "immaddroffset", "subregnum", "directgenreg",
+  "indirectgenreg", "directmsgreg", "indirectmsgreg", "addrreg", "accreg",
+  "flagreg", "maskreg", "mask_subreg", "maskstackreg", "maskstack_subreg",
+  "notifyreg", "statereg", "controlreg", "ipreg", "nullreg",
+  "relativelocation", "relativelocation2", "dstregion", "region",
+  "region_wh", "indirectregion", "regtype", "srcimmtype", "swizzle",
+  "chansel", "writemask", "writemask_x", "writemask_y", "writemask_z",
+  "writemask_w", "imm32", "predicate", "predstate", "predctrl", "negate",
+  "abs", "execsize", "saturate", "conditionalmodifier", "condition",
+  "instoptions", "instoption_list", "instoption", YY_NULLPTR
+};
+
+static const char *
+yysymbol_name (yysymbol_kind_t yysymbol)
+{
+  return yytname[yysymbol];
+}
+#endif
+
+#define YYPACT_NINF (-505)
+
+#define yypact_value_is_default(Yyn) \
+  ((Yyn) == YYPACT_NINF)
+
+#define YYTABLE_NINF (-323)
+
+#define yytable_value_is_error(Yyn) \
+  0
+
+/* YYPACT[STATE-NUM] -- Index in YYTABLE of the portion describing
+   STATE-NUM.  */
+static const yytype_int16 yypact[] =
+{
+      86,    87,  -505,    29,  -505,   107,    58,    11,    11,   -96,
+      11,   446,    89,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+     426,    92,    96,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,   880,  -505,
+    -505,    33,    11,    19,    19,  -505,    11,    11,  -505,   610,
+     610,   -95,   610,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,   115,  -505,  -505,  -505,   122,   124,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+      29,    29,    29,  -505,  -505,    29,    51,    29,  -505,  -505,
+    -505,  -505,  -505,    29,    29,    29,    29,   867,   867,   867,
+     867,    29,    29,   118,   401,    97,   -37,  -505,  -505,  -505,
+     132,   132,   308,  -505,    11,    11,    11,    11,   142,   -44,
+    -505,  -505,  -505,   165,    19,    19,    19,   446,  -505,   786,
+     786,   812,    19,    19,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,   -11,   158,   -11,   -11,   -11,
+     613,    19,    11,  -505,  -135,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,   170,  -505,  -505,  -505,  -505,
+    -505,  -505,   104,   104,  -505,  -505,   -13,   168,   -16,   118,
+     201,   210,   610,  -505,   216,   218,  -505,    19,   132,    19,
+    -505,   118,   118,   118,   118,  -505,  -505,  -505,  -505,   118,
+    -505,  -505,   118,   446,   220,  -505,   210,   766,  -505,  -505,
+     222,   222,  -505,   222,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,   222,    19,   766,
+     132,    19,  -505,    29,    33,    29,    29,    29,   745,   -41,
+      19,    63,  -505,  -505,  -505,  -505,  -505,   424,  -505,    11,
+     225,    37,  -505,   176,    11,    11,   446,    11,  -505,  -505,
+     446,  -505,  -505,   132,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,   176,  -505,   118,  -505,   216,   593,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,   216,  -505,  -505,   216,   231,    11,
+     446,  -505,   235,   446,   132,   132,  -505,   132,   786,  -505,
+     786,   786,   786,   766,  -505,  -505,   636,  -505,  -505,   132,
+    -505,   699,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,   610,   216,   243,    54,   250,
+     253,   364,   291,  -505,   347,  -505,  -505,   262,  -505,   446,
+      11,  -505,   610,   725,  -505,  -505,  -505,   592,   446,   446,
+    -505,   -47,   147,  -505,    85,   446,  -505,  -505,  -505,  -505,
+     410,   766,   724,   766,   787,  -505,   231,   610,   593,   593,
+    -505,  -505,  -505,   222,   265,  -505,  -505,    11,  -505,    11,
+      11,  -505,    11,    11,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,   132,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,   216,
+     216,   218,  -505,  -505,    90,  -505,   132,  -505,  -505,  -505,
+    -505,  -505,   216,   593,   593,   766,  -505,   725,   271,  -505,
+     277,   278,   114,   283,   286,   289,   292,   131,   -52,   132,
+     132,   575,    49,   132,   132,  -505,   446,   610,  -505,   379,
+     484,   569,    68,  -505,   446,   287,   446,  -505,   113,  -505,
+     446,   132,   132,   766,   -11,   133,   140,   144,     1,   149,
+     150,   159,   163,    11,  -505,  -505,    11,   132,   132,  -505,
+    -505,  -505,  -505,    11,    11,  -505,  -505,   531,   446,   287,
+    -505,   155,  -505,  -505,  -505,   132,   127,   324,   327,   336,
+    -505,  -505,   183,   341,   344,   345,   346,     3,  -505,  -505,
+     393,   492,  -505,  -505,  -505,  -505,   531,  -505,  -505,  -505,
+    -505,  -505,  -505,   173,   199,   200,   203,  -505,   206,   207,
+     214,   215,   217,    11,  -505,  -505,   531,  -505,  -505,   366,
+     378,   380,  -505,   226,   381,   391,   394,   402,   587,   531,
+      38,   236,   241,  -505,  -505,   249,   256,   259,  -505,  -505,
+    -505,  -505,  -505,  -505,   427,   422,   423,   437,   431,   460,
+    -505,   301,   315,  -505,   316,   317,   469,    64,   489,   485,
+    -505,  -505,   332,  -505,   335,   556,   550,  -505,   392,   563,
+    -505
+};
+
+/* YYDEFACT[STATE-NUM] -- Default reduction number in state STATE-NUM.
+   Performed when YYTABLE does not specify something else to do.  Zero
+   means the default is an error.  */
+static const yytype_int16 yydefact[] =
+{
+     302,   304,   130,   326,    61,   326,     0,     0,     0,     0,
+       0,   267,     0,    37,    29,    25,    26,    27,    28,    38,
+       0,     0,     0,    48,    49,    50,    51,    52,    40,    41,
+      42,    43,    44,    53,    46,    54,    45,    47,     0,   305,
+     306,     0,     0,     0,     0,    12,     0,     0,     4,    22,
+      21,     0,    23,   269,   270,   271,   272,   273,   274,   268,
+      24,     1,     0,    35,    36,    30,     0,     0,    32,    34,
+      68,    69,    70,    71,    72,    73,    74,    75,    83,    84,
+      85,    86,    87,    88,    89,    90,    91,    92,    96,    97,
+      98,    99,   100,   101,   102,   103,   104,   105,   106,    93,
+     107,    94,    76,    77,    78,    79,    80,    81,   114,   115,
+     326,   326,   326,   127,   128,   326,     0,   326,   109,   110,
+     111,   112,   108,   326,   326,   326,   326,   332,   332,   332,
+     332,   326,   326,   228,   307,     0,     0,     2,   252,   251,
+     344,   344,     0,     9,     0,     0,     0,     0,     0,     0,
+      39,    31,    33,     0,     0,     0,     0,   267,   129,     0,
+       0,     0,     0,     0,   333,   334,   335,   336,   337,   338,
+     339,   340,   341,   342,   343,   328,   330,   328,   328,   328,
+       0,     0,     0,   235,     0,   314,   315,   316,   317,   318,
+     319,   320,   321,   312,   313,     0,   327,     3,   348,    57,
+      56,    10,     5,     6,     7,     8,     0,     0,    15,   228,
+       0,   253,   254,   256,   260,   260,   124,    58,   344,     0,
+     246,   228,   228,   228,   228,   238,   239,   240,   241,   228,
+     245,   244,   228,   267,     0,   250,   186,   322,   173,   174,
+     258,   258,   187,   258,   190,   192,   191,   193,   184,   182,
+     183,   185,   237,   178,   243,   179,   180,   258,     0,   322,
+     344,     0,   329,   326,     0,   326,   326,   326,     0,     0,
+       0,   227,   308,   309,   310,   311,   303,     0,    13,     0,
+       0,    17,   229,     0,     0,     0,   267,     0,   265,   266,
+     267,    59,    60,   344,   231,   233,   234,   236,   242,   248,
+     249,     0,   323,   228,   221,   260,   322,   216,   217,   211,
+     210,   212,   205,   207,   260,   206,   208,   260,   324,     0,
+     267,   175,   290,   267,   344,   344,    63,   344,     0,   331,
+       0,     0,     0,   322,   132,   213,   322,   214,   215,   344,
+     345,     0,   349,   350,   351,   352,   353,   354,   355,   356,
+     357,   358,   359,   360,   347,    14,   260,     0,     0,     0,
+     224,     0,     0,   255,     0,   257,    62,     0,   247,   267,
+     323,   301,   300,     0,   200,   198,   199,   275,   267,   267,
+     325,     0,     0,   177,   292,   267,   181,    65,    66,    64,
+     322,   322,   322,   322,     0,   131,   324,   123,   322,   322,
+     126,   346,    16,   258,     0,    20,   230,   225,   188,     0,
+       0,   261,     0,     0,   232,   204,   157,   158,   159,   160,
+     168,   161,   162,   163,   164,   165,   166,   167,   344,   277,
+     278,   279,   280,   282,   281,   276,   201,   219,   209,   260,
+     260,   260,   259,   293,   294,   176,   344,   194,   195,   196,
+     202,   197,   260,   322,   322,   322,   133,     0,     0,   136,
+       0,     0,     0,     0,     0,     0,     0,     0,     0,   344,
+     344,   300,     0,   344,   344,    18,   267,   226,   223,     0,
+       0,     0,     0,   125,   267,   283,   267,   295,   296,    67,
+     267,   344,   344,   322,   328,     0,     0,     0,   153,     0,
+       0,     0,     0,     0,   119,   120,   323,   344,   344,   118,
+     117,    19,   189,     0,     0,   264,   218,     0,   267,   283,
+     297,   298,   203,    82,    95,   344,   169,     0,     0,     0,
+     151,   152,   146,     0,     0,     0,     0,     0,   122,   121,
+       0,     0,   286,   287,   288,   289,   284,   220,   222,   299,
+     291,   113,   170,   171,     0,     0,     0,   145,   148,     0,
+       0,     0,     0,     0,   263,   262,     0,   172,   135,     0,
+       0,     0,   147,   150,     0,     0,     0,     0,   344,     0,
+       0,     0,     0,   149,   140,     0,     0,     0,   143,   116,
+     285,   155,   156,   154,     0,     0,     0,     0,     0,     0,
+     134,     0,     0,   141,     0,     0,     0,     0,     0,     0,
+     137,   138,     0,   142,     0,     0,     0,   139,     0,     0,
+     144
+};
+
+/* YYPGOTO[NTERM-NUM].  */
+static const yytype_int16 yypgoto[] =
+{
+    -505,  -505,    -7,  -505,   561,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,  -505,   564,  -505,   571,   577,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,
+    -505,  -505,  -505,  -505,   202,  -505,  -505,  -505,  -505,  -505,
+    -505,   263,  -505,  -505,  -505,  -505,  -505,  -505,  -505,   145,
+    -505,  -505,   -12,  -505,   442,  -505,  -261,   456,   404,  -505,
+     228,  -245,  -354,  -505,  -505,  -505,  -505,  -249,   302,  -291,
+     311,  -505,  -158,  -144,  -141,   348,  -505,    88,  -295,   -30,
+    -133,  -505,  -111,  -505,   507,  -505,   -67,    93,   110,    -3,
+    -505,  -224,  -207,  -505,   193,  -143,  -505,   117,  -504,  -505,
+    -505,  -505,  -505,  -505,  -505,  -505,  -505,  -505,  -290,   247,
+      79,  -173,   -98,  -505,  -139,  -505,   296
+};
+
+/* YYDEFGOTO[NTERM-NUM].  */
+static const yytype_int16 yydefgoto[] =
+{
+       0,   139,   372,    12,    13,   149,   208,   281,   358,   405,
+      14,    15,    16,    17,    18,    19,    20,    21,    22,    23,
+      24,    25,    26,    27,    28,   127,    29,   128,    30,   129,
+     130,    31,   131,    32,   398,    33,    34,    35,   132,    36,
+      37,   394,   333,   467,   558,   573,   584,   532,   594,   428,
+     553,   568,   237,   238,   239,   240,   241,   242,   243,   446,
+     447,   373,   374,   449,   304,   305,   336,   306,   307,   308,
+     359,   478,   183,   244,   245,   246,   247,   309,   249,   310,
+     311,   252,   312,   254,   313,   314,   315,   316,   317,   140,
+     216,   320,   288,   289,   290,    60,   436,   518,   546,   385,
+     444,   488,   521,   550,   377,    38,    41,   195,   318,   381,
+      43,   263,   175,   176,   199,   277,   354
+};
+
+/* YYTABLE[YYPACT[STATE-NUM]] -- What to do in state STATE-NUM.  If
+   positive, shift that token.  If negative, reduce the rule whose
+   number is the opposite.  If YYTABLE_NINF, syntax error.  */
+static const yytype_int16 yytable[] =
+{
+      49,    50,   200,    52,   265,   266,   267,   286,   335,   214,
+     325,   134,   215,   209,   220,   376,    46,   321,   209,   322,
+     144,   145,   146,   147,   209,   221,   251,   251,   251,    47,
+     177,   178,   179,   323,    42,   135,   448,   136,   210,   142,
+     143,   141,   566,   396,   469,   473,   396,   251,   253,   253,
+     253,   282,   209,   221,    46,   272,   273,   274,   275,   591,
+     592,    45,   579,   294,   295,   296,   297,    47,   593,   253,
+     611,   298,   210,   234,   299,   590,   515,   612,    51,   292,
+     144,   514,   146,   147,    44,   144,   145,   146,   147,    61,
+     300,     1,   255,   255,   255,   452,    68,   452,   369,   451,
+      69,   451,   133,   196,    39,    40,   148,   378,   396,   396,
+     379,   -55,    42,   255,   144,   145,   146,   147,   508,   150,
+     439,   326,   236,   146,   147,   337,   151,   236,   152,   250,
+     250,   250,   157,   236,   182,   251,   197,   202,   203,   204,
+     205,   198,   453,   363,   455,   368,   212,   365,   258,   402,
+     250,   217,   218,   219,   366,   442,   206,   253,   207,   260,
+     261,   262,   376,   376,   144,   145,   146,   147,   269,   563,
+      46,   530,   531,   268,   264,   271,   276,   383,   270,   475,
+     386,   396,   279,    47,    48,   387,   388,   280,   389,   153,
+     154,   155,   137,   138,   156,   251,   159,   251,   251,   251,
+     400,   255,   160,   161,   162,   163,   493,   439,   491,   492,
+     180,   181,   283,     2,   291,   284,   293,   253,     3,   253,
+     253,   253,    48,   285,   371,   287,   415,     4,     5,   319,
+     209,   301,   484,   485,   329,   437,   438,   440,   250,   356,
+     441,   357,   445,   222,   525,   490,   380,   248,   248,   248,
+     210,   384,   256,   256,   256,   324,   334,   403,   327,   404,
+       6,   255,   406,   255,   255,   255,   407,   339,   248,   257,
+     257,   257,   355,   256,   414,   443,   495,   361,   362,   476,
+     364,   487,   496,   497,     7,     8,     9,   498,   499,   483,
+     257,   500,    10,    11,   501,   410,   503,   502,   250,   411,
+     250,   250,   250,   517,   412,   520,   527,   489,   144,   145,
+     146,   147,   382,   528,   201,   552,   390,   529,   391,   392,
+     393,   526,   533,   534,   440,   144,   145,   146,   147,   397,
+     504,   505,   535,   511,   509,   510,   536,   554,    48,   211,
+     555,   516,   328,   519,   330,   331,   332,   522,   549,   556,
+     557,   410,   523,   524,   559,   411,   248,   560,   561,   562,
+     413,   256,   567,   143,   144,   145,   146,   147,   538,   539,
+     408,   360,   569,   570,   572,   547,   571,   409,   257,   580,
+     574,   144,   145,   146,   147,   512,   551,   575,   576,   360,
+     577,   581,   471,   582,   585,   583,   144,   145,   146,   147,
+     477,   564,   479,   480,   586,   481,   482,   587,   588,   595,
+     144,   145,   146,   147,   596,    46,   248,   184,   248,   248,
+     248,   256,   597,   256,   256,   256,   -11,    62,   370,   598,
+      63,     1,   599,   600,   340,   601,   602,   341,   257,   589,
+     257,   257,   257,   603,   604,   185,   186,   187,   188,   189,
+     190,   191,   192,   193,   194,   342,   343,   344,   345,   346,
+     347,   348,   349,   350,   351,   352,   353,    53,    54,    55,
+      56,    57,    58,   605,   606,   610,    59,   222,   223,   133,
+     224,   225,   226,   227,   228,   229,   230,   231,   607,   608,
+     609,   157,   303,   232,   233,   613,   537,   513,   614,   203,
+     565,   144,   145,   146,   147,   615,   540,   541,   616,   144,
+     145,   146,   147,  -302,  -302,  -302,  -302,  -302,  -302,  -302,
+    -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,
+    -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,
+    -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,
+    -302,  -302,  -302,     2,  -302,  -302,   578,  -302,     3,  -302,
+    -302,  -302,   617,   618,   235,   619,  -302,     4,     5,   620,
+    -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,  -302,
+    -123,    64,   514,    48,    65,   371,   144,   145,   146,   147,
+    -322,    66,   144,   506,   146,   147,   198,    67,    46,   399,
+       6,   472,   494,   259,   144,   145,   146,   147,   375,   213,
+     278,   370,   367,   429,   430,   431,   432,   338,    46,   433,
+     454,   434,   435,   158,     7,     8,     9,   144,   145,   146,
+     147,    47,    10,    11,   486,   395,   548,   401,   395,     0,
+    -322,    46,   222,   468,   133,   224,   225,   226,   227,   228,
+     229,   230,   231,     0,   370,     0,   157,   303,   232,   233,
+     222,     0,   133,   224,   225,   226,   227,   228,   229,   230,
+     231,     0,     0,     0,   157,   303,   232,   233,   209,   221,
+     222,   223,   133,   224,   225,   226,   227,   228,   229,   230,
+     231,     0,   450,     0,   450,     0,   232,   233,   210,   234,
+     470,   474,     0,   222,     0,   133,   224,   225,   226,   227,
+     228,   229,   230,   231,     0,     0,     0,   157,   303,   232,
+     233,   542,   543,   544,   545,     0,     0,     0,     0,   235,
+     342,   343,   344,   345,   346,   347,   348,   349,   350,   351,
+     352,   353,   302,     0,     0,     0,     0,   235,  -123,  -322,
+    -123,     0,     0,     0,     0,   375,   375,     0,     0,     0,
+       0,     0,   144,   145,   146,   147,    48,   235,   371,     0,
+       0,     0,     0,   507,     0,     0,     0,     0,     0,     0,
+       0,     0,     0,     0,   302,     0,    48,   236,     0,     0,
+     235,   222,   223,   133,   224,   225,   226,   227,   228,   229,
+     230,   231,     0,     0,     0,   157,   303,   232,   233,    48,
+     209,   221,   222,   223,   133,   224,   225,   226,   227,   228,
+     229,   230,   231,     0,     0,     0,     0,     0,   232,   233,
+     210,   234,     0,   222,     0,   133,   224,   225,   226,   227,
+     228,   229,   230,   231,     0,     0,     0,   157,   303,   232,
+     233,   209,   221,   222,   223,   133,   224,   225,   226,   227,
+     228,   229,   230,   231,     0,     0,     0,     0,     0,   232,
+     233,   210,   234,     0,     0,     0,     0,     0,   235,   222,
+     223,   133,   224,   225,   226,   227,   228,   229,   230,   231,
+       0,     0,     0,     0,     0,   232,   233,     0,     0,   235,
+       0,   416,   417,   418,   419,   420,   421,   422,   423,   424,
+     425,   426,   427,     0,     0,     0,     0,     0,     0,   236,
+     235,   164,   165,   166,   167,   168,   169,   170,   171,   172,
+     173,   174,     0,     0,     0,     0,     0,     0,     0,     0,
+     235,   456,   457,   458,   459,   460,   461,   462,   463,   464,
+     465,   466,     0,     0,     0,     0,     0,     0,     0,     0,
+     236,     0,     0,     0,     0,     0,   235,    70,    71,    72,
+      73,    74,    75,    76,    77,    78,    79,    80,    81,    82,
+      83,    84,    85,    86,    87,    88,    89,    90,    91,    92,
+      93,    94,    95,    96,    97,    98,    99,   100,   101,   102,
+     103,   104,   105,   106,   107,   108,   109,     0,   110,   111,
+       0,   112,     0,   113,   114,   115,     0,     0,     0,     0,
+     116,     0,     0,     0,   117,   118,   119,   120,   121,   122,
+     123,   124,   125,   126
+};
+
+static const yytype_int16 yycheck[] =
+{
+       7,     8,   141,    10,   177,   178,   179,   214,   269,   153,
+     259,    41,   153,    65,   157,   306,     5,   241,    65,   243,
+      17,    18,    19,    20,    65,    66,   159,   160,   161,    18,
+     128,   129,   130,   257,     5,    42,   390,    18,    85,    46,
+      47,    44,   546,   333,   398,   399,   336,   180,   159,   160,
+     161,   209,    65,    66,     5,   190,   191,   192,   193,    21,
+      22,     3,   566,   221,   222,   223,   224,    18,    30,   180,
+       6,   229,    85,    86,   232,   579,     8,    13,   174,   218,
+      17,    13,    19,    20,     5,    17,    18,    19,    20,     0,
+     233,     5,   159,   160,   161,   390,     4,   392,   305,   390,
+       4,   392,    69,     6,    17,    18,   201,   314,   398,   399,
+     317,     4,     5,   180,    17,    18,    19,    20,   472,     4,
+     381,   260,   174,    19,    20,   269,     4,   174,     4,   159,
+     160,   161,    81,   174,    16,   268,   173,   144,   145,   146,
+     147,     9,   391,   286,   393,   303,   153,   290,   160,   356,
+     180,   154,   155,   156,   293,     8,    14,   268,   202,   162,
+     163,   172,   453,   454,    17,    18,    19,    20,   180,   166,
+       5,   170,   171,   180,    16,   182,     6,   320,   181,   403,
+     323,   471,    14,    18,   173,   324,   325,   203,   327,   110,
+     111,   112,   173,   174,   115,   328,   117,   330,   331,   332,
+     339,   268,   123,   124,   125,   126,   455,   468,   453,   454,
+     131,   132,    11,   127,   217,     5,   219,   328,   132,   330,
+     331,   332,   173,     7,   175,     7,   369,   141,   142,     7,
+      65,    11,   439,   440,   264,   378,   379,   381,   268,    14,
+     381,   204,   385,    67,   493,   452,    15,   159,   160,   161,
+      85,    16,   159,   160,   161,   258,   268,    14,   261,   205,
+     174,   328,    12,   330,   331,   332,    13,   270,   180,   159,
+     160,   161,   279,   180,    12,   190,     5,   284,   285,    14,
+     287,   191,     5,     5,   198,   199,   200,   173,     5,   428,
+     180,     5,   206,   207,     5,     4,   165,     5,   328,     8,
+     330,   331,   332,    16,    13,   192,   173,   446,    17,    18,
+      19,    20,   319,   173,     6,   188,   328,   173,   330,   331,
+     332,   494,   173,   173,   468,    17,    18,    19,    20,   336,
+     469,   470,   173,   476,   473,   474,   173,    13,   173,   174,
+      13,   484,   263,   486,   265,   266,   267,   490,   193,    13,
+     167,     4,   491,   492,    13,     8,   268,    13,    13,    13,
+      13,   268,   189,   370,    17,    18,    19,    20,   507,   508,
+       6,   283,   173,   173,   168,   518,   173,    13,   268,    13,
+     173,    17,    18,    19,    20,     6,   525,   173,   173,   301,
+     173,    13,   399,    13,    13,   169,    17,    18,    19,    20,
+     407,     8,   409,   410,    13,   412,   413,    13,     6,   173,
+      17,    18,    19,    20,   173,     5,   328,    16,   330,   331,
+     332,   328,   173,   330,   331,   332,     0,     1,    18,   173,
+       4,     5,   173,     6,    10,    13,    13,    13,   328,   578,
+     330,   331,   332,     6,    13,    44,    45,    46,    47,    48,
+      49,    50,    51,    52,    53,    31,    32,    33,    34,    35,
+      36,    37,    38,    39,    40,    41,    42,    21,    22,    23,
+      24,    25,    26,    13,   173,     6,    30,    67,    68,    69,
+      70,    71,    72,    73,    74,    75,    76,    77,   173,   173,
+     173,    81,    82,    83,    84,     6,   503,    13,    13,   506,
+       8,    17,    18,    19,    20,   173,   513,   514,   173,    17,
+      18,    19,    20,    87,    88,    89,    90,    91,    92,    93,
+      94,    95,    96,    97,    98,    99,   100,   101,   102,   103,
+     104,   105,   106,   107,   108,   109,   110,   111,   112,   113,
+     114,   115,   116,   117,   118,   119,   120,   121,   122,   123,
+     124,   125,   126,   127,   128,   129,   563,   131,   132,   133,
+     134,   135,     6,    13,   154,   173,   140,   141,   142,     6,
+     144,   145,   146,   147,   148,   149,   150,   151,   152,   153,
+       5,    20,    13,   173,    20,   175,    17,    18,    19,    20,
+      15,    20,    17,    18,    19,    20,     9,    20,     5,   336,
+     174,   399,   457,   161,    17,    18,    19,    20,   306,   153,
+     206,    18,   301,    21,    22,    23,    24,   269,     5,    27,
+     392,    29,    30,   116,   198,   199,   200,    17,    18,    19,
+      20,    18,   206,   207,   441,   333,   519,   341,   336,    -1,
+      65,     5,    67,   396,    69,    70,    71,    72,    73,    74,
+      75,    76,    77,    -1,    18,    -1,    81,    82,    83,    84,
+      67,    -1,    69,    70,    71,    72,    73,    74,    75,    76,
+      77,    -1,    -1,    -1,    81,    82,    83,    84,    65,    66,
+      67,    68,    69,    70,    71,    72,    73,    74,    75,    76,
+      77,    -1,   390,    -1,   392,    -1,    83,    84,    85,    86,
+     398,   399,    -1,    67,    -1,    69,    70,    71,    72,    73,
+      74,    75,    76,    77,    -1,    -1,    -1,    81,    82,    83,
+      84,   190,   191,   192,   193,    -1,    -1,    -1,    -1,   154,
+      31,    32,    33,    34,    35,    36,    37,    38,    39,    40,
+      41,    42,    18,    -1,    -1,    -1,    -1,   154,   173,   174,
+     175,    -1,    -1,    -1,    -1,   453,   454,    -1,    -1,    -1,
+      -1,    -1,    17,    18,    19,    20,   173,   154,   175,    -1,
+      -1,    -1,    -1,   471,    -1,    -1,    -1,    -1,    -1,    -1,
+      -1,    -1,    -1,    -1,    18,    -1,   173,   174,    -1,    -1,
+     154,    67,    68,    69,    70,    71,    72,    73,    74,    75,
+      76,    77,    -1,    -1,    -1,    81,    82,    83,    84,   173,
+      65,    66,    67,    68,    69,    70,    71,    72,    73,    74,
+      75,    76,    77,    -1,    -1,    -1,    -1,    -1,    83,    84,
+      85,    86,    -1,    67,    -1,    69,    70,    71,    72,    73,
+      74,    75,    76,    77,    -1,    -1,    -1,    81,    82,    83,
+      84,    65,    66,    67,    68,    69,    70,    71,    72,    73,
+      74,    75,    76,    77,    -1,    -1,    -1,    -1,    -1,    83,
+      84,    85,    86,    -1,    -1,    -1,    -1,    -1,   154,    67,
+      68,    69,    70,    71,    72,    73,    74,    75,    76,    77,
+      -1,    -1,    -1,    -1,    -1,    83,    84,    -1,    -1,   154,
+      -1,   176,   177,   178,   179,   180,   181,   182,   183,   184,
+     185,   186,   187,    -1,    -1,    -1,    -1,    -1,    -1,   174,
+     154,    54,    55,    56,    57,    58,    59,    60,    61,    62,
+      63,    64,    -1,    -1,    -1,    -1,    -1,    -1,    -1,    -1,
+     154,   154,   155,   156,   157,   158,   159,   160,   161,   162,
+     163,   164,    -1,    -1,    -1,    -1,    -1,    -1,    -1,    -1,
+     174,    -1,    -1,    -1,    -1,    -1,   154,    87,    88,    89,
+      90,    91,    92,    93,    94,    95,    96,    97,    98,    99,
+     100,   101,   102,   103,   104,   105,   106,   107,   108,   109,
+     110,   111,   112,   113,   114,   115,   116,   117,   118,   119,
+     120,   121,   122,   123,   124,   125,   126,    -1,   128,   129,
+      -1,   131,    -1,   133,   134,   135,    -1,    -1,    -1,    -1,
+     140,    -1,    -1,    -1,   144,   145,   146,   147,   148,   149,
+     150,   151,   152,   153
+};
+
+/* YYSTOS[STATE-NUM] -- The symbol kind of the accessing symbol of
+   state STATE-NUM.  */
+static const yytype_int16 yystos[] =
+{
+       0,     5,   127,   132,   141,   142,   174,   198,   199,   200,
+     206,   207,   216,   217,   223,   224,   225,   226,   227,   228,
+     229,   230,   231,   232,   233,   234,   235,   236,   237,   239,
+     241,   244,   246,   248,   249,   250,   252,   253,   318,    17,
+      18,   319,     5,   323,   323,     3,     5,    18,   173,   215,
+     215,   174,   215,    21,    22,    23,    24,    25,    26,    30,
+     308,     0,     1,     4,   217,   228,   230,   231,     4,     4,
+      87,    88,    89,    90,    91,    92,    93,    94,    95,    96,
+      97,    98,    99,   100,   101,   102,   103,   104,   105,   106,
+     107,   108,   109,   110,   111,   112,   113,   114,   115,   116,
+     117,   118,   119,   120,   121,   122,   123,   124,   125,   126,
+     128,   129,   131,   133,   134,   135,   140,   144,   145,   146,
+     147,   148,   149,   150,   151,   152,   153,   238,   240,   242,
+     243,   245,   251,    69,   292,   215,    18,   173,   174,   214,
+     302,   302,   215,   215,    17,    18,    19,    20,   201,   218,
+       4,     4,     4,   323,   323,   323,   323,    81,   297,   323,
+     323,   323,   323,   323,    54,    55,    56,    57,    58,    59,
+      60,    61,    62,    63,    64,   325,   326,   325,   325,   325,
+     323,   323,    16,   285,    16,    44,    45,    46,    47,    48,
+      49,    50,    51,    52,    53,   320,     6,   173,     9,   327,
+     327,     6,   215,   215,   215,   215,    14,   202,   219,    65,
+      85,   174,   215,   270,   286,   287,   303,   302,   302,   302,
+     308,    66,    67,    68,    70,    71,    72,    73,    74,    75,
+      76,    77,    83,    84,    86,   154,   174,   265,   266,   267,
+     268,   269,   270,   271,   286,   287,   288,   289,   290,   291,
+     292,   293,   294,   295,   296,   299,   300,   301,   265,   267,
+     302,   302,   172,   324,    16,   324,   324,   324,   215,   265,
+     302,   215,   190,   191,   192,   193,     6,   328,   271,    14,
+     203,   220,   285,    11,     5,     7,   305,     7,   305,   306,
+     307,   302,   327,   302,   285,   285,   285,   285,   285,   285,
+     308,    11,    18,    82,   277,   278,   280,   281,   282,   290,
+     292,   293,   295,   297,   298,   299,   300,   301,   321,     7,
+     304,   304,   304,   304,   302,   280,   327,   302,   323,   292,
+     323,   323,   323,   255,   265,   269,   279,   286,   288,   302,
+      10,    13,    31,    32,    33,    34,    35,    36,    37,    38,
+      39,    40,    41,    42,   329,   215,    14,   204,   221,   283,
+     290,   215,   215,   308,   215,   308,   327,   283,   285,   305,
+      18,   175,   215,   274,   275,   281,   282,   317,   305,   305,
+      15,   322,   215,   308,    16,   312,   308,   327,   327,   327,
+     265,   265,   265,   265,   254,   281,   321,   215,   247,   254,
+     327,   329,   305,    14,   205,   222,    12,    13,     6,    13,
+       4,     8,    13,    13,    12,   308,   176,   177,   178,   179,
+     180,   181,   182,   183,   184,   185,   186,   187,   262,    21,
+      22,    23,    24,    27,    29,    30,   309,   308,   308,   269,
+     286,   287,     8,   190,   313,   308,   272,   273,   275,   276,
+     281,   282,   291,   280,   273,   280,   154,   155,   156,   157,
+     158,   159,   160,   161,   162,   163,   164,   256,   322,   275,
+     281,   215,   247,   275,   281,   304,    14,   215,   284,   215,
+     215,   215,   215,   327,   305,   305,   307,   191,   314,   327,
+     305,   274,   274,   280,   262,     5,     5,     5,   173,     5,
+       5,     5,     5,   165,   327,   327,    18,   281,   275,   327,
+     327,   308,     6,    13,    13,     8,   308,    16,   310,   308,
+     192,   315,   308,   327,   327,   280,   324,   173,   173,   173,
+     170,   171,   260,   173,   173,   173,   173,   215,   327,   327,
+     215,   215,   190,   191,   192,   193,   311,   308,   310,   193,
+     316,   327,   188,   263,    13,    13,    13,   167,   257,    13,
+      13,    13,    13,   166,     8,     8,   311,   189,   264,   173,
+     173,   173,   168,   258,   173,   173,   173,   173,   215,   311,
+      13,    13,    13,   169,   259,    13,    13,    13,     6,   327,
+     311,    21,    22,    30,   261,   173,   173,   173,   173,   173,
+       6,    13,    13,     6,    13,    13,   173,   173,   173,   173,
+       6,     6,    13,     6,    13,   173,   173,     6,    13,   173,
+       6
+};
+
+/* YYR1[RULE-NUM] -- Symbol kind of the left-hand side of rule RULE-NUM.  */
+static const yytype_int16 yyr1[] =
+{
+       0,   213,   214,   214,   215,   215,   215,   215,   215,   215,
+     215,   216,   217,   218,   219,   220,   220,   221,   221,   222,
+     223,   224,   225,   226,   227,   228,   228,   228,   228,   228,
+     229,   229,   229,   229,   229,   229,   229,   229,   229,   229,
+     230,   230,   230,   230,   230,   230,   230,   230,   231,   231,
+     231,   231,   231,   231,   231,   232,   232,   232,   232,   232,
+     233,   233,   234,   235,   235,   236,   236,   237,   238,   238,
+     238,   238,   238,   238,   238,   238,   238,   238,   238,   238,
+     238,   238,   239,   240,   240,   240,   240,   240,   240,   240,
+     240,   240,   240,   240,   240,   241,   242,   242,   242,   242,
+     242,   242,   242,   242,   242,   242,   242,   242,   242,   243,
+     243,   243,   243,   244,   245,   245,   246,   246,   246,   246,
+     246,   246,   246,   247,   248,   249,   250,   251,   251,   252,
+     253,   254,   255,   256,   256,   256,   256,   256,   256,   256,
+     256,   256,   256,   256,   256,   257,   257,   258,   258,   259,
+     259,   260,   260,   260,   261,   261,   261,   262,   262,   262,
+     262,   262,   262,   262,   262,   262,   262,   262,   262,   263,
+     263,   264,   264,   265,   265,   266,   266,   267,   267,   267,
+     267,   267,   268,   268,   268,   268,   269,   269,   270,   270,
+     271,   271,   271,   271,   272,   272,   273,   273,   274,   274,
+     274,   275,   276,   276,   277,   277,   277,   277,   277,   277,
+     278,   278,   278,   279,   279,   279,   280,   280,   281,   281,
+     281,   281,   282,   283,   283,   284,   284,   285,   285,   286,
+     287,   288,   289,   290,   291,   292,   293,   293,   294,   294,
+     294,   294,   295,   295,   296,   296,   297,   298,   299,   300,
+     301,   302,   302,   303,   303,   303,   303,   303,   304,   304,
+     305,   305,   305,   305,   306,   307,   307,   308,   308,   308,
+     308,   308,   308,   308,   308,   309,   309,   309,   309,   309,
+     309,   309,   309,   310,   310,   310,   311,   311,   311,   311,
+     312,   312,   313,   313,   314,   314,   315,   315,   316,   316,
+     317,   317,   318,   318,   319,   319,   319,   320,   320,   320,
+     320,   320,   320,   320,   320,   320,   320,   320,   320,   320,
+     320,   320,   321,   321,   322,   322,   323,   323,   324,   324,
+     325,   325,   326,   326,   326,   326,   326,   326,   326,   326,
+     326,   326,   326,   326,   327,   327,   328,   328,   328,   329,
+     329,   329,   329,   329,   329,   329,   329,   329,   329,   329,
+     329
+};
+
+/* YYR2[RULE-NUM] -- Number of symbols on the right-hand side of rule RULE-NUM.  */
+static const yytype_int8 yyr2[] =
+{
+       0,     2,     1,     2,     1,     3,     3,     3,     3,     2,
+       3,     1,     2,     3,     3,     0,     3,     0,     3,     3,
+       7,     2,     2,     2,     2,     1,     1,     1,     1,     1,
+       2,     3,     2,     3,     2,     2,     2,     1,     1,     3,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,     1,     1,     1,     4,     4,     4,     5,
+       5,     1,     6,     5,     6,     6,     6,     8,     1,     1,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     9,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,     1,     1,     9,     1,     1,     1,     1,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,    10,     1,     1,    12,     8,     8,     8,
+       8,     9,     9,     1,     4,     8,     6,     1,     1,     3,
+       1,     1,     1,     1,     8,     5,     1,    10,    10,    12,
+       6,     8,    10,     6,    14,     1,     0,     1,     0,     1,
+       0,     1,     1,     0,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     0,
+       1,     0,     1,     1,     1,     2,     4,     3,     1,     1,
+       1,     3,     1,     1,     1,     1,     1,     1,     4,     6,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     2,     1,     3,     3,     1,     1,     1,     1,     3,
+       1,     1,     1,     1,     1,     1,     1,     1,     5,     3,
+       6,     1,     6,     3,     1,     0,     1,     2,     0,     2,
+       4,     2,     4,     2,     2,     2,     2,     1,     1,     1,
+       1,     1,     2,     1,     1,     1,     2,     2,     2,     2,
+       1,     1,     1,     1,     1,     3,     1,     3,     0,     3,
+       0,     3,     7,     7,     5,     1,     1,     0,     1,     1,
+       1,     1,     1,     1,     1,     0,     1,     1,     1,     1,
+       1,     1,     1,     0,     2,     5,     1,     1,     1,     1,
+       0,     5,     0,     1,     0,     1,     0,     1,     0,     1,
+       1,     1,     0,     5,     0,     1,     1,     0,     2,     2,
+       2,     2,     1,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     0,     1,     0,     1,     0,     3,     0,     1,
+       1,     3,     0,     1,     1,     1,     1,     1,     1,     1,
+       1,     1,     1,     1,     0,     3,     3,     2,     0,     1,
+       1,     1,     1,     1,     1,     1,     1,     1,     1,     1,
+       1
+};
+
+
+enum { YYENOMEM = -2 };
+
+#define yyerrok         (yyerrstatus = 0)
+#define yyclearin       (yychar = YYEMPTY)
+
+#define YYACCEPT        goto yyacceptlab
+#define YYABORT         goto yyabortlab
+#define YYERROR         goto yyerrorlab
+#define YYNOMEM         goto yyexhaustedlab
+
+
+#define YYRECOVERING()  (!!yyerrstatus)
+
+#define YYBACKUP(Token, Value)                                    \
+  do                                                              \
+    if (yychar == YYEMPTY)                                        \
+      {                                                           \
+        yychar = (Token);                                         \
+        yylval = (Value);                                         \
+        YYPOPSTACK (yylen);                                       \
+        yystate = *yyssp;                                         \
+        goto yybackup;                                            \
+      }                                                           \
+    else                                                          \
+      {                                                           \
+        yyerror (YY_("syntax error: cannot back up")); \
+        YYERROR;                                                  \
+      }                                                           \
+  while (0)
+
+/* Backward compatibility with an undocumented macro.
+   Use YYerror or YYUNDEF. */
+#define YYERRCODE YYUNDEF
+
+/* YYLLOC_DEFAULT -- Set CURRENT to span from RHS[1] to RHS[N].
+   If N is 0, then set CURRENT to the empty location which ends
+   the previous symbol: RHS[0] (always defined).  */
+
+#ifndef YYLLOC_DEFAULT
+# define YYLLOC_DEFAULT(Current, Rhs, N)                                \
+    do                                                                  \
+      if (N)                                                            \
+        {                                                               \
+          (Current).first_line   = YYRHSLOC (Rhs, 1).first_line;        \
+          (Current).first_column = YYRHSLOC (Rhs, 1).first_column;      \
+          (Current).last_line    = YYRHSLOC (Rhs, N).last_line;         \
+          (Current).last_column  = YYRHSLOC (Rhs, N).last_column;       \
+        }                                                               \
+      else                                                              \
+        {                                                               \
+          (Current).first_line   = (Current).last_line   =              \
+            YYRHSLOC (Rhs, 0).last_line;                                \
+          (Current).first_column = (Current).last_column =              \
+            YYRHSLOC (Rhs, 0).last_column;                              \
+        }                                                               \
+    while (0)
+#endif
+
+#define YYRHSLOC(Rhs, K) ((Rhs)[K])
+
+
+/* Enable debugging if requested.  */
+#if YYDEBUG
+
+# ifndef YYFPRINTF
+#  include <stdio.h> /* INFRINGES ON USER NAME SPACE */
+#  define YYFPRINTF fprintf
+# endif
+
+# define YYDPRINTF(Args)                        \
+do {                                            \
+  if (yydebug)                                  \
+    YYFPRINTF Args;                             \
+} while (0)
+
+
+/* YYLOCATION_PRINT -- Print the location on the stream.
+   This macro was not mandated originally: define only if we know
+   we won't break user code: when these are the locations we know.  */
+
+# ifndef YYLOCATION_PRINT
+
+#  if defined YY_LOCATION_PRINT
+
+   /* Temporary convenience wrapper in case some people defined the
+      undocumented and private YY_LOCATION_PRINT macros.  */
+#   define YYLOCATION_PRINT(File, Loc)  YY_LOCATION_PRINT(File, *(Loc))
+
+#  elif defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL
+
+/* Print *YYLOCP on YYO.  Private, do not rely on its existence. */
+
+YY_ATTRIBUTE_UNUSED
+static int
+yy_location_print_ (FILE *yyo, YYLTYPE const * const yylocp)
+{
+  int res = 0;
+  int end_col = 0 != yylocp->last_column ? yylocp->last_column - 1 : 0;
+  if (0 <= yylocp->first_line)
+    {
+      res += YYFPRINTF (yyo, "%d", yylocp->first_line);
+      if (0 <= yylocp->first_column)
+        res += YYFPRINTF (yyo, ".%d", yylocp->first_column);
+    }
+  if (0 <= yylocp->last_line)
+    {
+      if (yylocp->first_line < yylocp->last_line)
+        {
+          res += YYFPRINTF (yyo, "-%d", yylocp->last_line);
+          if (0 <= end_col)
+            res += YYFPRINTF (yyo, ".%d", end_col);
+        }
+      else if (0 <= end_col && yylocp->first_column < end_col)
+        res += YYFPRINTF (yyo, "-%d", end_col);
+    }
+  return res;
+}
+
+#   define YYLOCATION_PRINT  yy_location_print_
+
+    /* Temporary convenience wrapper in case some people defined the
+       undocumented and private YY_LOCATION_PRINT macros.  */
+#   define YY_LOCATION_PRINT(File, Loc)  YYLOCATION_PRINT(File, &(Loc))
+
+#  else
+
+#   define YYLOCATION_PRINT(File, Loc) ((void) 0)
+    /* Temporary convenience wrapper in case some people defined the
+       undocumented and private YY_LOCATION_PRINT macros.  */
+#   define YY_LOCATION_PRINT  YYLOCATION_PRINT
+
+#  endif
+# endif /* !defined YYLOCATION_PRINT */
+
+
+# define YY_SYMBOL_PRINT(Title, Kind, Value, Location)                    \
+do {                                                                      \
+  if (yydebug)                                                            \
+    {                                                                     \
+      YYFPRINTF (stderr, "%s ", Title);                                   \
+      yy_symbol_print (stderr,                                            \
+                  Kind, Value, Location); \
+      YYFPRINTF (stderr, "\n");                                           \
+    }                                                                     \
+} while (0)
+
+
+/*-----------------------------------.
+| Print this symbol's value on YYO.  |
+`-----------------------------------*/
+
+static void
+yy_symbol_value_print (FILE *yyo,
+                       yysymbol_kind_t yykind, YYSTYPE const * const yyvaluep, YYLTYPE const * const yylocationp)
+{
+  FILE *yyoutput = yyo;
+  YY_USE (yyoutput);
+  YY_USE (yylocationp);
+  if (!yyvaluep)
+    return;
+  YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
+  YY_USE (yykind);
+  YY_IGNORE_MAYBE_UNINITIALIZED_END
+}
+
+
+/*---------------------------.
+| Print this symbol on YYO.  |
+`---------------------------*/
+
+static void
+yy_symbol_print (FILE *yyo,
+                 yysymbol_kind_t yykind, YYSTYPE const * const yyvaluep, YYLTYPE const * const yylocationp)
+{
+  YYFPRINTF (yyo, "%s %s (",
+             yykind < YYNTOKENS ? "token" : "nterm", yysymbol_name (yykind));
+
+  YYLOCATION_PRINT (yyo, yylocationp);
+  YYFPRINTF (yyo, ": ");
+  yy_symbol_value_print (yyo, yykind, yyvaluep, yylocationp);
+  YYFPRINTF (yyo, ")");
+}
+
+/*------------------------------------------------------------------.
+| yy_stack_print -- Print the state stack from its BOTTOM up to its |
+| TOP (included).                                                   |
+`------------------------------------------------------------------*/
+
+static void
+yy_stack_print (yy_state_t *yybottom, yy_state_t *yytop)
+{
+  YYFPRINTF (stderr, "Stack now");
+  for (; yybottom <= yytop; yybottom++)
+    {
+      int yybot = *yybottom;
+      YYFPRINTF (stderr, " %d", yybot);
+    }
+  YYFPRINTF (stderr, "\n");
+}
+
+# define YY_STACK_PRINT(Bottom, Top)                            \
+do {                                                            \
+  if (yydebug)                                                  \
+    yy_stack_print ((Bottom), (Top));                           \
+} while (0)
+
+
+/*------------------------------------------------.
+| Report that the YYRULE is going to be reduced.  |
+`------------------------------------------------*/
+
+static void
+yy_reduce_print (yy_state_t *yyssp, YYSTYPE *yyvsp, YYLTYPE *yylsp,
+                 int yyrule)
+{
+  int yylno = yyrline[yyrule];
+  int yynrhs = yyr2[yyrule];
+  int yyi;
+  YYFPRINTF (stderr, "Reducing stack by rule %d (line %d):\n",
+             yyrule - 1, yylno);
+  /* The symbols being reduced.  */
+  for (yyi = 0; yyi < yynrhs; yyi++)
+    {
+      YYFPRINTF (stderr, "   $%d = ", yyi + 1);
+      yy_symbol_print (stderr,
+                       YY_ACCESSING_SYMBOL (+yyssp[yyi + 1 - yynrhs]),
+                       &yyvsp[(yyi + 1) - (yynrhs)],
+                       &(yylsp[(yyi + 1) - (yynrhs)]));
+      YYFPRINTF (stderr, "\n");
+    }
+}
+
+# define YY_REDUCE_PRINT(Rule)          \
+do {                                    \
+  if (yydebug)                          \
+    yy_reduce_print (yyssp, yyvsp, yylsp, Rule); \
+} while (0)
+
+/* Nonzero means print parse trace.  It is left uninitialized so that
+   multiple parsers can coexist.  */
+int yydebug;
+#else /* !YYDEBUG */
+# define YYDPRINTF(Args) ((void) 0)
+# define YY_SYMBOL_PRINT(Title, Kind, Value, Location)
+# define YY_STACK_PRINT(Bottom, Top)
+# define YY_REDUCE_PRINT(Rule)
+#endif /* !YYDEBUG */
+
+
+/* YYINITDEPTH -- initial size of the parser's stacks.  */
+#ifndef YYINITDEPTH
+# define YYINITDEPTH 200
+#endif
+
+/* YYMAXDEPTH -- maximum size the stacks can grow to (effective only
+   if the built-in stack extension method is used).
+
+   Do not make this value too large; the results are undefined if
+   YYSTACK_ALLOC_MAXIMUM < YYSTACK_BYTES (YYMAXDEPTH)
+   evaluated with infinite-precision integer arithmetic.  */
+
+#ifndef YYMAXDEPTH
+# define YYMAXDEPTH 10000
+#endif
+
+
+
+
+
+
+/*-----------------------------------------------.
+| Release the memory associated to this symbol.  |
+`-----------------------------------------------*/
+
+static void
+yydestruct (const char *yymsg,
+            yysymbol_kind_t yykind, YYSTYPE *yyvaluep, YYLTYPE *yylocationp)
+{
+  YY_USE (yyvaluep);
+  YY_USE (yylocationp);
+  if (!yymsg)
+    yymsg = "Deleting";
+  YY_SYMBOL_PRINT (yymsg, yykind, yyvaluep, yylocationp);
+
+  YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
+  YY_USE (yykind);
+  YY_IGNORE_MAYBE_UNINITIALIZED_END
+}
+
+
+/* Lookahead token kind.  */
+int yychar;
+
+/* The semantic value of the lookahead symbol.  */
+YYSTYPE yylval;
+/* Location data for the lookahead symbol.  */
+YYLTYPE yylloc
+# if defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL
+  = { 1, 1, 1, 1 }
+# endif
+;
+/* Number of syntax errors so far.  */
+int yynerrs;
+
+
+
+
+/*----------.
+| yyparse.  |
+`----------*/
+
+int
+yyparse (void)
+{
+    yy_state_fast_t yystate = 0;
+    /* Number of tokens to shift before error messages enabled.  */
+    int yyerrstatus = 0;
+
+    /* Refer to the stacks through separate pointers, to allow yyoverflow
+       to reallocate them elsewhere.  */
+
+    /* Their size.  */
+    YYPTRDIFF_T yystacksize = YYINITDEPTH;
+
+    /* The state stack: array, bottom, top.  */
+    yy_state_t yyssa[YYINITDEPTH];
+    yy_state_t *yyss = yyssa;
+    yy_state_t *yyssp = yyss;
+
+    /* The semantic value stack: array, bottom, top.  */
+    YYSTYPE yyvsa[YYINITDEPTH];
+    YYSTYPE *yyvs = yyvsa;
+    YYSTYPE *yyvsp = yyvs;
+
+    /* The location stack: array, bottom, top.  */
+    YYLTYPE yylsa[YYINITDEPTH];
+    YYLTYPE *yyls = yylsa;
+    YYLTYPE *yylsp = yyls;
+
+  int yyn;
+  /* The return value of yyparse.  */
+  int yyresult;
+  /* Lookahead symbol kind.  */
+  yysymbol_kind_t yytoken = YYSYMBOL_YYEMPTY;
+  /* The variables used to return semantic value and location from the
+     action routines.  */
+  YYSTYPE yyval;
+  YYLTYPE yyloc;
+
+  /* The locations where the error started and ended.  */
+  YYLTYPE yyerror_range[3];
+
+
+
+#define YYPOPSTACK(N)   (yyvsp -= (N), yyssp -= (N), yylsp -= (N))
+
+  /* The number of symbols on the RHS of the reduced rule.
+     Keep to zero when no symbol should be popped.  */
+  int yylen = 0;
+
+  YYDPRINTF ((stderr, "Starting parse\n"));
+
+  yychar = YYEMPTY; /* Cause a token to be read.  */
+
+  yylsp[0] = yylloc;
+  goto yysetstate;
+
+
+/*------------------------------------------------------------.
+| yynewstate -- push a new state, which is found in yystate.  |
+`------------------------------------------------------------*/
+yynewstate:
+  /* In all cases, when you get here, the value and location stacks
+     have just been pushed.  So pushing a state here evens the stacks.  */
+  yyssp++;
+
+
+/*--------------------------------------------------------------------.
+| yysetstate -- set current state (the top of the stack) to yystate.  |
+`--------------------------------------------------------------------*/
+yysetstate:
+  YYDPRINTF ((stderr, "Entering state %d\n", yystate));
+  YY_ASSERT (0 <= yystate && yystate < YYNSTATES);
+  YY_IGNORE_USELESS_CAST_BEGIN
+  *yyssp = YY_CAST (yy_state_t, yystate);
+  YY_IGNORE_USELESS_CAST_END
+  YY_STACK_PRINT (yyss, yyssp);
+
+  if (yyss + yystacksize - 1 <= yyssp)
+#if !defined yyoverflow && !defined YYSTACK_RELOCATE
+    YYNOMEM;
+#else
+    {
+      /* Get the current used size of the three stacks, in elements.  */
+      YYPTRDIFF_T yysize = yyssp - yyss + 1;
+
+# if defined yyoverflow
+      {
+        /* Give user a chance to reallocate the stack.  Use copies of
+           these so that the &'s don't force the real ones into
+           memory.  */
+        yy_state_t *yyss1 = yyss;
+        YYSTYPE *yyvs1 = yyvs;
+        YYLTYPE *yyls1 = yyls;
+
+        /* Each stack pointer address is followed by the size of the
+           data in use in that stack, in bytes.  This used to be a
+           conditional around just the two extra args, but that might
+           be undefined if yyoverflow is a macro.  */
+        yyoverflow (YY_("memory exhausted"),
+                    &yyss1, yysize * YYSIZEOF (*yyssp),
+                    &yyvs1, yysize * YYSIZEOF (*yyvsp),
+                    &yyls1, yysize * YYSIZEOF (*yylsp),
+                    &yystacksize);
+        yyss = yyss1;
+        yyvs = yyvs1;
+        yyls = yyls1;
+      }
+# else /* defined YYSTACK_RELOCATE */
+      /* Extend the stack our own way.  */
+      if (YYMAXDEPTH <= yystacksize)
+        YYNOMEM;
+      yystacksize *= 2;
+      if (YYMAXDEPTH < yystacksize)
+        yystacksize = YYMAXDEPTH;
+
+      {
+        yy_state_t *yyss1 = yyss;
+        union yyalloc *yyptr =
+          YY_CAST (union yyalloc *,
+                   YYSTACK_ALLOC (YY_CAST (YYSIZE_T, YYSTACK_BYTES (yystacksize))));
+        if (! yyptr)
+          YYNOMEM;
+        YYSTACK_RELOCATE (yyss_alloc, yyss);
+        YYSTACK_RELOCATE (yyvs_alloc, yyvs);
+        YYSTACK_RELOCATE (yyls_alloc, yyls);
+#  undef YYSTACK_RELOCATE
+        if (yyss1 != yyssa)
+          YYSTACK_FREE (yyss1);
+      }
+# endif
+
+      yyssp = yyss + yysize - 1;
+      yyvsp = yyvs + yysize - 1;
+      yylsp = yyls + yysize - 1;
+
+      YY_IGNORE_USELESS_CAST_BEGIN
+      YYDPRINTF ((stderr, "Stack size increased to %ld\n",
+                  YY_CAST (long, yystacksize)));
+      YY_IGNORE_USELESS_CAST_END
+
+      if (yyss + yystacksize - 1 <= yyssp)
+        YYABORT;
+    }
+#endif /* !defined yyoverflow && !defined YYSTACK_RELOCATE */
+
+
+  if (yystate == YYFINAL)
+    YYACCEPT;
+
+  goto yybackup;
+
+
+/*-----------.
+| yybackup.  |
+`-----------*/
+yybackup:
+  /* Do appropriate processing given the current state.  Read a
+     lookahead token if we need one and don't already have one.  */
+
+  /* First try to decide what to do without reference to lookahead token.  */
+  yyn = yypact[yystate];
+  if (yypact_value_is_default (yyn))
+    goto yydefault;
+
+  /* Not known => get a lookahead token if don't already have one.  */
+
+  /* YYCHAR is either empty, or end-of-input, or a valid lookahead.  */
+  if (yychar == YYEMPTY)
+    {
+      YYDPRINTF ((stderr, "Reading a token\n"));
+      yychar = yylex ();
+    }
+
+  if (yychar <= YYEOF)
+    {
+      yychar = YYEOF;
+      yytoken = YYSYMBOL_YYEOF;
+      YYDPRINTF ((stderr, "Now at end of input.\n"));
+    }
+  else if (yychar == YYerror)
+    {
+      /* The scanner already issued an error message, process directly
+         to error recovery.  But do not keep the error token as
+         lookahead, it is too special and may lead us to an endless
+         loop in error recovery. */
+      yychar = YYUNDEF;
+      yytoken = YYSYMBOL_YYerror;
+      yyerror_range[1] = yylloc;
+      goto yyerrlab1;
+    }
+  else
+    {
+      yytoken = YYTRANSLATE (yychar);
+      YY_SYMBOL_PRINT ("Next token is", yytoken, &yylval, &yylloc);
+    }
+
+  /* If the proper action on seeing token YYTOKEN is to reduce or to
+     detect an error, take that action.  */
+  yyn += yytoken;
+  if (yyn < 0 || YYLAST < yyn || yycheck[yyn] != yytoken)
+    goto yydefault;
+  yyn = yytable[yyn];
+  if (yyn <= 0)
+    {
+      if (yytable_value_is_error (yyn))
+        goto yyerrlab;
+      yyn = -yyn;
+      goto yyreduce;
+    }
+
+  /* Count tokens shifted since error; after three, turn off error
+     status.  */
+  if (yyerrstatus)
+    yyerrstatus--;
+
+  /* Shift the lookahead token.  */
+  YY_SYMBOL_PRINT ("Shifting", yytoken, &yylval, &yylloc);
+  yystate = yyn;
+  YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
+  *++yyvsp = yylval;
+  YY_IGNORE_MAYBE_UNINITIALIZED_END
+  *++yylsp = yylloc;
+
+  /* Discard the shifted token.  */
+  yychar = YYEMPTY;
+  goto yynewstate;
+
+
+/*-----------------------------------------------------------.
+| yydefault -- do the default action for the current state.  |
+`-----------------------------------------------------------*/
+yydefault:
+  yyn = yydefact[yystate];
+  if (yyn == 0)
+    goto yyerrlab;
+  goto yyreduce;
+
+
+/*-----------------------------.
+| yyreduce -- do a reduction.  |
+`-----------------------------*/
+yyreduce:
+  /* yyn is the number of a rule to reduce with.  */
+  yylen = yyr2[yyn];
+
+  /* If YYLEN is nonzero, implement the default value of the action:
+     '$$ = $1'.
+
+     Otherwise, the following line sets YYVAL to garbage.
+     This behavior is undocumented and Bison
+     users should not rely upon it.  Assigning to YYVAL
+     unconditionally makes the parser a bit smaller, and it avoids a
+     GCC warning that YYVAL may be used uninitialized.  */
+  yyval = yyvsp[1-yylen];
+
+  /* Default location. */
+  YYLLOC_DEFAULT (yyloc, (yylsp - yylen), yylen);
+  yyerror_range[1] = yyloc;
+  YY_REDUCE_PRINT (yyn);
+  switch (yyn)
+    {
+  case 2: /* simple_int: INTEGER  */
+#line 627 "gram.y"
+                        { (yyval.integer) = (yyvsp[0].integer); }
+#line 2580 "gram.c"
+    break;
+
+  case 3: /* simple_int: MINUS INTEGER  */
+#line 628 "gram.y"
+                                { (yyval.integer) = -(yyvsp[0].integer);}
+#line 2586 "gram.c"
+    break;
+
+  case 4: /* exp: INTEGER  */
+#line 631 "gram.y"
+                        { (yyval.integer) = (yyvsp[0].integer); }
+#line 2592 "gram.c"
+    break;
+
+  case 5: /* exp: exp PLUS exp  */
+#line 632 "gram.y"
+                               { (yyval.integer) = (yyvsp[-2].integer) + (yyvsp[0].integer); }
+#line 2598 "gram.c"
+    break;
+
+  case 6: /* exp: exp MINUS exp  */
+#line 633 "gram.y"
+                                { (yyval.integer) = (yyvsp[-2].integer) - (yyvsp[0].integer); }
+#line 2604 "gram.c"
+    break;
+
+  case 7: /* exp: exp MULTIPLY exp  */
+#line 634 "gram.y"
+                                   { (yyval.integer) = (yyvsp[-2].integer) * (yyvsp[0].integer); }
+#line 2610 "gram.c"
+    break;
+
+  case 8: /* exp: exp DIVIDE exp  */
+#line 635 "gram.y"
+                                 { if ((yyvsp[0].integer)) (yyval.integer) = (yyvsp[-2].integer) / (yyvsp[0].integer); else YYERROR;}
+#line 2616 "gram.c"
+    break;
+
+  case 9: /* exp: MINUS exp  */
+#line 636 "gram.y"
+                                         { (yyval.integer) = -(yyvsp[0].integer);}
+#line 2622 "gram.c"
+    break;
+
+  case 10: /* exp: LPAREN exp RPAREN  */
+#line 637 "gram.y"
+                                    { (yyval.integer) = (yyvsp[-1].integer); }
+#line 2628 "gram.c"
+    break;
+
+  case 11: /* ROOT: instrseq  */
+#line 641 "gram.y"
+                {
+		  compiled_program = (yyvsp[0].program);
+		}
+#line 2636 "gram.c"
+    break;
+
+  case 13: /* declare_base: BASE EQ dstreg  */
+#line 651 "gram.y"
+                {
+		   (yyval.reg) = (yyvsp[0].reg);
+	       	}
+#line 2644 "gram.c"
+    break;
+
+  case 14: /* declare_elementsize: ELEMENTSIZE EQ exp  */
+#line 656 "gram.y"
+                {
+		   (yyval.integer) = (yyvsp[0].integer);
+		}
+#line 2652 "gram.c"
+    break;
+
+  case 15: /* declare_srcregion: %empty  */
+#line 661 "gram.y"
+                {
+		  /* XXX is this default correct?*/
+		  memset (&(yyval.region), '\0', sizeof ((yyval.region)));
+		  (yyval.region).vert_stride = ffs(0);
+		  (yyval.region).width = BRW_WIDTH_1;
+		  (yyval.region).horiz_stride = ffs(0);
+		}
+#line 2664 "gram.c"
+    break;
+
+  case 16: /* declare_srcregion: SRCREGION EQ region  */
+#line 669 "gram.y"
+                {
+		    (yyval.region) = (yyvsp[0].region);
+		}
+#line 2672 "gram.c"
+    break;
+
+  case 17: /* declare_dstregion: %empty  */
+#line 674 "gram.y"
+                {
+		    (yyval.integer) = 1;
+		}
+#line 2680 "gram.c"
+    break;
+
+  case 18: /* declare_dstregion: DSTREGION EQ dstregion  */
+#line 678 "gram.y"
+                {
+		    (yyval.integer) = (yyvsp[0].integer);
+		}
+#line 2688 "gram.c"
+    break;
+
+  case 19: /* declare_type: TYPE EQ regtype  */
+#line 683 "gram.y"
+                {
+		    (yyval.integer) = (yyvsp[0].regtype).type;
+		}
+#line 2696 "gram.c"
+    break;
+
+  case 20: /* declare_pragma: DECLARE_PRAGMA STRING declare_base declare_elementsize declare_srcregion declare_dstregion declare_type  */
+#line 688 "gram.y"
+                {
+		    struct declared_register reg, *found, *new_reg;
+
+		    reg.name = (yyvsp[-5].string);
+		    reg.reg = (yyvsp[-4].reg);
+		    reg.element_size = (yyvsp[-3].integer);
+		    reg.src_region = (yyvsp[-2].region);
+		    reg.dst_region = (yyvsp[-1].integer);
+		    reg.reg.type = (yyvsp[0].integer);
+
+		    found = find_register((yyvsp[-5].string));
+		    if (found) {
+		        if (!declared_register_equal(&reg, found))
+			    error(&(yylsp[-6]), "%s already defined and definitions "
+				  "don't agree\n", (yyvsp[-5].string));
+			free((yyvsp[-5].string)); // $2 has been malloc'ed by strdup
+		    } else {
+			new_reg = malloc(sizeof(struct declared_register));
+			*new_reg = reg;
+			insert_register(new_reg);
+		    }
+		}
+#line 2723 "gram.c"
+    break;
+
+  case 23: /* default_exec_size_pragma: DEFAULT_EXEC_SIZE_PRAGMA exp  */
+#line 718 "gram.y"
+                                {
+				    program_defaults.execute_size = (yyvsp[0].integer);
+				}
+#line 2731 "gram.c"
+    break;
+
+  case 24: /* default_reg_type_pragma: DEFAULT_REG_TYPE_PRAGMA regtype  */
+#line 723 "gram.y"
+                                {
+				    program_defaults.register_type = (yyvsp[0].regtype).type;
+				}
+#line 2739 "gram.c"
+    break;
+
+  case 30: /* instrseq: instrseq pragma  */
+#line 735 "gram.y"
+                {
+		    (yyval.program) = (yyvsp[-1].program);
+		}
+#line 2747 "gram.c"
+    break;
+
+  case 31: /* instrseq: instrseq instruction SEMICOLON  */
+#line 739 "gram.y"
+                {
+		  brw_program_add_instruction(&(yyvsp[-2].program), &(yyvsp[-1].instruction));
+		  (yyval.program) = (yyvsp[-2].program);
+		}
+#line 2756 "gram.c"
+    break;
+
+  case 32: /* instrseq: instruction SEMICOLON  */
+#line 744 "gram.y"
+                {
+		  brw_program_init(&(yyval.program));
+		  brw_program_add_instruction(&(yyval.program), &(yyvsp[-1].instruction));
+		}
+#line 2765 "gram.c"
+    break;
+
+  case 33: /* instrseq: instrseq relocatableinstruction SEMICOLON  */
+#line 749 "gram.y"
+                {
+		  brw_program_add_relocatable(&(yyvsp[-2].program), &(yyvsp[-1].instruction));
+		  (yyval.program) = (yyvsp[-2].program);
+		}
+#line 2774 "gram.c"
+    break;
+
+  case 34: /* instrseq: relocatableinstruction SEMICOLON  */
+#line 754 "gram.y"
+                {
+		  brw_program_init(&(yyval.program));
+		  brw_program_add_relocatable(&(yyval.program), &(yyvsp[-1].instruction));
+		}
+#line 2783 "gram.c"
+    break;
+
+  case 35: /* instrseq: instrseq SEMICOLON  */
+#line 759 "gram.y"
+                {
+		    (yyval.program) = (yyvsp[-1].program);
+		}
+#line 2791 "gram.c"
+    break;
+
+  case 36: /* instrseq: instrseq label  */
+#line 763 "gram.y"
+                {
+		  brw_program_add_label(&(yyvsp[-1].program), (yyvsp[0].string));
+		  (yyval.program) = (yyvsp[-1].program);
+                }
+#line 2800 "gram.c"
+    break;
+
+  case 37: /* instrseq: label  */
+#line 768 "gram.y"
+                {
+		  brw_program_init(&(yyval.program));
+		  brw_program_add_label(&(yyval.program), (yyvsp[0].string));
+		}
+#line 2809 "gram.c"
+    break;
+
+  case 38: /* instrseq: pragma  */
+#line 773 "gram.y"
+                {
+		  (yyval.program).first = NULL;
+		  (yyval.program).last = NULL;
+		}
+#line 2818 "gram.c"
+    break;
+
+  case 39: /* instrseq: instrseq error SEMICOLON  */
+#line 777 "gram.y"
+                                           {
+		  (yyval.program) = (yyvsp[-2].program);
+		}
+#line 2826 "gram.c"
+    break;
+
+  case 55: /* ifelseinstruction: ENDIF  */
+#line 806 "gram.y"
+                {
+		  // for Gen4 
+		  if(IS_GENp(6)) // For gen6+.
+		    error(&(yylsp[0]), "should be 'ENDIF execsize relativelocation'\n");
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[0].integer));
+		  GEN(&(yyval.instruction))->header.thread_control |= BRW_THREAD_SWITCH;
+		  GEN(&(yyval.instruction))->bits1.da1.dest_horiz_stride = 1;
+		  GEN(&(yyval.instruction))->bits1.da1.src1_reg_file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  GEN(&(yyval.instruction))->bits1.da1.src1_reg_type = BRW_REGISTER_TYPE_UD;
+		}
+#line 2842 "gram.c"
+    break;
+
+  case 56: /* ifelseinstruction: ENDIF execsize relativelocation instoptions  */
+#line 818 "gram.y"
+                {
+		  // for Gen6+
+		  /* Gen6, Gen7 bspec: predication is prohibited */
+		  if(!IS_GENp(6)) // for gen6-
+		    error(&(yylsp[-3]), "ENDIF Syntax error: should be 'ENDIF'\n");
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-3].integer));
+		  set_execsize(&(yyval.instruction), (yyvsp[-2].integer));
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		}
+#line 2858 "gram.c"
+    break;
+
+  case 57: /* ifelseinstruction: ELSE execsize relativelocation instoptions  */
+#line 830 "gram.y"
+                {
+		  if(!IS_GENp(6)) {
+		    // for Gen4, Gen5. gen_level < 60
+		    /* Set the istack pop count, which must always be 1. */
+		    (yyvsp[-1].src_operand).imm32 |= (1 << 16);
+
+		    memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		    set_instruction_opcode(&(yyval.instruction), (yyvsp[-3].integer));
+		    GEN(&(yyval.instruction))->header.thread_control |= BRW_THREAD_SWITCH;
+		    ip_dst.width = (yyvsp[-2].integer);
+		    set_instruction_dest(&(yyval.instruction), &ip_dst);
+		    set_instruction_src0(&(yyval.instruction), &ip_src, NULL);
+		    set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), NULL);
+		    (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		    (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  } else if(IS_GENp(6)) {
+		    memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		    set_instruction_opcode(&(yyval.instruction), (yyvsp[-3].integer));
+		    set_execsize(&(yyval.instruction), (yyvsp[-2].integer));
+		    (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		    (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  } else {
+		    error(&(yylsp[-3]), "'ELSE' instruction is not implemented.\n");
+		  }
+		}
+#line 2888 "gram.c"
+    break;
+
+  case 58: /* ifelseinstruction: predicate IF execsize relativelocation  */
+#line 856 "gram.y"
+                {
+		  /* The branch instructions require that the IP register
+		   * be the destination and first source operand, while the
+		   * offset is the second source operand.  The offset is added
+		   * to the pre-incremented IP.
+		   */
+		  if(IS_GENp(7)) /* Error in Gen7+. */
+		    error(&(yylsp[-2]), "IF should be 'IF execsize JIP UIP'\n");
+
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-3].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-2].integer));
+		  if(!IS_GENp(6)) {
+		    GEN(&(yyval.instruction))->header.thread_control |= BRW_THREAD_SWITCH;
+		    ip_dst.width = (yyvsp[-1].integer);
+		    set_instruction_dest(&(yyval.instruction), &ip_dst);
+		    set_instruction_src0(&(yyval.instruction), &ip_src, NULL);
+		    set_instruction_src1(&(yyval.instruction), &(yyvsp[0].src_operand), NULL);
+		  }
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[0].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[0].src_operand).imm32;
+		}
+#line 2915 "gram.c"
+    break;
+
+  case 59: /* ifelseinstruction: predicate IF execsize relativelocation relativelocation  */
+#line 879 "gram.y"
+                {
+		  /* for Gen7+ */
+		  if(!IS_GENp(7))
+		    error(&(yylsp[-3]), "IF should be 'IF execsize relativelocation'\n");
+
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-4].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-3].integer));
+		  set_execsize(&(yyval.instruction), (yyvsp[-2].integer));
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  (yyval.instruction).reloc.second_reloc_target = (yyvsp[0].src_operand).reloc_target;
+		  (yyval.instruction).reloc.second_reloc_offset = (yyvsp[0].src_operand).imm32;
+		}
+#line 2934 "gram.c"
+    break;
+
+  case 60: /* loopinstruction: predicate WHILE execsize relativelocation instoptions  */
+#line 896 "gram.y"
+                {
+		  if(!IS_GENp(6)) {
+		    /* The branch instructions require that the IP register
+		     * be the destination and first source operand, while the
+		     * offset is the second source operand.  The offset is added
+		     * to the pre-incremented IP.
+		     */
+		    ip_dst.width = (yyvsp[-2].integer);
+		    set_instruction_dest(&(yyval.instruction), &ip_dst);
+		    memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		    set_instruction_predicate(&(yyval.instruction), &(yyvsp[-4].predicate));
+		    set_instruction_opcode(&(yyval.instruction), (yyvsp[-3].integer));
+		    GEN(&(yyval.instruction))->header.thread_control |= BRW_THREAD_SWITCH;
+		    set_instruction_src0(&(yyval.instruction), &ip_src, NULL);
+		    set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), NULL);
+		    (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		    (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  } else if (IS_GENp(6)) {
+		    /* Gen6 spec:
+		         dest must have the same element size as src0.
+		         dest horizontal stride must be 1. */
+		    memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		    set_instruction_predicate(&(yyval.instruction), &(yyvsp[-4].predicate));
+		    set_instruction_opcode(&(yyval.instruction), (yyvsp[-3].integer));
+		    set_execsize(&(yyval.instruction), (yyvsp[-2].integer));
+		    (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		    (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  } else {
+		    error(&(yylsp[-3]), "'WHILE' instruction is not implemented!\n");
+		  }
+		}
+#line 2970 "gram.c"
+    break;
+
+  case 61: /* loopinstruction: DO  */
+#line 928 "gram.y"
+                {
+		  // deprecated
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[0].integer));
+		}
+#line 2980 "gram.c"
+    break;
+
+  case 62: /* haltinstruction: predicate HALT execsize relativelocation relativelocation instoptions  */
+#line 935 "gram.y"
+                {
+		  // for Gen6, Gen7
+		  /* Gen6, Gen7 bspec: dst and src0 must be the null reg. */
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-5].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-4].integer));
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[-2].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-2].src_operand).imm32;
+		  (yyval.instruction).reloc.second_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		  (yyval.instruction).reloc.second_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  dst_null_reg.width = (yyvsp[-3].integer);
+		  set_instruction_dest(&(yyval.instruction), &dst_null_reg);
+		  set_instruction_src0(&(yyval.instruction), &src_null_reg, NULL);
+		}
+#line 2999 "gram.c"
+    break;
+
+  case 63: /* multibranchinstruction: predicate BRD execsize relativelocation instoptions  */
+#line 952 "gram.y"
+                {
+		  /* Gen7 bspec: dest must be null. use Switch option */
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-4].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-3].integer));
+		  if (IS_GENp(8))
+                      gen8_set_thread_control(GEN8(&(yyval.instruction)), gen8_thread_control(GEN8(&(yyval.instruction))) | BRW_THREAD_SWITCH);
+		  else
+                      GEN(&(yyval.instruction))->header.thread_control |= BRW_THREAD_SWITCH;
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  dst_null_reg.width = (yyvsp[-2].integer);
+		  set_instruction_dest(&(yyval.instruction), &dst_null_reg);
+		}
+#line 3018 "gram.c"
+    break;
+
+  case 64: /* multibranchinstruction: predicate BRC execsize relativelocation relativelocation instoptions  */
+#line 967 "gram.y"
+                {
+		  /* Gen7 bspec: dest must be null. src0 must be null. use Switch option */
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-5].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-4].integer));
+		  if (IS_GENp(8))
+                      gen8_set_thread_control(GEN8(&(yyval.instruction)), gen8_thread_control(GEN8(&(yyval.instruction))) | BRW_THREAD_SWITCH);
+		  else
+                      GEN(&(yyval.instruction))->header.thread_control |= BRW_THREAD_SWITCH;
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[-2].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-2].src_operand).imm32;
+		  (yyval.instruction).reloc.second_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		  (yyval.instruction).reloc.second_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		  dst_null_reg.width = (yyvsp[-3].integer);
+		  set_instruction_dest(&(yyval.instruction), &dst_null_reg);
+		  set_instruction_src0(&(yyval.instruction), &src_null_reg, NULL);
+		}
+#line 3040 "gram.c"
+    break;
+
+  case 65: /* subroutineinstruction: predicate CALL execsize dst relativelocation instoptions  */
+#line 988 "gram.y"
+                {
+		  /*
+		    Gen6 bspec:
+		       source, dest type should be DWORD.
+		       dest must be QWord aligned.
+		       source0 region control must be <2,2,1>.
+		       execution size must be 2.
+		       QtrCtrl is prohibited.
+		       JIP is an immediate operand, must be of type W.
+		    Gen7 bspec:
+		       source, dest type should be DWORD.
+		       dest must be QWord aligned.
+		       source0 region control must be <2,2,1>.
+		       execution size must be 2.
+		   */
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-5].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-4].integer));
+
+		  (yyvsp[-2].reg).type = BRW_REGISTER_TYPE_D; /* dest type should be DWORD */
+		  (yyvsp[-2].reg).width = BRW_WIDTH_2; /* execution size must be 2. */
+		  set_instruction_dest(&(yyval.instruction), &(yyvsp[-2].reg));
+
+		  struct src_operand src0;
+		  memset(&src0, 0, sizeof(src0));
+		  src0.reg.type = BRW_REGISTER_TYPE_D; /* source type should be DWORD */
+		  /* source0 region control must be <2,2,1>. */
+		  src0.reg.hstride = 1; /*encoded 1*/
+		  src0.reg.width = BRW_WIDTH_2;
+		  src0.reg.vstride = 2; /*encoded 2*/
+		  set_instruction_src0(&(yyval.instruction), &src0, NULL);
+
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		}
+#line 3080 "gram.c"
+    break;
+
+  case 66: /* subroutineinstruction: predicate RET execsize dstoperandex src instoptions  */
+#line 1024 "gram.y"
+                {
+		  /*
+		     Gen6, 7:
+		       source cannot be accumulator.
+		       dest must be null.
+		       src0 region control must be <2,2,1> (not specified clearly. should be same as CALL)
+		   */
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-5].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-4].integer));
+		  dst_null_reg.width = BRW_WIDTH_2; /* execution size of RET should be 2 */
+		  set_instruction_dest(&(yyval.instruction), &dst_null_reg);
+		  (yyvsp[-1].src_operand).reg.type = BRW_REGISTER_TYPE_D;
+		  (yyvsp[-1].src_operand).reg.hstride = 1; /*encoded 1*/
+		  (yyvsp[-1].src_operand).reg.width = BRW_WIDTH_2;
+		  (yyvsp[-1].src_operand).reg.vstride = 2; /*encoded 2*/
+		  set_instruction_src0(&(yyval.instruction), &(yyvsp[-1].src_operand), NULL);
+		}
+#line 3103 "gram.c"
+    break;
+
+  case 67: /* unaryinstruction: predicate unaryop conditionalmodifier saturate execsize dst srcaccimm instoptions  */
+#line 1047 "gram.y"
+                {
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-6].integer));
+		  set_instruction_saturate(&(yyval.instruction), (yyvsp[-4].integer));
+		  (yyvsp[-2].reg).width = (yyvsp[-3].integer);
+		  set_instruction_options(&(yyval.instruction), (yyvsp[0].options));
+		  set_instruction_pred_cond(&(yyval.instruction), &(yyvsp[-7].predicate), &(yyvsp[-5].condition), &(yylsp[-5]));
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-2].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1])) != 0)
+		    YYERROR;
+
+		  if (!IS_GENp(6) && 
+				get_type_size(GEN(&(yyval.instruction))->bits1.da1.dest_reg_type) * (1 << (yyvsp[-2].reg).width) == 64)
+		    GEN(&(yyval.instruction))->header.compression_control = BRW_COMPRESSION_COMPRESSED;
+		}
+#line 3124 "gram.c"
+    break;
+
+  case 82: /* binaryinstruction: predicate binaryop conditionalmodifier saturate execsize dst src srcimm instoptions  */
+#line 1073 "gram.y"
+                {
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-7].integer));
+		  set_instruction_saturate(&(yyval.instruction), (yyvsp[-5].integer));
+		  set_instruction_options(&(yyval.instruction), (yyvsp[0].options));
+		  set_instruction_pred_cond(&(yyval.instruction), &(yyvsp[-8].predicate), &(yyvsp[-6].condition), &(yylsp[-6]));
+		  (yyvsp[-3].reg).width = (yyvsp[-4].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-3].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-2].src_operand), &(yylsp[-2])) != 0)
+		    YYERROR;
+		  if (set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1])) != 0)
+		    YYERROR;
+
+		  if (!IS_GENp(6) && 
+				get_type_size(GEN(&(yyval.instruction))->bits1.da1.dest_reg_type) * (1 << (yyvsp[-3].reg).width) == 64)
+		    GEN(&(yyval.instruction))->header.compression_control = BRW_COMPRESSION_COMPRESSED;
+		}
+#line 3147 "gram.c"
+    break;
+
+  case 95: /* binaryaccinstruction: predicate binaryaccop conditionalmodifier saturate execsize dst srcacc srcimm instoptions  */
+#line 1101 "gram.y"
+                {
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-7].integer));
+		  set_instruction_saturate(&(yyval.instruction), (yyvsp[-5].integer));
+		  (yyvsp[-3].reg).width = (yyvsp[-4].integer);
+		  set_instruction_options(&(yyval.instruction), (yyvsp[0].options));
+		  set_instruction_pred_cond(&(yyval.instruction), &(yyvsp[-8].predicate), &(yyvsp[-6].condition), &(yylsp[-6]));
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-3].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-2].src_operand), &(yylsp[-2])) != 0)
+		    YYERROR;
+		  if (set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1])) != 0)
+		    YYERROR;
+
+		  if (!IS_GENp(6) && 
+				get_type_size(GEN(&(yyval.instruction))->bits1.da1.dest_reg_type) * (1 << (yyvsp[-3].reg).width) == 64)
+		    GEN(&(yyval.instruction))->header.compression_control = BRW_COMPRESSION_COMPRESSED;
+		}
+#line 3170 "gram.c"
+    break;
+
+  case 113: /* trinaryinstruction: predicate trinaryop conditionalmodifier saturate execsize dst src src src instoptions  */
+#line 1131 "gram.y"
+{
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+
+		  set_instruction_pred_cond(&(yyval.instruction), &(yyvsp[-9].predicate), &(yyvsp[-7].condition), &(yylsp[-7]));
+
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-8].integer));
+		  set_instruction_saturate(&(yyval.instruction), (yyvsp[-6].integer));
+		  set_instruction_options(&(yyval.instruction), (yyvsp[0].options));
+
+		  (yyvsp[-4].reg).width = (yyvsp[-5].integer);
+		  if (set_instruction_dest_three_src(&(yyval.instruction), &(yyvsp[-4].reg)))
+		    YYERROR;
+		  if (set_instruction_src0_three_src(&(yyval.instruction), &(yyvsp[-3].src_operand)))
+		    YYERROR;
+		  if (set_instruction_src1_three_src(&(yyval.instruction), &(yyvsp[-2].src_operand)))
+		    YYERROR;
+		  if (set_instruction_src2_three_src(&(yyval.instruction), &(yyvsp[-1].src_operand)))
+		    YYERROR;
+}
+#line 3194 "gram.c"
+    break;
+
+  case 116: /* sendinstruction: predicate sendop execsize exp post_dst payload msgtarget MSGLEN exp RETURNLEN exp instoptions  */
+#line 1157 "gram.y"
+                {
+		  /* Send instructions are messy.  The first argument is the
+		   * post destination -- the grf register that the response
+		   * starts from.  The second argument is the current
+		   * destination, which is the start of the message arguments
+		   * to the shared function, and where src0 payload is loaded
+		   * to if not null.  The payload is typically based on the
+		   * grf 0 thread payload of your current thread, and is
+		   * implicitly loaded if non-null.
+		   */
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-10].integer));
+		  (yyvsp[-7].reg).width = (yyvsp[-9].integer);
+		  GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-8].integer); /* msg reg index */
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-11].predicate));
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-7].reg)) != 0)
+		    YYERROR;
+
+		  if (IS_GENp(6)) {
+                      struct src_operand src0;
+
+                      memset(&src0, 0, sizeof(src0));
+                      src0.reg.address_mode = BRW_ADDRESS_DIRECT;
+
+                      if (IS_GENp(7))
+                          src0.reg.file = BRW_GENERAL_REGISTER_FILE;
+                      else
+                          src0.reg.file = BRW_MESSAGE_REGISTER_FILE;
+
+                      src0.reg.type = BRW_REGISTER_TYPE_D;
+                      src0.reg.nr = (yyvsp[-8].integer);
+                      src0.reg.subnr = 0;
+                      set_instruction_src0(&(yyval.instruction), &src0, NULL);
+		  } else {
+                      if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-6].src_operand), &(yylsp[-6])) != 0)
+                          YYERROR;
+		  }
+
+		  if (IS_GENp(9)) {
+		      gen8_set_src1_reg_file(GEN8(&(yyval.instruction)), BRW_IMMEDIATE_VALUE);
+		      gen8_set_src1_reg_type(GEN8(&(yyval.instruction)), BRW_REGISTER_TYPE_D);
+		      gen9_set_send_extdesc(GEN8(&(yyval.instruction)), 0);
+		  } else if (IS_GENp(8)) {
+		      gen8_set_src1_reg_file(GEN8(&(yyval.instruction)), BRW_IMMEDIATE_VALUE);
+		      gen8_set_src1_reg_type(GEN8(&(yyval.instruction)), BRW_REGISTER_TYPE_D);
+		  } else {
+		      GEN(&(yyval.instruction))->bits1.da1.src1_reg_file = BRW_IMMEDIATE_VALUE;
+		      GEN(&(yyval.instruction))->bits1.da1.src1_reg_type = BRW_REGISTER_TYPE_D;
+		  }
+
+		  if (IS_GENp(8)) {
+		      GEN8(&(yyval.instruction))->data[3] = GEN8(&(yyvsp[-5].instruction))->data[3];
+		      gen8_set_sfid(GEN8(&(yyval.instruction)), gen8_sfid(GEN8(&(yyvsp[-5].instruction))));
+		      gen8_set_mlen(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+		      gen8_set_rlen(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+		      gen8_set_eot(GEN8(&(yyval.instruction)), (yyvsp[0].options).end_of_thread);
+		  } else if (IS_GENp(5)) {
+                      if (IS_GENp(6)) {
+                          GEN(&(yyval.instruction))->header.destreg__conditionalmod = GEN(&(yyvsp[-5].instruction))->bits2.send_gen5.sfid;
+                      } else {
+                          GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-8].integer); /* msg reg index */
+                          GEN(&(yyval.instruction))->bits2.send_gen5.sfid = GEN(&(yyvsp[-5].instruction))->bits2.send_gen5.sfid;
+                          GEN(&(yyval.instruction))->bits2.send_gen5.end_of_thread = (yyvsp[0].options).end_of_thread;
+                      }
+
+                      GEN(&(yyval.instruction))->bits3.generic_gen5 = GEN(&(yyvsp[-5].instruction))->bits3.generic_gen5;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.msg_length = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.response_length = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.end_of_thread = (yyvsp[0].options).end_of_thread;
+		  } else {
+                      GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-8].integer); /* msg reg index */
+                      GEN(&(yyval.instruction))->bits3.generic = GEN(&(yyvsp[-5].instruction))->bits3.generic;
+                      GEN(&(yyval.instruction))->bits3.generic.msg_length = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.generic.response_length = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.generic.end_of_thread = (yyvsp[0].options).end_of_thread;
+		  }
+		}
+#line 3276 "gram.c"
+    break;
+
+  case 117: /* sendinstruction: predicate sendop execsize dst sendleadreg payload directsrcoperand instoptions  */
+#line 1235 "gram.y"
+                {
+		  if (IS_GENp(6))
+                      error(&(yylsp[-6]), "invalid syntax for send on gen6+\n");
+
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-6].integer));
+		  GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-3].reg).nr; /* msg reg index */
+
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-7].predicate));
+
+		  (yyvsp[-4].reg).width = (yyvsp[-5].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-4].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-2].src_operand), &(yylsp[-2])) != 0)
+		    YYERROR;
+		  /* XXX is this correct? */
+		  if (set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1])) != 0)
+		    YYERROR;
+
+		  }
+#line 3301 "gram.c"
+    break;
+
+  case 118: /* sendinstruction: predicate sendop execsize dst sendleadreg payload imm32reg instoptions  */
+#line 1256 "gram.y"
+                {
+		  if (IS_GENp(6))
+                      error(&(yylsp[-6]), "invalid syntax for send on gen6+\n");
+
+		  if ((yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_UD &&
+		      (yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_D &&
+		      (yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_V) {
+		    error (&(yylsp[-1]), "non-int D/UD/V representation: %d,"
+			   "type=%d\n", (yyvsp[-1].src_operand).reg.dw1.ud, (yyvsp[-1].src_operand).reg.type);
+		  }
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-6].integer));
+		  GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-3].reg).nr; /* msg reg index */
+
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-7].predicate));
+		  (yyvsp[-4].reg).width = (yyvsp[-5].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-4].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-2].src_operand), &(yylsp[-2])) != 0)
+		    YYERROR;
+		  if (set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1])) != 0)
+		    YYERROR;
+                }
+#line 3329 "gram.c"
+    break;
+
+  case 119: /* sendinstruction: predicate sendop execsize dst sendleadreg sndopr imm32reg instoptions  */
+#line 1280 "gram.y"
+                {
+		  struct src_operand src0;
+
+		  if (!IS_GENp(6))
+                      error(&(yylsp[-6]), "invalid syntax for send on gen6+\n");
+
+		  if ((yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_UD &&
+                      (yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_D &&
+                      (yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_V) {
+                      error(&(yylsp[-1]),"non-int D/UD/V representation: %d,"
+			    "type=%d\n", (yyvsp[-1].src_operand).reg.dw1.ud, (yyvsp[-1].src_operand).reg.type);
+		  }
+
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-6].integer));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-7].predicate));
+
+		  (yyvsp[-4].reg).width = (yyvsp[-5].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-4].reg)) != 0)
+                      YYERROR;
+
+                  memset(&src0, 0, sizeof(src0));
+                  src0.reg.address_mode = BRW_ADDRESS_DIRECT;
+
+                  if (IS_GENp(7)) {
+                      src0.reg.file = BRW_GENERAL_REGISTER_FILE;
+                      src0.reg.type = BRW_REGISTER_TYPE_UB;
+                  } else {
+                      src0.reg.file = BRW_MESSAGE_REGISTER_FILE;
+                      src0.reg.type = BRW_REGISTER_TYPE_D;
+                  }
+
+                  src0.reg.nr = (yyvsp[-3].reg).nr;
+                  src0.reg.subnr = 0;
+                  set_instruction_src0(&(yyval.instruction), &src0, NULL);
+		  set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), NULL);
+
+                  if (IS_GENp(9)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-2].integer) & EX_DESC_SFID_MASK);
+                      gen8_set_eot(GEN8(&(yyval.instruction)), !!((yyvsp[-2].integer) & EX_DESC_EOT_MASK));
+                      gen9_set_send_extdesc(GEN8(&(yyval.instruction)), (yyvsp[-2].integer) & EX_DESC_FUNC_MASK);
+                  } else if (IS_GENp(8)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-2].integer) & EX_DESC_SFID_MASK);
+                      gen8_set_eot(GEN8(&(yyval.instruction)), !!((yyvsp[-2].integer) & EX_DESC_EOT_MASK));
+		  } else {
+                      GEN(&(yyval.instruction))->header.destreg__conditionalmod = ((yyvsp[-2].integer) & EX_DESC_SFID_MASK); /* SFID */
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.end_of_thread = !!((yyvsp[-2].integer) & EX_DESC_EOT_MASK);
+                  }
+		}
+#line 3383 "gram.c"
+    break;
+
+  case 120: /* sendinstruction: predicate sendop execsize dst sendleadreg sndopr directsrcoperand instoptions  */
+#line 1330 "gram.y"
+                {
+		  struct src_operand src0;
+
+		  if (!IS_GENp(6))
+                      error(&(yylsp[-6]), "invalid syntax for send on gen6+\n");
+
+                  if ((yyvsp[-1].src_operand).reg.file != BRW_ARCHITECTURE_REGISTER_FILE ||
+                      ((yyvsp[-1].src_operand).reg.nr & 0xF0) != BRW_ARF_ADDRESS ||
+                      ((yyvsp[-1].src_operand).reg.nr & 0x0F) != 0 ||
+                      (yyvsp[-1].src_operand).reg.subnr != 0) {
+                      error (&(yylsp[-1]), "scalar register must be a0.0<0;1,0>:ud\n");
+		  }
+
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-6].integer));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-7].predicate));
+
+		  (yyvsp[-4].reg).width = (yyvsp[-5].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-4].reg)) != 0)
+                      YYERROR;
+
+                  memset(&src0, 0, sizeof(src0));
+                  src0.reg.address_mode = BRW_ADDRESS_DIRECT;
+
+                  if (IS_GENp(7)) {
+                      src0.reg.file = BRW_GENERAL_REGISTER_FILE;
+                      src0.reg.type = BRW_REGISTER_TYPE_UB;
+                  } else {
+                      src0.reg.file = BRW_MESSAGE_REGISTER_FILE;
+                      src0.reg.type = BRW_REGISTER_TYPE_D;
+                  }
+
+                  src0.reg.nr = (yyvsp[-3].reg).nr;
+                  src0.reg.subnr = 0;
+                  set_instruction_src0(&(yyval.instruction), &src0, NULL);
+
+                  set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1]));
+
+                  if (IS_GENp(8)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-2].integer) & EX_DESC_SFID_MASK);
+                      gen8_set_eot(GEN8(&(yyval.instruction)), !!((yyvsp[-2].integer) & EX_DESC_EOT_MASK));
+                      gen9_set_send_extdesc(GEN8(&(yyval.instruction)), (yyvsp[-2].integer) & EX_DESC_FUNC_MASK);
+		  } else if (IS_GENp(8)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-2].integer) & EX_DESC_SFID_MASK);
+                      gen8_set_eot(GEN8(&(yyval.instruction)), !!((yyvsp[-2].integer) & EX_DESC_EOT_MASK));
+		  } else {
+                      GEN(&(yyval.instruction))->header.destreg__conditionalmod = ((yyvsp[-2].integer) & EX_DESC_SFID_MASK); /* SFID */
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.end_of_thread = !!((yyvsp[-2].integer) & EX_DESC_EOT_MASK);
+                  }
+		}
+#line 3438 "gram.c"
+    break;
+
+  case 121: /* sendinstruction: predicate sendop execsize dst sendleadreg payload sndopr imm32reg instoptions  */
+#line 1381 "gram.y"
+                {
+		  if (IS_GENp(6))
+                      error(&(yylsp[-7]), "invalid syntax for send on gen6+\n");
+
+		  if ((yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_UD &&
+		      (yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_D &&
+		      (yyvsp[-1].src_operand).reg.type != BRW_REGISTER_TYPE_V) {
+		    error(&(yylsp[-1]), "non-int D/UD/V representation: %d,"
+			  "type=%d\n", (yyvsp[-1].src_operand).reg.dw1.ud, (yyvsp[-1].src_operand).reg.type);
+		  }
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-7].integer));
+		  GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-4].reg).nr; /* msg reg index */
+
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-8].predicate));
+		  (yyvsp[-5].reg).width = (yyvsp[-6].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-5].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-3].src_operand), &(yylsp[-3])) != 0)
+		    YYERROR;
+		  if (set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1])) != 0)
+		    YYERROR;
+
+		  if (IS_GENx(5)) {
+		      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = ((yyvsp[-2].integer) & EX_DESC_SFID_MASK);
+		      GEN(&(yyval.instruction))->bits3.generic_gen5.end_of_thread = !!((yyvsp[-2].integer) & EX_DESC_EOT_MASK);
+		  }
+		}
+#line 3471 "gram.c"
+    break;
+
+  case 122: /* sendinstruction: predicate sendop execsize dst sendleadreg payload exp directsrcoperand instoptions  */
+#line 1410 "gram.y"
+                {
+		  if (IS_GENp(6))
+                      error(&(yylsp[-7]), "invalid syntax for send on gen6+\n");
+
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-7].integer));
+		  GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-4].reg).nr; /* msg reg index */
+
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-8].predicate));
+
+		  (yyvsp[-5].reg).width = (yyvsp[-6].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-5].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-3].src_operand), &(yylsp[-3])) != 0)
+		    YYERROR;
+		  /* XXX is this correct? */
+		  if (set_instruction_src1(&(yyval.instruction), &(yyvsp[-1].src_operand), &(yylsp[-1])) != 0)
+		    YYERROR;
+		  if (IS_GENx(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = (yyvsp[-2].integer);
+		  }
+		}
+#line 3498 "gram.c"
+    break;
+
+  case 123: /* sndopr: exp  */
+#line 1436 "gram.y"
+                {
+			(yyval.integer) = (yyvsp[0].integer);
+		}
+#line 3506 "gram.c"
+    break;
+
+  case 124: /* jumpinstruction: predicate JMPI execsize relativelocation2  */
+#line 1442 "gram.y"
+                {
+		  /* The jump instruction requires that the IP register
+		   * be the destination and first source operand, while the
+		   * offset is the second source operand.  The next instruction
+		   * is the post-incremented IP plus the offset.
+		   */
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-2].integer));
+		  if(advanced_flag) {
+                      if (IS_GENp(8))
+                          gen8_set_mask_control(GEN8(&(yyval.instruction)), BRW_MASK_DISABLE);
+                      else
+                          GEN(&(yyval.instruction))->header.mask_control = BRW_MASK_DISABLE;
+		  }
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-3].predicate));
+		  ip_dst.width = BRW_WIDTH_1;
+		  set_instruction_dest(&(yyval.instruction), &ip_dst);
+		  set_instruction_src0(&(yyval.instruction), &ip_src, NULL);
+		  set_instruction_src1(&(yyval.instruction), &(yyvsp[0].src_operand), NULL);
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[0].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[0].src_operand).imm32;
+		}
+#line 3533 "gram.c"
+    break;
+
+  case 125: /* mathinstruction: predicate MATH_INST execsize dst src srcimm math_function instoptions  */
+#line 1467 "gram.y"
+                {
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-6].integer));
+
+		  if (IS_GENp(8))
+                      gen8_set_math_function(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+		  else
+                      GEN(&(yyval.instruction))->header.destreg__conditionalmod = (yyvsp[-1].integer);
+
+		  set_instruction_options(&(yyval.instruction), (yyvsp[0].options));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-7].predicate));
+		  (yyvsp[-4].reg).width = (yyvsp[-5].integer);
+		  if (set_instruction_dest(&(yyval.instruction), &(yyvsp[-4].reg)) != 0)
+		    YYERROR;
+		  if (set_instruction_src0(&(yyval.instruction), &(yyvsp[-3].src_operand), &(yylsp[-3])) != 0)
+		    YYERROR;
+		  if (set_instruction_src1(&(yyval.instruction), &(yyvsp[-2].src_operand), &(yylsp[-2])) != 0)
+		    YYERROR;
+		}
+#line 3557 "gram.c"
+    break;
+
+  case 126: /* breakinstruction: predicate breakop execsize relativelocation relativelocation instoptions  */
+#line 1489 "gram.y"
+                {
+		  // for Gen6, Gen7
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_predicate(&(yyval.instruction), &(yyvsp[-5].predicate));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-4].integer));
+		  set_execsize(&(yyval.instruction), (yyvsp[-3].integer));
+		  (yyval.instruction).reloc.first_reloc_target = (yyvsp[-2].src_operand).reloc_target;
+		  (yyval.instruction).reloc.first_reloc_offset = (yyvsp[-2].src_operand).imm32;
+		  (yyval.instruction).reloc.second_reloc_target = (yyvsp[-1].src_operand).reloc_target;
+		  (yyval.instruction).reloc.second_reloc_offset = (yyvsp[-1].src_operand).imm32;
+		}
+#line 3573 "gram.c"
+    break;
+
+  case 129: /* syncinstruction: predicate WAIT notifyreg  */
+#line 1511 "gram.y"
+                {
+		  struct brw_reg notify_dst;
+		  struct src_operand notify_src;
+
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[-1].integer));
+		  set_direct_dst_operand(&notify_dst, &(yyvsp[0].reg), BRW_REGISTER_TYPE_D);
+		  notify_dst.width = BRW_WIDTH_1;
+		  set_instruction_dest(&(yyval.instruction), &notify_dst);
+		  set_direct_src_operand(&notify_src, &(yyvsp[0].reg), BRW_REGISTER_TYPE_D);
+		  set_instruction_src0(&(yyval.instruction), &notify_src, NULL);
+		  set_instruction_src1(&(yyval.instruction), &src_null_reg, NULL);
+		}
+#line 3591 "gram.c"
+    break;
+
+  case 130: /* nopinstruction: NOP  */
+#line 1528 "gram.y"
+                {
+		  memset(&(yyval.instruction), 0, sizeof((yyval.instruction)));
+		  set_instruction_opcode(&(yyval.instruction), (yyvsp[0].integer));
+		}
+#line 3600 "gram.c"
+    break;
+
+  case 133: /* msgtarget: NULL_TOKEN  */
+#line 1541 "gram.y"
+                {
+		  if (IS_GENp(8)) {
+		      gen8_set_sfid(GEN8(&(yyval.instruction)), BRW_SFID_NULL);
+		      gen8_set_header_present(GEN8(&(yyval.instruction)), 0);
+		  } else if (IS_GENp(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid= BRW_SFID_NULL;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 0;  /* ??? */
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target = BRW_SFID_NULL;
+		  }
+		}
+#line 3616 "gram.c"
+    break;
+
+  case 134: /* msgtarget: SAMPLER LPAREN INTEGER COMMA INTEGER COMMA sampler_datatype RPAREN  */
+#line 1554 "gram.y"
+                {
+		  if (IS_GENp(8)) {
+		      gen8_set_sfid(GEN8(&(yyval.instruction)), BRW_SFID_SAMPLER);
+		      gen8_set_header_present(GEN8(&(yyval.instruction)), 1); /* ??? */
+		      gen8_set_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-5].integer));
+		      gen8_set_sampler(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+		      gen8_set_sampler_simd_mode(GEN8(&(yyval.instruction)), 2); /* SIMD16 */
+		  } else if (IS_GENp(7)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = BRW_SFID_SAMPLER;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;   /* ??? */
+                      GEN(&(yyval.instruction))->bits3.sampler_gen7.binding_table_index = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.sampler_gen7.sampler = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.sampler_gen7.simd_mode = 2; /* SIMD16, maybe we should add a new parameter */
+		  } else if (IS_GENp(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = BRW_SFID_SAMPLER;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;   /* ??? */
+                      GEN(&(yyval.instruction))->bits3.sampler_gen5.binding_table_index = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.sampler_gen5.sampler = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.sampler_gen5.simd_mode = 2; /* SIMD16, maybe we should add a new parameter */
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target = BRW_SFID_SAMPLER;
+                      GEN(&(yyval.instruction))->bits3.sampler.binding_table_index = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.sampler.sampler = (yyvsp[-3].integer);
+                      switch ((yyvsp[-1].integer)) {
+                      case TYPE_F:
+                          GEN(&(yyval.instruction))->bits3.sampler.return_format =
+                              BRW_SAMPLER_RETURN_FORMAT_FLOAT32;
+                          break;
+                      case TYPE_UD:
+                          GEN(&(yyval.instruction))->bits3.sampler.return_format =
+                              BRW_SAMPLER_RETURN_FORMAT_UINT32;
+                          break;
+                      case TYPE_D:
+                          GEN(&(yyval.instruction))->bits3.sampler.return_format =
+                              BRW_SAMPLER_RETURN_FORMAT_SINT32;
+                          break;
+                      }
+		  }
+		}
+#line 3660 "gram.c"
+    break;
+
+  case 135: /* msgtarget: MATH math_function saturate math_signed math_scalar  */
+#line 1594 "gram.y"
+                {
+		  if (IS_GENp(6)) {
+                      error (&(yylsp[-4]), "Gen6+ doesn't have math function\n");
+		  } else if (IS_GENx(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = BRW_SFID_MATH;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 0;
+                      GEN(&(yyval.instruction))->bits3.math_gen5.function = (yyvsp[-3].integer);
+		      set_instruction_saturate(&(yyval.instruction), (yyvsp[-2].integer));
+                      GEN(&(yyval.instruction))->bits3.math_gen5.int_type = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.math_gen5.precision = BRW_MATH_PRECISION_FULL;
+                      GEN(&(yyval.instruction))->bits3.math_gen5.data_type = (yyvsp[0].integer);
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target = BRW_SFID_MATH;
+                      GEN(&(yyval.instruction))->bits3.math.function = (yyvsp[-3].integer);
+		      set_instruction_saturate(&(yyval.instruction), (yyvsp[-2].integer));
+                      GEN(&(yyval.instruction))->bits3.math.int_type = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.math.precision = BRW_MATH_PRECISION_FULL;
+                      GEN(&(yyval.instruction))->bits3.math.data_type = (yyvsp[0].integer);
+		  }
+		}
+#line 3685 "gram.c"
+    break;
+
+  case 136: /* msgtarget: GATEWAY  */
+#line 1615 "gram.y"
+                {
+		  if (IS_GENp(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = BRW_SFID_MESSAGE_GATEWAY;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 0;  /* ??? */
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target = BRW_SFID_MESSAGE_GATEWAY;
+		  }
+		}
+#line 3698 "gram.c"
+    break;
+
+  case 137: /* msgtarget: READ LPAREN INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER RPAREN  */
+#line 1625 "gram.y"
+                {
+                  if (IS_GENp(9)) {
+                      if ((yyvsp[-5].integer) != 0 &&
+			  (yyvsp[-5].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+			  (yyvsp[-5].integer) != GEN7_SFID_DATAPORT_DATA_CACHE &&
+			  (yyvsp[-5].integer) != HSW_SFID_DATAPORT_DATA_CACHE1 &&
+			  (yyvsp[-5].integer) != SKL_SFID_DATAPORT_DCR0 &&
+			  (yyvsp[-5].integer) != SKL_SFID_DATAPORT_DATA_CACHE2) {
+			  error (&(yylsp[-1]), "error: wrong cache type\n");
+		      }
+
+		      if ((yyvsp[-5].integer) == 0)
+			  gen8_set_sfid(GEN8(&(yyval.instruction)), HSW_SFID_DATAPORT_DATA_CACHE1);
+		      else
+			  gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-5].integer));
+
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), 1);
+                      gen8_set_dp_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-7].integer));
+                      gen8_set_dp_message_control(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+                      gen8_set_dp_message_type(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+                      gen8_set_dp_category(GEN8(&(yyval.instruction)), 0);
+                  } else if (IS_GENp(8)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), GEN6_SFID_DATAPORT_SAMPLER_CACHE);
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), 1);
+                      gen8_set_dp_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-7].integer));
+                      gen8_set_dp_message_control(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+                      gen8_set_dp_message_type(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+                      gen8_set_dp_category(GEN8(&(yyval.instruction)), 0);
+		  } else if (IS_GENx(7)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid =
+                          GEN6_SFID_DATAPORT_SAMPLER_CACHE;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.msg_control = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.msg_type = (yyvsp[-1].integer);
+		  } else if (IS_GENx(6)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid =
+                          GEN6_SFID_DATAPORT_SAMPLER_CACHE;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+                      GEN(&(yyval.instruction))->bits3.gen6_dp_sampler_const_cache.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.gen6_dp_sampler_const_cache.msg_control = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.gen6_dp_sampler_const_cache.msg_type = (yyvsp[-1].integer);
+		  } else if (IS_GENx(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid =
+                          BRW_SFID_DATAPORT_READ;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+                      GEN(&(yyval.instruction))->bits3.dp_read_gen5.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_read_gen5.target_cache = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_read_gen5.msg_control = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_read_gen5.msg_type = (yyvsp[-1].integer);
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target =
+                          BRW_SFID_DATAPORT_READ;
+                      GEN(&(yyval.instruction))->bits3.dp_read.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_read.target_cache = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_read.msg_control = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_read.msg_type = (yyvsp[-1].integer);
+		  }
+		}
+#line 3762 "gram.c"
+    break;
+
+  case 138: /* msgtarget: WRITE LPAREN INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER RPAREN  */
+#line 1686 "gram.y"
+                {
+		  if (IS_GENp(8)) {
+                      if (IS_GENp(9)) {
+                          if ((yyvsp[-1].integer) != 0 &&
+			      (yyvsp[-1].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+			      (yyvsp[-1].integer) != GEN7_SFID_DATAPORT_DATA_CACHE &&
+			      (yyvsp[-1].integer) != HSW_SFID_DATAPORT_DATA_CACHE1 &&
+			      (yyvsp[-1].integer) != SKL_SFID_DATAPORT_DATA_CACHE2) {
+			      error (&(yylsp[-1]), "error: wrong cache type\n");
+                          }
+                      } else {
+                          if ((yyvsp[-1].integer) != 0 &&
+			      (yyvsp[-1].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+			      (yyvsp[-1].integer) != GEN7_SFID_DATAPORT_DATA_CACHE &&
+			      (yyvsp[-1].integer) != HSW_SFID_DATAPORT_DATA_CACHE1) {
+			      error (&(yylsp[-1]), "error: wrong cache type\n");
+                          }
+		      }
+
+		      if ((yyvsp[-1].integer) == 0)
+			  gen8_set_sfid(GEN8(&(yyval.instruction)), GEN6_SFID_DATAPORT_RENDER_CACHE);
+		      else
+			  gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), 1);
+                      gen8_set_dp_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-7].integer));
+                      gen8_set_dp_message_control(GEN8(&(yyval.instruction)), (yyvsp[-5].integer));
+                      gen8_set_dp_message_type(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+                      gen8_set_dp_category(GEN8(&(yyval.instruction)), 0);
+		  } else if (IS_GENx(7)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = GEN6_SFID_DATAPORT_RENDER_CACHE;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.msg_control = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.msg_type = (yyvsp[-3].integer);
+                  } else if (IS_GENx(6)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = GEN6_SFID_DATAPORT_RENDER_CACHE;
+                      /* Sandybridge supports headerlesss message for render target write.
+                       * Currently the GFX assembler doesn't support it. so the program must provide 
+                       * message header
+                       */
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+                      GEN(&(yyval.instruction))->bits3.gen6_dp.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.gen6_dp.msg_control = (yyvsp[-5].integer);
+                     GEN(&(yyval.instruction))->bits3.gen6_dp.msg_type = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.gen6_dp.send_commit_msg = (yyvsp[-1].integer);
+		  } else if (IS_GENx(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid =
+                          BRW_SFID_DATAPORT_WRITE;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.last_render_target = ((yyvsp[-5].integer) & 0x8) >> 3;
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.msg_control = (yyvsp[-5].integer) & 0x7;
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.msg_type = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.send_commit_msg = (yyvsp[-1].integer);
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target =
+                          BRW_SFID_DATAPORT_WRITE;
+                      GEN(&(yyval.instruction))->bits3.dp_write.binding_table_index = (yyvsp[-7].integer);
+                      /* The msg control field of brw_struct.h is split into
+                       * msg control and last_render_target, even though
+                       * last_render_target isn't common to all write messages.
+                       */
+                      GEN(&(yyval.instruction))->bits3.dp_write.last_render_target = ((yyvsp[-5].integer) & 0x8) >> 3;
+                      GEN(&(yyval.instruction))->bits3.dp_write.msg_control = (yyvsp[-5].integer) & 0x7;
+                      GEN(&(yyval.instruction))->bits3.dp_write.msg_type = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_write.send_commit_msg = (yyvsp[-1].integer);
+		  }
+		}
+#line 3836 "gram.c"
+    break;
+
+  case 139: /* msgtarget: WRITE LPAREN INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER RPAREN  */
+#line 1757 "gram.y"
+                {
+		  if (IS_GENp(8)) {
+                      if (IS_GENp(9)) {
+                          if ((yyvsp[-3].integer) != 0 &&
+			      (yyvsp[-3].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+			      (yyvsp[-3].integer) != GEN7_SFID_DATAPORT_DATA_CACHE &&
+			      (yyvsp[-3].integer) != HSW_SFID_DATAPORT_DATA_CACHE1 &&
+			      (yyvsp[-3].integer) != SKL_SFID_DATAPORT_DATA_CACHE2) {
+			      error (&(yylsp[-3]), "error: wrong cache type\n");
+                          }
+                      } else {
+                          if ((yyvsp[-3].integer) != 0 &&
+			      (yyvsp[-3].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+			      (yyvsp[-3].integer) != GEN7_SFID_DATAPORT_DATA_CACHE &&
+			      (yyvsp[-3].integer) != HSW_SFID_DATAPORT_DATA_CACHE1) {
+			      error (&(yylsp[-3]), "error: wrong cache type\n");
+                          }
+		      }
+
+		      if ((yyvsp[-3].integer) == 0)
+			  gen8_set_sfid(GEN8(&(yyval.instruction)), GEN6_SFID_DATAPORT_RENDER_CACHE);
+		      else
+			  gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), ((yyvsp[-1].integer) != 0));
+                      gen8_set_dp_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-9].integer));
+                      gen8_set_dp_message_control(GEN8(&(yyval.instruction)), (yyvsp[-7].integer));
+                      gen8_set_dp_message_type(GEN8(&(yyval.instruction)), (yyvsp[-5].integer));
+                      gen8_set_dp_category(GEN8(&(yyval.instruction)), 0);
+		  } else if (IS_GENx(7)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = GEN6_SFID_DATAPORT_RENDER_CACHE;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = ((yyvsp[-1].integer) != 0);
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.binding_table_index = (yyvsp[-9].integer);
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.msg_control = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.gen7_dp.msg_type = (yyvsp[-5].integer);
+		  } else if (IS_GENx(6)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = GEN6_SFID_DATAPORT_RENDER_CACHE;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = ((yyvsp[-1].integer) != 0);
+                      GEN(&(yyval.instruction))->bits3.gen6_dp.binding_table_index = (yyvsp[-9].integer);
+                      GEN(&(yyval.instruction))->bits3.gen6_dp.msg_control = (yyvsp[-7].integer);
+                     GEN(&(yyval.instruction))->bits3.gen6_dp.msg_type = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.gen6_dp.send_commit_msg = (yyvsp[-3].integer);
+		  } else if (IS_GENx(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid =
+                          BRW_SFID_DATAPORT_WRITE;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = ((yyvsp[-1].integer) != 0);
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.binding_table_index = (yyvsp[-9].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.last_render_target = ((yyvsp[-7].integer) & 0x8) >> 3;
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.msg_control = (yyvsp[-7].integer) & 0x7;
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.msg_type = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_write_gen5.send_commit_msg = (yyvsp[-3].integer);
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target =
+                          BRW_SFID_DATAPORT_WRITE;
+                      GEN(&(yyval.instruction))->bits3.dp_write.binding_table_index = (yyvsp[-9].integer);
+                      /* The msg control field of brw_struct.h is split into
+                       * msg control and last_render_target, even though
+                       * last_render_target isn't common to all write messages.
+                       */
+                      GEN(&(yyval.instruction))->bits3.dp_write.last_render_target = ((yyvsp[-7].integer) & 0x8) >> 3;
+                      GEN(&(yyval.instruction))->bits3.dp_write.msg_control = (yyvsp[-7].integer) & 0x7;
+                      GEN(&(yyval.instruction))->bits3.dp_write.msg_type = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.dp_write.send_commit_msg = (yyvsp[-3].integer);
+		  }
+		}
+#line 3906 "gram.c"
+    break;
+
+  case 140: /* msgtarget: URB INTEGER urb_swizzle urb_allocate urb_used urb_complete  */
+#line 1823 "gram.y"
+                {
+		  GEN(&(yyval.instruction))->bits3.generic.msg_target = BRW_SFID_URB;
+		  if (IS_GENp(5)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = BRW_SFID_URB;
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+		      set_instruction_opcode(&(yyval.instruction), BRW_URB_OPCODE_WRITE);
+                      GEN(&(yyval.instruction))->bits3.urb_gen5.offset = (yyvsp[-4].integer);
+                      GEN(&(yyval.instruction))->bits3.urb_gen5.swizzle_control = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.urb_gen5.pad = 0;
+                      GEN(&(yyval.instruction))->bits3.urb_gen5.allocate = (yyvsp[-2].integer);
+                      GEN(&(yyval.instruction))->bits3.urb_gen5.used = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.urb_gen5.complete = (yyvsp[0].integer);
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target = BRW_SFID_URB;
+		      set_instruction_opcode(&(yyval.instruction), BRW_URB_OPCODE_WRITE);
+                      GEN(&(yyval.instruction))->bits3.urb.offset = (yyvsp[-4].integer);
+                      GEN(&(yyval.instruction))->bits3.urb.swizzle_control = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.urb.pad = 0;
+                      GEN(&(yyval.instruction))->bits3.urb.allocate = (yyvsp[-2].integer);
+                      GEN(&(yyval.instruction))->bits3.urb.used = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.urb.complete = (yyvsp[0].integer);
+		  }
+		}
+#line 3934 "gram.c"
+    break;
+
+  case 141: /* msgtarget: THREAD_SPAWNER LPAREN INTEGER COMMA INTEGER COMMA INTEGER RPAREN  */
+#line 1848 "gram.y"
+                {
+		  if (IS_GENp(8)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), BRW_SFID_THREAD_SPAWNER);
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), 0); /* Must be 0 */
+                      gen8_set_ts_opcode(GEN8(&(yyval.instruction)), (yyvsp[-5].integer));
+                      gen8_set_ts_request_type(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+                      gen8_set_ts_resource_select(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+		  } else {
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target =
+                          BRW_SFID_THREAD_SPAWNER;
+                      if (IS_GENp(5)) {
+                          GEN(&(yyval.instruction))->bits2.send_gen5.sfid =
+                              BRW_SFID_THREAD_SPAWNER;
+                          GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 0;
+                          GEN(&(yyval.instruction))->bits3.thread_spawner_gen5.opcode = (yyvsp[-5].integer);
+                          GEN(&(yyval.instruction))->bits3.thread_spawner_gen5.requester_type  = (yyvsp[-3].integer);
+                          GEN(&(yyval.instruction))->bits3.thread_spawner_gen5.resource_select = (yyvsp[-1].integer);
+                      } else {
+                          GEN(&(yyval.instruction))->bits3.generic.msg_target =
+                              BRW_SFID_THREAD_SPAWNER;
+                          GEN(&(yyval.instruction))->bits3.thread_spawner.opcode = (yyvsp[-5].integer);
+                          GEN(&(yyval.instruction))->bits3.thread_spawner.requester_type  = (yyvsp[-3].integer);
+                          GEN(&(yyval.instruction))->bits3.thread_spawner.resource_select = (yyvsp[-1].integer);
+                      }
+		  }
+		}
+#line 3965 "gram.c"
+    break;
+
+  case 142: /* msgtarget: VME LPAREN INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER RPAREN  */
+#line 1875 "gram.y"
+                {
+		  GEN(&(yyval.instruction))->bits3.generic.msg_target = GEN6_SFID_VME;
+
+		  if (IS_GENp(8)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), GEN6_SFID_VME);
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), 1); /* Must be 1 */
+                      gen8_set_vme_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-7].integer));
+                      gen8_set_vme_message_type(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+		  } else if (IS_GENp(6)) {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = GEN6_SFID_VME;
+                      GEN(&(yyval.instruction))->bits3.vme_gen6.binding_table_index = (yyvsp[-7].integer);
+                      GEN(&(yyval.instruction))->bits3.vme_gen6.search_path_index = (yyvsp[-5].integer);
+                      GEN(&(yyval.instruction))->bits3.vme_gen6.lut_subindex = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.vme_gen6.message_type = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+		  } else {
+                      error (&(yylsp[-9]), "Gen6- doesn't have vme function\n");
+		  }    
+		}
+#line 3989 "gram.c"
+    break;
+
+  case 143: /* msgtarget: CRE LPAREN INTEGER COMMA INTEGER RPAREN  */
+#line 1895 "gram.y"
+                {
+		  if (IS_GENp(8)) {
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), HSW_SFID_CRE);
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), 1); /* Must be 1 */
+                      gen8_set_cre_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+                      gen8_set_cre_message_type(GEN8(&(yyval.instruction)), (yyvsp[-1].integer));
+		  } else {
+                      if (gen_level < 75)
+                          error (&(yylsp[-5]), "Below Gen7.5 doesn't have CRE function\n");
+
+                      GEN(&(yyval.instruction))->bits3.generic.msg_target = HSW_SFID_CRE;
+
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = HSW_SFID_CRE;
+                      GEN(&(yyval.instruction))->bits3.cre_gen75.binding_table_index = (yyvsp[-3].integer);
+                      GEN(&(yyval.instruction))->bits3.cre_gen75.message_type = (yyvsp[-1].integer);
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = 1;
+		  }
+		}
+#line 4012 "gram.c"
+    break;
+
+  case 144: /* msgtarget: DATA_PORT LPAREN INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER COMMA INTEGER RPAREN  */
+#line 1916 "gram.y"
+                {
+		  if (IS_GENp(8)) {
+                      if ((yyvsp[-11].integer) != GEN6_SFID_DATAPORT_SAMPLER_CACHE &&
+                          (yyvsp[-11].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+                          (yyvsp[-11].integer) != GEN6_SFID_DATAPORT_CONSTANT_CACHE &&
+                          (yyvsp[-11].integer) != GEN7_SFID_DATAPORT_DATA_CACHE &&
+                          (yyvsp[-11].integer) != HSW_SFID_DATAPORT_DATA_CACHE1) {
+                          error (&(yylsp[-11]), "error: wrong cache type\n");
+                      }
+
+                      gen8_set_sfid(GEN8(&(yyval.instruction)), (yyvsp[-11].integer));
+                      gen8_set_header_present(GEN8(&(yyval.instruction)), ((yyvsp[-1].integer) != 0));
+                      gen8_set_dp_binding_table_index(GEN8(&(yyval.instruction)), (yyvsp[-5].integer));
+                      gen8_set_dp_message_control(GEN8(&(yyval.instruction)), (yyvsp[-7].integer));
+                      gen8_set_dp_message_type(GEN8(&(yyval.instruction)), (yyvsp[-9].integer));
+                      gen8_set_dp_category(GEN8(&(yyval.instruction)), (yyvsp[-3].integer));
+		  } else {
+                      GEN(&(yyval.instruction))->bits2.send_gen5.sfid = (yyvsp[-11].integer);
+                      GEN(&(yyval.instruction))->bits3.generic_gen5.header_present = ((yyvsp[-1].integer) != 0);
+
+                      if (IS_GENp(7)) {
+                          if ((yyvsp[-11].integer) != GEN6_SFID_DATAPORT_SAMPLER_CACHE &&
+                              (yyvsp[-11].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+                              (yyvsp[-11].integer) != GEN6_SFID_DATAPORT_CONSTANT_CACHE &&
+                              (yyvsp[-11].integer) != GEN7_SFID_DATAPORT_DATA_CACHE) {
+                              error (&(yylsp[-11]), "error: wrong cache type\n");
+                          }
+
+                          GEN(&(yyval.instruction))->bits3.gen7_dp.category = (yyvsp[-3].integer);
+                          GEN(&(yyval.instruction))->bits3.gen7_dp.binding_table_index = (yyvsp[-5].integer);
+                          GEN(&(yyval.instruction))->bits3.gen7_dp.msg_control = (yyvsp[-7].integer);
+                          GEN(&(yyval.instruction))->bits3.gen7_dp.msg_type = (yyvsp[-9].integer);
+                      } else if (IS_GENx(6)) {
+                          if ((yyvsp[-11].integer) != GEN6_SFID_DATAPORT_SAMPLER_CACHE &&
+                              (yyvsp[-11].integer) != GEN6_SFID_DATAPORT_RENDER_CACHE &&
+                              (yyvsp[-11].integer) != GEN6_SFID_DATAPORT_CONSTANT_CACHE) {
+                              error (&(yylsp[-11]), "error: wrong cache type\n");
+                          }
+
+                          GEN(&(yyval.instruction))->bits3.gen6_dp.send_commit_msg = (yyvsp[-3].integer);
+                          GEN(&(yyval.instruction))->bits3.gen6_dp.binding_table_index = (yyvsp[-5].integer);
+                          GEN(&(yyval.instruction))->bits3.gen6_dp.msg_control = (yyvsp[-7].integer);
+                          GEN(&(yyval.instruction))->bits3.gen6_dp.msg_type = (yyvsp[-9].integer);
+                      } else if (!IS_GENp(5)) {
+                          error (&(yylsp[-13]), "Gen6- doesn't support data port for sampler/render/constant/data cache\n");
+                      }
+                  }
+		}
+#line 4065 "gram.c"
+    break;
+
+  case 145: /* urb_allocate: ALLOCATE  */
+#line 1966 "gram.y"
+                         { (yyval.integer) = 1; }
+#line 4071 "gram.c"
+    break;
+
+  case 146: /* urb_allocate: %empty  */
+#line 1967 "gram.y"
+                                     { (yyval.integer) = 0; }
+#line 4077 "gram.c"
+    break;
+
+  case 147: /* urb_used: USED  */
+#line 1970 "gram.y"
+                     { (yyval.integer) = 1; }
+#line 4083 "gram.c"
+    break;
+
+  case 148: /* urb_used: %empty  */
+#line 1971 "gram.y"
+                                     { (yyval.integer) = 0; }
+#line 4089 "gram.c"
+    break;
+
+  case 149: /* urb_complete: COMPLETE  */
+#line 1974 "gram.y"
+                         { (yyval.integer) = 1; }
+#line 4095 "gram.c"
+    break;
+
+  case 150: /* urb_complete: %empty  */
+#line 1975 "gram.y"
+                                     { (yyval.integer) = 0; }
+#line 4101 "gram.c"
+    break;
+
+  case 151: /* urb_swizzle: TRANSPOSE  */
+#line 1978 "gram.y"
+                          { (yyval.integer) = BRW_URB_SWIZZLE_TRANSPOSE; }
+#line 4107 "gram.c"
+    break;
+
+  case 152: /* urb_swizzle: INTERLEAVE  */
+#line 1979 "gram.y"
+                             { (yyval.integer) = BRW_URB_SWIZZLE_INTERLEAVE; }
+#line 4113 "gram.c"
+    break;
+
+  case 153: /* urb_swizzle: %empty  */
+#line 1980 "gram.y"
+                                     { (yyval.integer) = BRW_URB_SWIZZLE_NONE; }
+#line 4119 "gram.c"
+    break;
+
+  case 169: /* math_signed: %empty  */
+#line 1993 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 4125 "gram.c"
+    break;
+
+  case 170: /* math_signed: SIGNED  */
+#line 1994 "gram.y"
+                         { (yyval.integer) = 1; }
+#line 4131 "gram.c"
+    break;
+
+  case 171: /* math_scalar: %empty  */
+#line 1997 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 4137 "gram.c"
+    break;
+
+  case 172: /* math_scalar: SCALAR  */
+#line 1998 "gram.y"
+                         { (yyval.integer) = 1; }
+#line 4143 "gram.c"
+    break;
+
+  case 175: /* dstoperand: symbol_reg dstregion  */
+#line 2007 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[-1].symbol_reg).reg;
+	          (yyval.reg).hstride = resolve_dst_region(&(yyvsp[-1].symbol_reg), (yyvsp[0].integer));
+		}
+#line 4152 "gram.c"
+    break;
+
+  case 176: /* dstoperand: dstreg dstregion writemask regtype  */
+#line 2012 "gram.y"
+                {
+		  /* Returns an instruction with just the destination register
+		   * filled in.
+		   */
+		  (yyval.reg) = (yyvsp[-3].reg);
+	          (yyval.reg).hstride = resolve_dst_region(NULL, (yyvsp[-2].integer));
+		  (yyval.reg).dw1.bits.writemask = (yyvsp[-1].reg).dw1.bits.writemask;
+		  (yyval.reg).type = (yyvsp[0].regtype).type;
+		}
+#line 4166 "gram.c"
+    break;
+
+  case 177: /* dstoperandex: dstoperandex_typed dstregion regtype  */
+#line 2027 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[-2].reg);
+	          (yyval.reg).hstride = resolve_dst_region(NULL, (yyvsp[-1].integer));
+		  (yyval.reg).type = (yyvsp[0].regtype).type;
+		}
+#line 4176 "gram.c"
+    break;
+
+  case 178: /* dstoperandex: maskstackreg  */
+#line 2033 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[0].reg);
+		  (yyval.reg).hstride = 1;
+		  (yyval.reg).type = BRW_REGISTER_TYPE_UW;
+		}
+#line 4186 "gram.c"
+    break;
+
+  case 179: /* dstoperandex: controlreg  */
+#line 2039 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[0].reg);
+		  (yyval.reg).hstride = 1;
+		  (yyval.reg).type = BRW_REGISTER_TYPE_UD;
+		}
+#line 4196 "gram.c"
+    break;
+
+  case 180: /* dstoperandex: ipreg  */
+#line 2045 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[0].reg);
+		  (yyval.reg).hstride = 1;
+		  (yyval.reg).type = BRW_REGISTER_TYPE_UD;
+		}
+#line 4206 "gram.c"
+    break;
+
+  case 181: /* dstoperandex: nullreg dstregion regtype  */
+#line 2051 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[-2].reg);
+	          (yyval.reg).hstride = resolve_dst_region(NULL, (yyvsp[-1].integer));
+		  (yyval.reg).type = (yyvsp[0].regtype).type;
+		}
+#line 4216 "gram.c"
+    break;
+
+  case 186: /* symbol_reg: STRING  */
+#line 2062 "gram.y"
+                {
+		    struct declared_register *dcl_reg = find_register((yyvsp[0].string));
+
+		    if (dcl_reg == NULL)
+			error(&(yylsp[0]), "can't find register %s\n", (yyvsp[0].string));
+
+		    memcpy(&(yyval.symbol_reg), dcl_reg, sizeof(*dcl_reg));
+		    free((yyvsp[0].string)); // $1 has been malloc'ed by strdup
+		}
+#line 4230 "gram.c"
+    break;
+
+  case 187: /* symbol_reg: symbol_reg_p  */
+#line 2072 "gram.y"
+                {
+			(yyval.symbol_reg)=(yyvsp[0].symbol_reg);
+		}
+#line 4238 "gram.c"
+    break;
+
+  case 188: /* symbol_reg_p: STRING LPAREN exp RPAREN  */
+#line 2078 "gram.y"
+                {
+		    struct declared_register *dcl_reg = find_register((yyvsp[-3].string));	
+
+		    if (dcl_reg == NULL)
+			error(&(yylsp[-3]), "can't find register %s\n", (yyvsp[-3].string));
+
+		    memcpy(&(yyval.symbol_reg), dcl_reg, sizeof(*dcl_reg));
+		    (yyval.symbol_reg).reg.nr += (yyvsp[-1].integer);
+		    free((yyvsp[-3].string));
+		}
+#line 4253 "gram.c"
+    break;
+
+  case 189: /* symbol_reg_p: STRING LPAREN exp COMMA exp RPAREN  */
+#line 2089 "gram.y"
+                {
+		    struct declared_register *dcl_reg = find_register((yyvsp[-5].string));	
+
+		    if (dcl_reg == NULL)
+			error(&(yylsp[-5]), "can't find register %s\n", (yyvsp[-5].string));
+
+		    memcpy(&(yyval.symbol_reg), dcl_reg, sizeof(*dcl_reg));
+		    (yyval.symbol_reg).reg.nr += (yyvsp[-3].integer);
+		    if(advanced_flag) {
+			int size = get_type_size(dcl_reg->reg.type);
+		        (yyval.symbol_reg).reg.nr += ((yyval.symbol_reg).reg.subnr + (yyvsp[-1].integer)) / (32 / size);
+		        (yyval.symbol_reg).reg.subnr = ((yyval.symbol_reg).reg.subnr + (yyvsp[-1].integer)) % (32 / size);
+		    } else {
+		        (yyval.symbol_reg).reg.nr += ((yyval.symbol_reg).reg.subnr + (yyvsp[-1].integer)) / 32;
+		        (yyval.symbol_reg).reg.subnr = ((yyval.symbol_reg).reg.subnr + (yyvsp[-1].integer)) % 32;
+		    }
+		    free((yyvsp[-5].string));
+		}
+#line 4276 "gram.c"
+    break;
+
+  case 190: /* dstreg: directgenreg  */
+#line 2112 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[0].reg);
+		  (yyval.reg).address_mode = BRW_ADDRESS_DIRECT;
+		}
+#line 4285 "gram.c"
+    break;
+
+  case 191: /* dstreg: directmsgreg  */
+#line 2117 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[0].reg);
+		  (yyval.reg).address_mode = BRW_ADDRESS_DIRECT;
+		}
+#line 4294 "gram.c"
+    break;
+
+  case 192: /* dstreg: indirectgenreg  */
+#line 2122 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[0].reg);
+		  (yyval.reg).address_mode = BRW_ADDRESS_REGISTER_INDIRECT_REGISTER;
+		}
+#line 4303 "gram.c"
+    break;
+
+  case 193: /* dstreg: indirectmsgreg  */
+#line 2127 "gram.y"
+                {
+		  (yyval.reg) = (yyvsp[0].reg);
+		  (yyval.reg).address_mode = BRW_ADDRESS_REGISTER_INDIRECT_REGISTER;
+		}
+#line 4312 "gram.c"
+    break;
+
+  case 201: /* imm32reg: imm32 srcimmtype  */
+#line 2144 "gram.y"
+                {
+		  union {
+		    int i;
+		    float f;
+		  } intfloat;
+		  uint32_t	d;
+
+		  switch ((yyvsp[0].integer)) {
+		  case BRW_REGISTER_TYPE_UD:
+		  case BRW_REGISTER_TYPE_D:
+		  case BRW_REGISTER_TYPE_V:
+		  case BRW_REGISTER_TYPE_VF:
+		    switch ((yyvsp[-1].imm32).r) {
+		    case imm32_d:
+		      d = (yyvsp[-1].imm32).u.d;
+		      break;
+		    default:
+		      error (&(yylsp[0]), "non-int D/UD/V/VF representation: %d,type=%d\n", (yyvsp[-1].imm32).r, (yyvsp[0].integer));
+		    }
+		    break;
+		  case BRW_REGISTER_TYPE_UW:
+		  case BRW_REGISTER_TYPE_W:
+		    switch ((yyvsp[-1].imm32).r) {
+		    case imm32_d:
+		      d = (yyvsp[-1].imm32).u.d;
+		      break;
+		    default:
+		      error (&(yylsp[0]), "non-int W/UW representation\n");
+		    }
+		    d &= 0xffff;
+		    d |= d << 16;
+		    break;
+		  case BRW_REGISTER_TYPE_F:
+		    switch ((yyvsp[-1].imm32).r) {
+		    case imm32_f:
+		      intfloat.f = (yyvsp[-1].imm32).u.f;
+		      break;
+		    case imm32_d:
+		      intfloat.f = (float) (yyvsp[-1].imm32).u.d;
+		      break;
+		    default:
+		      error (&(yylsp[0]), "non-float F representation\n");
+		    }
+		    d = intfloat.i;
+		    break;
+#if 0
+		  case BRW_REGISTER_TYPE_VF:
+		    fprintf (stderr, "Immediate type VF not supported yet\n");
+		    YYERROR;
+#endif
+		  default:
+		    error(&(yylsp[0]), "unknown immediate type %d\n", (yyvsp[0].integer));
+		  }
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.file = BRW_IMMEDIATE_VALUE;
+		  (yyval.src_operand).reg.type = (yyvsp[0].integer);
+		  (yyval.src_operand).reg.dw1.ud = d;
+		}
+#line 4375 "gram.c"
+    break;
+
+  case 203: /* directsrcaccoperand: accreg region regtype  */
+#line 2206 "gram.y"
+                {
+		  set_direct_src_operand(&(yyval.src_operand), &(yyvsp[-2].reg), (yyvsp[0].regtype).type);
+		  (yyval.src_operand).reg.vstride = (yyvsp[-1].region).vert_stride;
+		  (yyval.src_operand).reg.width = (yyvsp[-1].region).width;
+		  (yyval.src_operand).reg.hstride = (yyvsp[-1].region).horiz_stride;
+		  (yyval.src_operand).default_region = (yyvsp[-1].region).is_default;
+		}
+#line 4387 "gram.c"
+    break;
+
+  case 204: /* srcarchoperandex: srcarchoperandex_typed region regtype  */
+#line 2217 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.file = (yyvsp[-2].reg).file;
+		  (yyval.src_operand).reg.type = (yyvsp[0].regtype).type;
+		  (yyval.src_operand).reg.subnr = (yyvsp[-2].reg).subnr;
+		  (yyval.src_operand).reg.nr = (yyvsp[-2].reg).nr;
+		  (yyval.src_operand).reg.vstride = (yyvsp[-1].region).vert_stride;
+		  (yyval.src_operand).reg.width = (yyvsp[-1].region).width;
+		  (yyval.src_operand).reg.hstride = (yyvsp[-1].region).horiz_stride;
+		  (yyval.src_operand).default_region = (yyvsp[-1].region).is_default;
+		  (yyval.src_operand).reg.negate = 0;
+		  (yyval.src_operand).reg.abs = 0;
+		}
+#line 4405 "gram.c"
+    break;
+
+  case 205: /* srcarchoperandex: maskstackreg  */
+#line 2231 "gram.y"
+                {
+		  set_direct_src_operand(&(yyval.src_operand), &(yyvsp[0].reg), BRW_REGISTER_TYPE_UB);
+		}
+#line 4413 "gram.c"
+    break;
+
+  case 206: /* srcarchoperandex: controlreg  */
+#line 2235 "gram.y"
+                {
+		  set_direct_src_operand(&(yyval.src_operand), &(yyvsp[0].reg), BRW_REGISTER_TYPE_UD);
+		}
+#line 4421 "gram.c"
+    break;
+
+  case 207: /* srcarchoperandex: notifyreg  */
+#line 2243 "gram.y"
+                {
+		  set_direct_src_operand(&(yyval.src_operand), &(yyvsp[0].reg), BRW_REGISTER_TYPE_UD);
+		}
+#line 4429 "gram.c"
+    break;
+
+  case 208: /* srcarchoperandex: ipreg  */
+#line 2247 "gram.y"
+                {
+		  set_direct_src_operand(&(yyval.src_operand), &(yyvsp[0].reg), BRW_REGISTER_TYPE_UD);
+		}
+#line 4437 "gram.c"
+    break;
+
+  case 209: /* srcarchoperandex: nullreg region regtype  */
+#line 2251 "gram.y"
+                {
+		  if ((yyvsp[0].regtype).is_default) {
+		    set_direct_src_operand(&(yyval.src_operand), &(yyvsp[-2].reg), BRW_REGISTER_TYPE_UD);
+		  } else {
+		    set_direct_src_operand(&(yyval.src_operand), &(yyvsp[-2].reg), (yyvsp[0].regtype).type);
+		  }
+		  (yyval.src_operand).default_region = 1;
+		}
+#line 4450 "gram.c"
+    break;
+
+  case 213: /* sendleadreg: symbol_reg  */
+#line 2265 "gram.y"
+             {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = (yyvsp[0].symbol_reg).reg.file;
+		  (yyval.reg).nr = (yyvsp[0].symbol_reg).reg.nr;
+		  (yyval.reg).subnr = (yyvsp[0].symbol_reg).reg.subnr;
+             }
+#line 4461 "gram.c"
+    break;
+
+  case 218: /* directsrcoperand: negate abs symbol_reg region regtype  */
+#line 2278 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.address_mode = BRW_ADDRESS_DIRECT;
+		  (yyval.src_operand).reg.file = (yyvsp[-2].symbol_reg).reg.file;
+		  (yyval.src_operand).reg.nr = (yyvsp[-2].symbol_reg).reg.nr;
+		  (yyval.src_operand).reg.subnr = (yyvsp[-2].symbol_reg).reg.subnr;
+		  if ((yyvsp[0].regtype).is_default) {
+		    (yyval.src_operand).reg.type = (yyvsp[-2].symbol_reg).reg.type;
+		  } else {
+		    (yyval.src_operand).reg.type = (yyvsp[0].regtype).type;
+		  }
+		  if ((yyvsp[-1].region).is_default) {
+		    (yyval.src_operand).reg.vstride = (yyvsp[-2].symbol_reg).src_region.vert_stride;
+		    (yyval.src_operand).reg.width = (yyvsp[-2].symbol_reg).src_region.width;
+		    (yyval.src_operand).reg.hstride = (yyvsp[-2].symbol_reg).src_region.horiz_stride;
+		  } else {
+		    (yyval.src_operand).reg.vstride = (yyvsp[-1].region).vert_stride;
+		    (yyval.src_operand).reg.width = (yyvsp[-1].region).width;
+		    (yyval.src_operand).reg.hstride = (yyvsp[-1].region).horiz_stride;
+		  }
+		  (yyval.src_operand).reg.negate = (yyvsp[-4].integer);
+		  (yyval.src_operand).reg.abs = (yyvsp[-3].integer);
+		}
+#line 4489 "gram.c"
+    break;
+
+  case 219: /* directsrcoperand: statereg region regtype  */
+#line 2302 "gram.y"
+                {
+		  if((yyvsp[-1].region).is_default ==1 && (yyvsp[0].regtype).is_default == 1)
+		  {
+		    set_direct_src_operand(&(yyval.src_operand), &(yyvsp[-2].reg), BRW_REGISTER_TYPE_UD);
+		  }
+		  else{
+		    memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		    (yyval.src_operand).reg.address_mode = BRW_ADDRESS_DIRECT;
+		    (yyval.src_operand).reg.file = (yyvsp[-2].reg).file;
+		    (yyval.src_operand).reg.nr = (yyvsp[-2].reg).nr;
+		    (yyval.src_operand).reg.subnr = (yyvsp[-2].reg).subnr;
+		    (yyval.src_operand).reg.vstride = (yyvsp[-1].region).vert_stride;
+		    (yyval.src_operand).reg.width = (yyvsp[-1].region).width;
+		    (yyval.src_operand).reg.hstride = (yyvsp[-1].region).horiz_stride;
+		    (yyval.src_operand).reg.type = (yyvsp[0].regtype).type;
+		  }
+		}
+#line 4511 "gram.c"
+    break;
+
+  case 220: /* directsrcoperand: negate abs directgenreg region swizzle regtype  */
+#line 2320 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.address_mode = BRW_ADDRESS_DIRECT;
+		  (yyval.src_operand).reg.file = (yyvsp[-3].reg).file;
+		  (yyval.src_operand).reg.nr = (yyvsp[-3].reg).nr;
+		  (yyval.src_operand).reg.subnr = (yyvsp[-3].reg).subnr;
+		  (yyval.src_operand).reg.type = (yyvsp[0].regtype).type;
+		  (yyval.src_operand).reg.vstride = (yyvsp[-2].region).vert_stride;
+		  (yyval.src_operand).reg.width = (yyvsp[-2].region).width;
+		  (yyval.src_operand).reg.hstride = (yyvsp[-2].region).horiz_stride;
+		  (yyval.src_operand).default_region = (yyvsp[-2].region).is_default;
+		  (yyval.src_operand).reg.negate = (yyvsp[-5].integer);
+		  (yyval.src_operand).reg.abs = (yyvsp[-4].integer);
+		  (yyval.src_operand).reg.dw1.bits.swizzle = (yyvsp[-1].src_operand).reg.dw1.bits.swizzle;
+		}
+#line 4531 "gram.c"
+    break;
+
+  case 222: /* indirectsrcoperand: negate abs indirectgenreg indirectregion regtype swizzle  */
+#line 2340 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.address_mode = BRW_ADDRESS_REGISTER_INDIRECT_REGISTER;
+		  (yyval.src_operand).reg.file = (yyvsp[-3].reg).file;
+		  (yyval.src_operand).reg.subnr = (yyvsp[-3].reg).subnr;
+		  (yyval.src_operand).reg.dw1.bits.indirect_offset = (yyvsp[-3].reg).dw1.bits.indirect_offset;
+		  (yyval.src_operand).reg.type = (yyvsp[-1].regtype).type;
+		  (yyval.src_operand).reg.vstride = (yyvsp[-2].region).vert_stride;
+		  (yyval.src_operand).reg.width = (yyvsp[-2].region).width;
+		  (yyval.src_operand).reg.hstride = (yyvsp[-2].region).horiz_stride;
+		  (yyval.src_operand).reg.negate = (yyvsp[-5].integer);
+		  (yyval.src_operand).reg.abs = (yyvsp[-4].integer);
+		  (yyval.src_operand).reg.dw1.bits.swizzle = (yyvsp[0].src_operand).reg.dw1.bits.swizzle;
+		}
+#line 4550 "gram.c"
+    break;
+
+  case 223: /* addrparam: addrreg COMMA immaddroffset  */
+#line 2361 "gram.y"
+                {
+		  if ((yyvsp[0].integer) < -512 || (yyvsp[0].integer) > 511)
+		    error(&(yylsp[0]), "Address immediate offset %d out of range\n", (yyvsp[0].integer));
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).subnr = (yyvsp[-2].reg).subnr;
+		  (yyval.reg).dw1.bits.indirect_offset = (yyvsp[0].integer);
+		}
+#line 4562 "gram.c"
+    break;
+
+  case 224: /* addrparam: addrreg  */
+#line 2369 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).subnr = (yyvsp[0].reg).subnr;
+		  (yyval.reg).dw1.bits.indirect_offset = 0;
+		}
+#line 4572 "gram.c"
+    break;
+
+  case 225: /* immaddroffset: %empty  */
+#line 2379 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 4578 "gram.c"
+    break;
+
+  case 227: /* subregnum: DOT exp  */
+#line 2386 "gram.y"
+                {
+		  (yyval.integer) = (yyvsp[0].integer);
+		}
+#line 4586 "gram.c"
+    break;
+
+  case 228: /* subregnum: %empty  */
+#line 2390 "gram.y"
+                {
+		  /* Default to subreg 0 if unspecified. */
+		  (yyval.integer) = 0;
+		}
+#line 4595 "gram.c"
+    break;
+
+  case 229: /* directgenreg: GENREG subregnum  */
+#line 2397 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_GENERAL_REGISTER_FILE;
+		  (yyval.reg).nr = (yyvsp[-1].integer);
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4606 "gram.c"
+    break;
+
+  case 230: /* indirectgenreg: GENREGFILE LSQUARE addrparam RSQUARE  */
+#line 2406 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_GENERAL_REGISTER_FILE;
+		  (yyval.reg).subnr = (yyvsp[-1].reg).subnr;
+		  (yyval.reg).dw1.bits.indirect_offset = (yyvsp[-1].reg).dw1.bits.indirect_offset;
+		}
+#line 4617 "gram.c"
+    break;
+
+  case 231: /* directmsgreg: MSGREG subregnum  */
+#line 2415 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_MESSAGE_REGISTER_FILE;
+		  (yyval.reg).nr = (yyvsp[-1].integer);
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4628 "gram.c"
+    break;
+
+  case 232: /* indirectmsgreg: MSGREGFILE LSQUARE addrparam RSQUARE  */
+#line 2424 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_MESSAGE_REGISTER_FILE;
+		  (yyval.reg).subnr = (yyvsp[-1].reg).subnr;
+		  (yyval.reg).dw1.bits.indirect_offset = (yyvsp[-1].reg).dw1.bits.indirect_offset;
+		}
+#line 4639 "gram.c"
+    break;
+
+  case 233: /* addrreg: ADDRESSREG subregnum  */
+#line 2433 "gram.y"
+                {
+		  if ((yyvsp[-1].integer) != 0)
+		    error(&(yylsp[0]), "address register number %d out of range", (yyvsp[-1].integer));
+
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_ADDRESS | (yyvsp[-1].integer);
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4653 "gram.c"
+    break;
+
+  case 234: /* accreg: ACCREG subregnum  */
+#line 2445 "gram.y"
+                {
+		  if ((yyvsp[-1].integer) > 1)
+		    error(&(yylsp[-1]), "accumulator register number %d out of range", (yyvsp[-1].integer));
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_ACCUMULATOR | (yyvsp[-1].integer);
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4666 "gram.c"
+    break;
+
+  case 235: /* flagreg: FLAGREG subregnum  */
+#line 2456 "gram.y"
+                {
+		  if ((!IS_GENp(7) && (yyvsp[-1].integer) > 0) ||
+		      (IS_GENp(7) && (yyvsp[-1].integer) > 1)) {
+                    error(&(yylsp[0]), "flag register number %d out of range\n", (yyvsp[-1].integer));
+		  }
+
+		  if ((yyvsp[0].integer) > 1)
+		    error(&(yylsp[0]), "flag subregister number %d out of range\n", (yyvsp[-1].integer));
+
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_FLAG | (yyvsp[-1].integer);
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4685 "gram.c"
+    break;
+
+  case 236: /* maskreg: MASKREG subregnum  */
+#line 2473 "gram.y"
+                {
+		  if ((yyvsp[-1].integer) > 0)
+		    error(&(yylsp[-1]), "mask register number %d out of range", (yyvsp[-1].integer));
+
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_MASK;
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4699 "gram.c"
+    break;
+
+  case 237: /* maskreg: mask_subreg  */
+#line 2483 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_MASK;
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4710 "gram.c"
+    break;
+
+  case 242: /* maskstackreg: MASKSTACKREG subregnum  */
+#line 2495 "gram.y"
+                {
+		  if ((yyvsp[-1].integer) > 0)
+		    error(&(yylsp[-1]), "mask stack register number %d out of range", (yyvsp[-1].integer));
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_MASK_STACK;
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4723 "gram.c"
+    break;
+
+  case 243: /* maskstackreg: maskstack_subreg  */
+#line 2504 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_MASK_STACK;
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4734 "gram.c"
+    break;
+
+  case 246: /* notifyreg: NOTIFYREG regtype  */
+#line 2539 "gram.y"
+                {
+		  int num_notifyreg = (IS_GENp(6)) ? 3 : 2;
+
+		  if ((yyvsp[-1].integer) > num_notifyreg)
+		    error(&(yylsp[-1]), "notification register number %d out of range",
+			  (yyvsp[-1].integer));
+
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+
+                  if (IS_GENp(6)) {
+		    (yyval.reg).nr = BRW_ARF_NOTIFICATION_COUNT;
+                    (yyval.reg).subnr = (yyvsp[-1].integer);
+                  } else {
+		    (yyval.reg).nr = BRW_ARF_NOTIFICATION_COUNT | (yyvsp[-1].integer);
+                    (yyval.reg).subnr = 0;
+                  }
+		}
+#line 4757 "gram.c"
+    break;
+
+  case 247: /* statereg: STATEREG subregnum  */
+#line 2575 "gram.y"
+                {
+		  if ((yyvsp[-1].integer) > 0)
+		    error(&(yylsp[-1]), "state register number %d out of range", (yyvsp[-1].integer));
+
+		  if ((yyvsp[0].integer) > 1)
+		    error(&(yylsp[0]), "state subregister number %d out of range", (yyvsp[-1].integer));
+
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_STATE | (yyvsp[-1].integer);
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4774 "gram.c"
+    break;
+
+  case 248: /* controlreg: CONTROLREG subregnum  */
+#line 2590 "gram.y"
+                {
+		  if ((yyvsp[-1].integer) > 0)
+		    error(&(yylsp[-1]), "control register number %d out of range", (yyvsp[-1].integer));
+
+		  if ((yyvsp[0].integer) > 2)
+		    error(&(yylsp[0]), "control subregister number %d out of range", (yyvsp[-1].integer));
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_CONTROL | (yyvsp[-1].integer);
+		  (yyval.reg).subnr = (yyvsp[0].integer);
+		}
+#line 4790 "gram.c"
+    break;
+
+  case 249: /* ipreg: IPREG regtype  */
+#line 2604 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_IP;
+		  (yyval.reg).subnr = 0;
+		}
+#line 4801 "gram.c"
+    break;
+
+  case 250: /* nullreg: NULL_TOKEN  */
+#line 2613 "gram.y"
+                {
+		  memset (&(yyval.reg), '\0', sizeof ((yyval.reg)));
+		  (yyval.reg).file = BRW_ARCHITECTURE_REGISTER_FILE;
+		  (yyval.reg).nr = BRW_ARF_NULL;
+		  (yyval.reg).subnr = 0;
+		}
+#line 4812 "gram.c"
+    break;
+
+  case 251: /* relativelocation: simple_int  */
+#line 2624 "gram.y"
+                {
+		  if (((yyvsp[0].integer) > 32767) || ((yyvsp[0].integer) < -32768))
+		    error(&(yylsp[0]), "error: relative offset %d out of range \n", (yyvsp[0].integer));
+
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.file = BRW_IMMEDIATE_VALUE;
+		  (yyval.src_operand).reg.type = BRW_REGISTER_TYPE_D;
+		  (yyval.src_operand).imm32 = (yyvsp[0].integer) & 0x0000ffff;
+		}
+#line 4826 "gram.c"
+    break;
+
+  case 252: /* relativelocation: STRING  */
+#line 2634 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.file = BRW_IMMEDIATE_VALUE;
+		  (yyval.src_operand).reg.type = BRW_REGISTER_TYPE_D;
+		  (yyval.src_operand).reloc_target = (yyvsp[0].string);
+		}
+#line 4837 "gram.c"
+    break;
+
+  case 253: /* relativelocation2: STRING  */
+#line 2644 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.file = BRW_IMMEDIATE_VALUE;
+		  (yyval.src_operand).reg.type = BRW_REGISTER_TYPE_D;
+		  (yyval.src_operand).reloc_target = (yyvsp[0].string);
+		}
+#line 4848 "gram.c"
+    break;
+
+  case 254: /* relativelocation2: exp  */
+#line 2651 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.file = BRW_IMMEDIATE_VALUE;
+		  (yyval.src_operand).reg.type = BRW_REGISTER_TYPE_D;
+		  (yyval.src_operand).imm32 = (yyvsp[0].integer);
+		}
+#line 4859 "gram.c"
+    break;
+
+  case 255: /* relativelocation2: directgenreg region regtype  */
+#line 2658 "gram.y"
+                {
+		  set_direct_src_operand(&(yyval.src_operand), &(yyvsp[-2].reg), (yyvsp[0].regtype).type);
+		  (yyval.src_operand).reg.vstride = (yyvsp[-1].region).vert_stride;
+		  (yyval.src_operand).reg.width = (yyvsp[-1].region).width;
+		  (yyval.src_operand).reg.hstride = (yyvsp[-1].region).horiz_stride;
+		  (yyval.src_operand).default_region = (yyvsp[-1].region).is_default;
+		}
+#line 4871 "gram.c"
+    break;
+
+  case 256: /* relativelocation2: symbol_reg_p  */
+#line 2666 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.address_mode = BRW_ADDRESS_DIRECT;
+		  (yyval.src_operand).reg.file = (yyvsp[0].symbol_reg).reg.file;
+		  (yyval.src_operand).reg.nr = (yyvsp[0].symbol_reg).reg.nr;
+		  (yyval.src_operand).reg.subnr = (yyvsp[0].symbol_reg).reg.subnr;
+		  (yyval.src_operand).reg.type = (yyvsp[0].symbol_reg).reg.type;
+		  (yyval.src_operand).reg.vstride = (yyvsp[0].symbol_reg).src_region.vert_stride;
+		  (yyval.src_operand).reg.width = (yyvsp[0].symbol_reg).src_region.width;
+		  (yyval.src_operand).reg.hstride = (yyvsp[0].symbol_reg).src_region.horiz_stride;
+		}
+#line 4887 "gram.c"
+    break;
+
+  case 257: /* relativelocation2: indirectgenreg indirectregion regtype  */
+#line 2678 "gram.y"
+                {
+		  memset (&(yyval.src_operand), '\0', sizeof ((yyval.src_operand)));
+		  (yyval.src_operand).reg.address_mode = BRW_ADDRESS_REGISTER_INDIRECT_REGISTER;
+		  (yyval.src_operand).reg.file = (yyvsp[-2].reg).file;
+		  (yyval.src_operand).reg.subnr = (yyvsp[-2].reg).subnr;
+		  (yyval.src_operand).reg.dw1.bits.indirect_offset = (yyvsp[-2].reg).dw1.bits.indirect_offset;
+		  (yyval.src_operand).reg.type = (yyvsp[0].regtype).type;
+		  (yyval.src_operand).reg.vstride = (yyvsp[-1].region).vert_stride;
+		  (yyval.src_operand).reg.width = (yyvsp[-1].region).width;
+		  (yyval.src_operand).reg.hstride = (yyvsp[-1].region).horiz_stride;
+		}
+#line 4903 "gram.c"
+    break;
+
+  case 258: /* dstregion: %empty  */
+#line 2693 "gram.y"
+                {
+		  (yyval.integer) = DEFAULT_DSTREGION;
+		}
+#line 4911 "gram.c"
+    break;
+
+  case 259: /* dstregion: LANGLE exp RANGLE  */
+#line 2697 "gram.y"
+                {
+		  /* Returns a value for a horiz_stride field of an
+		   * instruction.
+		   */
+		  if ((yyvsp[-1].integer) != 1 && (yyvsp[-1].integer) != 2 && (yyvsp[-1].integer) != 4)
+		    error(&(yylsp[-1]), "Invalid horiz size %d\n", (yyvsp[-1].integer));
+
+		  (yyval.integer) = ffs((yyvsp[-1].integer));
+		}
+#line 4925 "gram.c"
+    break;
+
+  case 260: /* region: %empty  */
+#line 2709 "gram.y"
+                {
+		  /* XXX is this default value correct?*/
+		  memset (&(yyval.region), '\0', sizeof ((yyval.region)));
+		  (yyval.region).vert_stride = ffs(0);
+		  (yyval.region).width = BRW_WIDTH_1;
+		  (yyval.region).horiz_stride = ffs(0);
+		  (yyval.region).is_default = 1;
+		}
+#line 4938 "gram.c"
+    break;
+
+  case 261: /* region: LANGLE exp RANGLE  */
+#line 2718 "gram.y"
+                {
+		  /* XXX is this default value correct for accreg?*/
+		  memset (&(yyval.region), '\0', sizeof ((yyval.region)));
+		  (yyval.region).vert_stride = ffs((yyvsp[-1].integer));
+		  (yyval.region).width = BRW_WIDTH_1;
+		  (yyval.region).horiz_stride = ffs(0);
+		}
+#line 4950 "gram.c"
+    break;
+
+  case 262: /* region: LANGLE exp COMMA exp COMMA exp RANGLE  */
+#line 2726 "gram.y"
+                {
+		  memset (&(yyval.region), '\0', sizeof ((yyval.region)));
+		  (yyval.region).vert_stride = ffs((yyvsp[-5].integer));
+		  (yyval.region).width = ffs((yyvsp[-3].integer)) - 1;
+		  (yyval.region).horiz_stride = ffs((yyvsp[-1].integer));
+		}
+#line 4961 "gram.c"
+    break;
+
+  case 263: /* region: LANGLE exp SEMICOLON exp COMMA exp RANGLE  */
+#line 2733 "gram.y"
+                {
+		  memset (&(yyval.region), '\0', sizeof ((yyval.region)));
+		  (yyval.region).vert_stride = ffs((yyvsp[-5].integer));
+		  (yyval.region).width = ffs((yyvsp[-3].integer)) - 1;
+		  (yyval.region).horiz_stride = ffs((yyvsp[-1].integer));
+		}
+#line 4972 "gram.c"
+    break;
+
+  case 264: /* region_wh: LANGLE exp COMMA exp RANGLE  */
+#line 2746 "gram.y"
+                {
+		  memset (&(yyval.region), '\0', sizeof ((yyval.region)));
+		  (yyval.region).vert_stride = BRW_VERTICAL_STRIDE_ONE_DIMENSIONAL;
+		  (yyval.region).width = ffs((yyvsp[-3].integer)) - 1;
+		  (yyval.region).horiz_stride = ffs((yyvsp[-1].integer));
+		}
+#line 4983 "gram.c"
+    break;
+
+  case 267: /* regtype: %empty  */
+#line 2763 "gram.y"
+                { (yyval.regtype).type = program_defaults.register_type;(yyval.regtype).is_default = 1;}
+#line 4989 "gram.c"
+    break;
+
+  case 268: /* regtype: TYPE_F  */
+#line 2764 "gram.y"
+                         { (yyval.regtype).type = BRW_REGISTER_TYPE_F;(yyval.regtype).is_default = 0; }
+#line 4995 "gram.c"
+    break;
+
+  case 269: /* regtype: TYPE_UD  */
+#line 2765 "gram.y"
+                          { (yyval.regtype).type = BRW_REGISTER_TYPE_UD;(yyval.regtype).is_default = 0; }
+#line 5001 "gram.c"
+    break;
+
+  case 270: /* regtype: TYPE_D  */
+#line 2766 "gram.y"
+                         { (yyval.regtype).type = BRW_REGISTER_TYPE_D;(yyval.regtype).is_default = 0; }
+#line 5007 "gram.c"
+    break;
+
+  case 271: /* regtype: TYPE_UW  */
+#line 2767 "gram.y"
+                          { (yyval.regtype).type = BRW_REGISTER_TYPE_UW;(yyval.regtype).is_default = 0; }
+#line 5013 "gram.c"
+    break;
+
+  case 272: /* regtype: TYPE_W  */
+#line 2768 "gram.y"
+                         { (yyval.regtype).type = BRW_REGISTER_TYPE_W;(yyval.regtype).is_default = 0; }
+#line 5019 "gram.c"
+    break;
+
+  case 273: /* regtype: TYPE_UB  */
+#line 2769 "gram.y"
+                          { (yyval.regtype).type = BRW_REGISTER_TYPE_UB;(yyval.regtype).is_default = 0; }
+#line 5025 "gram.c"
+    break;
+
+  case 274: /* regtype: TYPE_B  */
+#line 2770 "gram.y"
+                         { (yyval.regtype).type = BRW_REGISTER_TYPE_B;(yyval.regtype).is_default = 0; }
+#line 5031 "gram.c"
+    break;
+
+  case 275: /* srcimmtype: %empty  */
+#line 2774 "gram.y"
+                {
+		    /* XXX change to default when pragma parse is done */
+		   (yyval.integer) = BRW_REGISTER_TYPE_D;
+		}
+#line 5040 "gram.c"
+    break;
+
+  case 276: /* srcimmtype: TYPE_F  */
+#line 2778 "gram.y"
+                        { (yyval.integer) = BRW_REGISTER_TYPE_F; }
+#line 5046 "gram.c"
+    break;
+
+  case 277: /* srcimmtype: TYPE_UD  */
+#line 2779 "gram.y"
+                          { (yyval.integer) = BRW_REGISTER_TYPE_UD; }
+#line 5052 "gram.c"
+    break;
+
+  case 278: /* srcimmtype: TYPE_D  */
+#line 2780 "gram.y"
+                         { (yyval.integer) = BRW_REGISTER_TYPE_D; }
+#line 5058 "gram.c"
+    break;
+
+  case 279: /* srcimmtype: TYPE_UW  */
+#line 2781 "gram.y"
+                          { (yyval.integer) = BRW_REGISTER_TYPE_UW; }
+#line 5064 "gram.c"
+    break;
+
+  case 280: /* srcimmtype: TYPE_W  */
+#line 2782 "gram.y"
+                         { (yyval.integer) = BRW_REGISTER_TYPE_W; }
+#line 5070 "gram.c"
+    break;
+
+  case 281: /* srcimmtype: TYPE_V  */
+#line 2783 "gram.y"
+                         { (yyval.integer) = BRW_REGISTER_TYPE_V; }
+#line 5076 "gram.c"
+    break;
+
+  case 282: /* srcimmtype: TYPE_VF  */
+#line 2784 "gram.y"
+                          { (yyval.integer) = BRW_REGISTER_TYPE_VF; }
+#line 5082 "gram.c"
+    break;
+
+  case 283: /* swizzle: %empty  */
+#line 2792 "gram.y"
+                {
+		  (yyval.src_operand).reg.dw1.bits.swizzle = BRW_SWIZZLE_NOOP;
+		}
+#line 5090 "gram.c"
+    break;
+
+  case 284: /* swizzle: DOT chansel  */
+#line 2796 "gram.y"
+                {
+		  (yyval.src_operand).reg.dw1.bits.swizzle = BRW_SWIZZLE4((yyvsp[0].integer), (yyvsp[0].integer), (yyvsp[0].integer), (yyvsp[0].integer));
+		}
+#line 5098 "gram.c"
+    break;
+
+  case 285: /* swizzle: DOT chansel chansel chansel chansel  */
+#line 2800 "gram.y"
+                {
+		  (yyval.src_operand).reg.dw1.bits.swizzle = BRW_SWIZZLE4((yyvsp[-3].integer), (yyvsp[-2].integer), (yyvsp[-1].integer), (yyvsp[0].integer));
+		}
+#line 5106 "gram.c"
+    break;
+
+  case 290: /* writemask: %empty  */
+#line 2813 "gram.y"
+                {
+		  (yyval.reg).dw1.bits.writemask = BRW_WRITEMASK_XYZW;
+		}
+#line 5114 "gram.c"
+    break;
+
+  case 291: /* writemask: DOT writemask_x writemask_y writemask_z writemask_w  */
+#line 2817 "gram.y"
+                {
+		  (yyval.reg).dw1.bits.writemask = (yyvsp[-3].integer) | (yyvsp[-2].integer) | (yyvsp[-1].integer) | (yyvsp[0].integer);
+		}
+#line 5122 "gram.c"
+    break;
+
+  case 292: /* writemask_x: %empty  */
+#line 2822 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 5128 "gram.c"
+    break;
+
+  case 293: /* writemask_x: X  */
+#line 2823 "gram.y"
+                     { (yyval.integer) = 1 << BRW_CHANNEL_X; }
+#line 5134 "gram.c"
+    break;
+
+  case 294: /* writemask_y: %empty  */
+#line 2826 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 5140 "gram.c"
+    break;
+
+  case 295: /* writemask_y: Y  */
+#line 2827 "gram.y"
+                     { (yyval.integer) = 1 << BRW_CHANNEL_Y; }
+#line 5146 "gram.c"
+    break;
+
+  case 296: /* writemask_z: %empty  */
+#line 2830 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 5152 "gram.c"
+    break;
+
+  case 297: /* writemask_z: Z  */
+#line 2831 "gram.y"
+                     { (yyval.integer) = 1 << BRW_CHANNEL_Z; }
+#line 5158 "gram.c"
+    break;
+
+  case 298: /* writemask_w: %empty  */
+#line 2834 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 5164 "gram.c"
+    break;
+
+  case 299: /* writemask_w: W  */
+#line 2835 "gram.y"
+                     { (yyval.integer) = 1 << BRW_CHANNEL_W; }
+#line 5170 "gram.c"
+    break;
+
+  case 300: /* imm32: exp  */
+#line 2839 "gram.y"
+                    { (yyval.imm32).r = imm32_d; (yyval.imm32).u.d = (yyvsp[0].integer); }
+#line 5176 "gram.c"
+    break;
+
+  case 301: /* imm32: NUMBER  */
+#line 2840 "gram.y"
+                         { (yyval.imm32).r = imm32_f; (yyval.imm32).u.f = (yyvsp[0].number); }
+#line 5182 "gram.c"
+    break;
+
+  case 302: /* predicate: %empty  */
+#line 2845 "gram.y"
+                {
+		  (yyval.predicate).pred_control = BRW_PREDICATE_NONE;
+		  (yyval.predicate).flag_reg_nr = 0;
+		  (yyval.predicate).flag_subreg_nr = 0;
+		  (yyval.predicate).pred_inverse = 0;
+		}
+#line 5193 "gram.c"
+    break;
+
+  case 303: /* predicate: LPAREN predstate flagreg predctrl RPAREN  */
+#line 2852 "gram.y"
+                {
+		  (yyval.predicate).pred_control = (yyvsp[-1].integer);
+		  (yyval.predicate).flag_reg_nr = (yyvsp[-2].reg).nr;
+		  (yyval.predicate).flag_subreg_nr = (yyvsp[-2].reg).subnr;
+		  (yyval.predicate).pred_inverse = (yyvsp[-3].integer);
+		}
+#line 5204 "gram.c"
+    break;
+
+  case 304: /* predstate: %empty  */
+#line 2860 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 5210 "gram.c"
+    break;
+
+  case 305: /* predstate: PLUS  */
+#line 2861 "gram.y"
+                       { (yyval.integer) = 0; }
+#line 5216 "gram.c"
+    break;
+
+  case 306: /* predstate: MINUS  */
+#line 2862 "gram.y"
+                        { (yyval.integer) = 1; }
+#line 5222 "gram.c"
+    break;
+
+  case 307: /* predctrl: %empty  */
+#line 2865 "gram.y"
+                                   { (yyval.integer) = BRW_PREDICATE_NORMAL; }
+#line 5228 "gram.c"
+    break;
+
+  case 308: /* predctrl: DOT X  */
+#line 2866 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN16_REPLICATE_X; }
+#line 5234 "gram.c"
+    break;
+
+  case 309: /* predctrl: DOT Y  */
+#line 2867 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN16_REPLICATE_Y; }
+#line 5240 "gram.c"
+    break;
+
+  case 310: /* predctrl: DOT Z  */
+#line 2868 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN16_REPLICATE_Z; }
+#line 5246 "gram.c"
+    break;
+
+  case 311: /* predctrl: DOT W  */
+#line 2869 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN16_REPLICATE_W; }
+#line 5252 "gram.c"
+    break;
+
+  case 312: /* predctrl: ANYV  */
+#line 2870 "gram.y"
+                       { (yyval.integer) = BRW_PREDICATE_ALIGN1_ANYV; }
+#line 5258 "gram.c"
+    break;
+
+  case 313: /* predctrl: ALLV  */
+#line 2871 "gram.y"
+                       { (yyval.integer) = BRW_PREDICATE_ALIGN1_ALLV; }
+#line 5264 "gram.c"
+    break;
+
+  case 314: /* predctrl: ANY2H  */
+#line 2872 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN1_ANY2H; }
+#line 5270 "gram.c"
+    break;
+
+  case 315: /* predctrl: ALL2H  */
+#line 2873 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN1_ALL2H; }
+#line 5276 "gram.c"
+    break;
+
+  case 316: /* predctrl: ANY4H  */
+#line 2874 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN1_ANY4H; }
+#line 5282 "gram.c"
+    break;
+
+  case 317: /* predctrl: ALL4H  */
+#line 2875 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN1_ALL4H; }
+#line 5288 "gram.c"
+    break;
+
+  case 318: /* predctrl: ANY8H  */
+#line 2876 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN1_ANY8H; }
+#line 5294 "gram.c"
+    break;
+
+  case 319: /* predctrl: ALL8H  */
+#line 2877 "gram.y"
+                        { (yyval.integer) = BRW_PREDICATE_ALIGN1_ALL8H; }
+#line 5300 "gram.c"
+    break;
+
+  case 320: /* predctrl: ANY16H  */
+#line 2878 "gram.y"
+                         { (yyval.integer) = BRW_PREDICATE_ALIGN1_ANY16H; }
+#line 5306 "gram.c"
+    break;
+
+  case 321: /* predctrl: ALL16H  */
+#line 2879 "gram.y"
+                         { (yyval.integer) = BRW_PREDICATE_ALIGN1_ALL16H; }
+#line 5312 "gram.c"
+    break;
+
+  case 322: /* negate: %empty  */
+#line 2882 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 5318 "gram.c"
+    break;
+
+  case 323: /* negate: MINUS  */
+#line 2883 "gram.y"
+                        { (yyval.integer) = 1; }
+#line 5324 "gram.c"
+    break;
+
+  case 324: /* abs: %empty  */
+#line 2886 "gram.y"
+                                   { (yyval.integer) = 0; }
+#line 5330 "gram.c"
+    break;
+
+  case 325: /* abs: ABS  */
+#line 2887 "gram.y"
+                      { (yyval.integer) = 1; }
+#line 5336 "gram.c"
+    break;
+
+  case 326: /* execsize: %empty  */
+#line 2891 "gram.y"
+                {
+		  (yyval.integer) = ffs(program_defaults.execute_size) - 1;
+		}
+#line 5344 "gram.c"
+    break;
+
+  case 327: /* execsize: LPAREN exp RPAREN  */
+#line 2895 "gram.y"
+                {
+		  /* Returns a value for the execution_size field of an
+		   * instruction.
+		   */
+		  if ((yyvsp[-1].integer) != 1 && (yyvsp[-1].integer) != 2 && (yyvsp[-1].integer) != 4 && (yyvsp[-1].integer) != 8 && (yyvsp[-1].integer) != 16 &&
+		      (yyvsp[-1].integer) != 32)
+		    error(&(yylsp[-1]), "Invalid execution size %d\n", (yyvsp[-1].integer));
+
+		  (yyval.integer) = ffs((yyvsp[-1].integer)) - 1;
+		}
+#line 5359 "gram.c"
+    break;
+
+  case 328: /* saturate: %empty  */
+#line 2907 "gram.y"
+                                   { (yyval.integer) = BRW_INSTRUCTION_NORMAL; }
+#line 5365 "gram.c"
+    break;
+
+  case 329: /* saturate: SATURATE  */
+#line 2908 "gram.y"
+                           { (yyval.integer) = BRW_INSTRUCTION_SATURATE; }
+#line 5371 "gram.c"
+    break;
+
+  case 330: /* conditionalmodifier: condition  */
+#line 2911 "gram.y"
+                {
+		    (yyval.condition).cond = (yyvsp[0].integer);
+		    (yyval.condition).flag_reg_nr = 0;
+		    (yyval.condition).flag_subreg_nr = -1;
+		}
+#line 5381 "gram.c"
+    break;
+
+  case 331: /* conditionalmodifier: condition DOT flagreg  */
+#line 2917 "gram.y"
+                {
+		    (yyval.condition).cond = (yyvsp[-2].integer);
+		    (yyval.condition).flag_reg_nr = ((yyvsp[0].reg).nr & 0xF);
+		    (yyval.condition).flag_subreg_nr = (yyvsp[0].reg).subnr;
+		}
+#line 5391 "gram.c"
+    break;
+
+  case 332: /* condition: %empty  */
+#line 2923 "gram.y"
+                                 { (yyval.integer) = BRW_CONDITIONAL_NONE; }
+#line 5397 "gram.c"
+    break;
+
+  case 344: /* instoptions: %empty  */
+#line 2939 "gram.y"
+                { memset(&(yyval.options), 0, sizeof((yyval.options))); }
+#line 5403 "gram.c"
+    break;
+
+  case 345: /* instoptions: LCURLY instoption_list RCURLY  */
+#line 2941 "gram.y"
+                { (yyval.options) = (yyvsp[-1].options); }
+#line 5409 "gram.c"
+    break;
+
+  case 346: /* instoption_list: instoption_list COMMA instoption  */
+#line 2945 "gram.y"
+                {
+		  (yyval.options) = (yyvsp[-2].options);
+		  add_option(&(yyval.options), (yyvsp[0].integer));
+		}
+#line 5418 "gram.c"
+    break;
+
+  case 347: /* instoption_list: instoption_list instoption  */
+#line 2950 "gram.y"
+                {
+		  (yyval.options) = (yyvsp[-1].options);
+		  add_option(&(yyval.options), (yyvsp[0].integer));
+		}
+#line 5427 "gram.c"
+    break;
+
+  case 348: /* instoption_list: %empty  */
+#line 2955 "gram.y"
+                {
+		  memset(&(yyval.options), 0, sizeof((yyval.options)));
+		}
+#line 5435 "gram.c"
+    break;
+
+  case 349: /* instoption: ALIGN1  */
+#line 2960 "gram.y"
+                       { (yyval.integer) = ALIGN1; }
+#line 5441 "gram.c"
+    break;
+
+  case 350: /* instoption: ALIGN16  */
+#line 2961 "gram.y"
+                          { (yyval.integer) = ALIGN16; }
+#line 5447 "gram.c"
+    break;
+
+  case 351: /* instoption: SECHALF  */
+#line 2962 "gram.y"
+                          { (yyval.integer) = SECHALF; }
+#line 5453 "gram.c"
+    break;
+
+  case 352: /* instoption: COMPR  */
+#line 2963 "gram.y"
+                        { (yyval.integer) = COMPR; }
+#line 5459 "gram.c"
+    break;
+
+  case 353: /* instoption: SWITCH  */
+#line 2964 "gram.y"
+                         { (yyval.integer) = SWITCH; }
+#line 5465 "gram.c"
+    break;
+
+  case 354: /* instoption: ATOMIC  */
+#line 2965 "gram.y"
+                         { (yyval.integer) = ATOMIC; }
+#line 5471 "gram.c"
+    break;
+
+  case 355: /* instoption: NODDCHK  */
+#line 2966 "gram.y"
+                          { (yyval.integer) = NODDCHK; }
+#line 5477 "gram.c"
+    break;
+
+  case 356: /* instoption: NODDCLR  */
+#line 2967 "gram.y"
+                          { (yyval.integer) = NODDCLR; }
+#line 5483 "gram.c"
+    break;
+
+  case 357: /* instoption: MASK_DISABLE  */
+#line 2968 "gram.y"
+                               { (yyval.integer) = MASK_DISABLE; }
+#line 5489 "gram.c"
+    break;
+
+  case 358: /* instoption: BREAKPOINT  */
+#line 2969 "gram.y"
+                             { (yyval.integer) = BREAKPOINT; }
+#line 5495 "gram.c"
+    break;
+
+  case 359: /* instoption: ACCWRCTRL  */
+#line 2970 "gram.y"
+                            { (yyval.integer) = ACCWRCTRL; }
+#line 5501 "gram.c"
+    break;
+
+  case 360: /* instoption: EOT  */
+#line 2971 "gram.y"
+                      { (yyval.integer) = EOT; }
+#line 5507 "gram.c"
+    break;
+
+
+#line 5511 "gram.c"
+
+      default: break;
+    }
+  /* User semantic actions sometimes alter yychar, and that requires
+     that yytoken be updated with the new translation.  We take the
+     approach of translating immediately before every use of yytoken.
+     One alternative is translating here after every semantic action,
+     but that translation would be missed if the semantic action invokes
+     YYABORT, YYACCEPT, or YYERROR immediately after altering yychar or
+     if it invokes YYBACKUP.  In the case of YYABORT or YYACCEPT, an
+     incorrect destructor might then be invoked immediately.  In the
+     case of YYERROR or YYBACKUP, subsequent parser actions might lead
+     to an incorrect destructor call or verbose syntax error message
+     before the lookahead is translated.  */
+  YY_SYMBOL_PRINT ("-> $$ =", YY_CAST (yysymbol_kind_t, yyr1[yyn]), &yyval, &yyloc);
+
+  YYPOPSTACK (yylen);
+  yylen = 0;
+
+  *++yyvsp = yyval;
+  *++yylsp = yyloc;
+
+  /* Now 'shift' the result of the reduction.  Determine what state
+     that goes to, based on the state we popped back to and the rule
+     number reduced by.  */
+  {
+    const int yylhs = yyr1[yyn] - YYNTOKENS;
+    const int yyi = yypgoto[yylhs] + *yyssp;
+    yystate = (0 <= yyi && yyi <= YYLAST && yycheck[yyi] == *yyssp
+               ? yytable[yyi]
+               : yydefgoto[yylhs]);
+  }
+
+  goto yynewstate;
+
+
+/*--------------------------------------.
+| yyerrlab -- here on detecting error.  |
+`--------------------------------------*/
+yyerrlab:
+  /* Make sure we have latest lookahead translation.  See comments at
+     user semantic actions for why this is necessary.  */
+  yytoken = yychar == YYEMPTY ? YYSYMBOL_YYEMPTY : YYTRANSLATE (yychar);
+  /* If not already recovering from an error, report this error.  */
+  if (!yyerrstatus)
+    {
+      ++yynerrs;
+      yyerror (YY_("syntax error"));
+    }
+
+  yyerror_range[1] = yylloc;
+  if (yyerrstatus == 3)
+    {
+      /* If just tried and failed to reuse lookahead token after an
+         error, discard it.  */
+
+      if (yychar <= YYEOF)
+        {
+          /* Return failure if at end of input.  */
+          if (yychar == YYEOF)
+            YYABORT;
+        }
+      else
+        {
+          yydestruct ("Error: discarding",
+                      yytoken, &yylval, &yylloc);
+          yychar = YYEMPTY;
+        }
+    }
+
+  /* Else will try to reuse lookahead token after shifting the error
+     token.  */
+  goto yyerrlab1;
+
+
+/*---------------------------------------------------.
+| yyerrorlab -- error raised explicitly by YYERROR.  |
+`---------------------------------------------------*/
+yyerrorlab:
+  /* Pacify compilers when the user code never invokes YYERROR and the
+     label yyerrorlab therefore never appears in user code.  */
+  if (0)
+    YYERROR;
+  ++yynerrs;
+
+  /* Do not reclaim the symbols of the rule whose action triggered
+     this YYERROR.  */
+  YYPOPSTACK (yylen);
+  yylen = 0;
+  YY_STACK_PRINT (yyss, yyssp);
+  yystate = *yyssp;
+  goto yyerrlab1;
+
+
+/*-------------------------------------------------------------.
+| yyerrlab1 -- common code for both syntax error and YYERROR.  |
+`-------------------------------------------------------------*/
+yyerrlab1:
+  yyerrstatus = 3;      /* Each real token shifted decrements this.  */
+
+  /* Pop stack until we find a state that shifts the error token.  */
+  for (;;)
+    {
+      yyn = yypact[yystate];
+      if (!yypact_value_is_default (yyn))
+        {
+          yyn += YYSYMBOL_YYerror;
+          if (0 <= yyn && yyn <= YYLAST && yycheck[yyn] == YYSYMBOL_YYerror)
+            {
+              yyn = yytable[yyn];
+              if (0 < yyn)
+                break;
+            }
+        }
+
+      /* Pop the current state because it cannot handle the error token.  */
+      if (yyssp == yyss)
+        YYABORT;
+
+      yyerror_range[1] = *yylsp;
+      yydestruct ("Error: popping",
+                  YY_ACCESSING_SYMBOL (yystate), yyvsp, yylsp);
+      YYPOPSTACK (1);
+      yystate = *yyssp;
+      YY_STACK_PRINT (yyss, yyssp);
+    }
+
+  YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
+  *++yyvsp = yylval;
+  YY_IGNORE_MAYBE_UNINITIALIZED_END
+
+  yyerror_range[2] = yylloc;
+  ++yylsp;
+  YYLLOC_DEFAULT (*yylsp, yyerror_range, 2);
+
+  /* Shift the error token.  */
+  YY_SYMBOL_PRINT ("Shifting", YY_ACCESSING_SYMBOL (yyn), yyvsp, yylsp);
+
+  yystate = yyn;
+  goto yynewstate;
+
+
+/*-------------------------------------.
+| yyacceptlab -- YYACCEPT comes here.  |
+`-------------------------------------*/
+yyacceptlab:
+  yyresult = 0;
+  goto yyreturnlab;
+
+
+/*-----------------------------------.
+| yyabortlab -- YYABORT comes here.  |
+`-----------------------------------*/
+yyabortlab:
+  yyresult = 1;
+  goto yyreturnlab;
+
+
+/*-----------------------------------------------------------.
+| yyexhaustedlab -- YYNOMEM (memory exhaustion) comes here.  |
+`-----------------------------------------------------------*/
+yyexhaustedlab:
+  yyerror (YY_("memory exhausted"));
+  yyresult = 2;
+  goto yyreturnlab;
+
+
+/*----------------------------------------------------------.
+| yyreturnlab -- parsing is finished, clean up and return.  |
+`----------------------------------------------------------*/
+yyreturnlab:
+  if (yychar != YYEMPTY)
+    {
+      /* Make sure we have latest lookahead translation.  See comments at
+         user semantic actions for why this is necessary.  */
+      yytoken = YYTRANSLATE (yychar);
+      yydestruct ("Cleanup: discarding lookahead",
+                  yytoken, &yylval, &yylloc);
+    }
+  /* Do not reclaim the symbols of the rule whose action triggered
+     this YYABORT or YYACCEPT.  */
+  YYPOPSTACK (yylen);
+  YY_STACK_PRINT (yyss, yyssp);
+  while (yyssp != yyss)
+    {
+      yydestruct ("Cleanup: popping",
+                  YY_ACCESSING_SYMBOL (+*yyssp), yyvsp, yylsp);
+      YYPOPSTACK (1);
+    }
+#ifndef yyoverflow
+  if (yyss != yyssa)
+    YYSTACK_FREE (yyss);
+#endif
+
+  return yyresult;
+}
+
+#line 2974 "gram.y"
+
+extern int yylineno;
+
+void yyerror (char *msg)
+{
+	fprintf(stderr, "%s: %d: %s at \"%s\"\n",
+		input_filename, yylineno, msg, lex_text());
+	++errors;
+}
+
+static int get_type_size(unsigned type)
+{
+    int size = 1;
+
+    switch (type) {
+    case BRW_REGISTER_TYPE_F:
+    case BRW_REGISTER_TYPE_UD:
+    case BRW_REGISTER_TYPE_D:
+        size = 4;
+        break;
+
+    case BRW_REGISTER_TYPE_UW:
+    case BRW_REGISTER_TYPE_W:
+        size = 2;
+        break;
+
+    case BRW_REGISTER_TYPE_UB:
+    case BRW_REGISTER_TYPE_B:
+        size = 1;
+        break;
+
+    default:
+        assert(0);
+        size = 1;
+        break;
+    }
+
+    return size;
+}
+
+static void reset_instruction_src_region(struct brw_instruction *instr, 
+                                         struct src_operand *src)
+{
+    if (IS_GENp(8))
+	return;
+
+    if (!src->default_region)
+        return;
+
+    if (src->reg.file == BRW_ARCHITECTURE_REGISTER_FILE && 
+        ((src->reg.nr & 0xF0) == BRW_ARF_ADDRESS)) {
+        src->reg.vstride = ffs(0);
+        src->reg.width = BRW_WIDTH_1;
+        src->reg.hstride = ffs(0);
+    } else if (src->reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+               ((src->reg.nr & 0xF0) == BRW_ARF_ACCUMULATOR)) {
+        int horiz_stride = 1, width, vert_stride;
+        if (instr->header.compression_control == BRW_COMPRESSION_COMPRESSED) {
+            width = 16;
+        } else {
+            width = 8;
+        }
+
+        if (width > (1 << instr->header.execution_size))
+            width = (1 << instr->header.execution_size);
+
+        vert_stride = horiz_stride * width;
+        src->reg.vstride = ffs(vert_stride);
+        src->reg.width = ffs(width) - 1;
+        src->reg.hstride = ffs(horiz_stride);
+    } else if ((src->reg.file == BRW_ARCHITECTURE_REGISTER_FILE) &&
+               (src->reg.nr == BRW_ARF_NULL) &&
+               (instr->header.opcode == BRW_OPCODE_SEND)) {
+        src->reg.vstride = ffs(8);
+        src->reg.width = BRW_WIDTH_8;
+        src->reg.hstride = ffs(1);
+    } else {
+
+        int horiz_stride = 1, width, vert_stride;
+
+        if (instr->header.execution_size == 0) { /* scalar */
+            horiz_stride = 0;
+            width = 1;
+            vert_stride = 0;
+        } else {
+            if ((instr->header.opcode == BRW_OPCODE_MUL) ||
+                (instr->header.opcode == BRW_OPCODE_MAC) ||
+                (instr->header.opcode == BRW_OPCODE_CMP) ||
+                (instr->header.opcode == BRW_OPCODE_ASR) ||
+                (instr->header.opcode == BRW_OPCODE_ADD) ||
+				(instr->header.opcode == BRW_OPCODE_SHL)) {
+                horiz_stride = 0;
+                width = 1;
+                vert_stride = 0;
+            } else {
+                width = (1 << instr->header.execution_size) / horiz_stride;
+                vert_stride = horiz_stride * width;
+
+                if (get_type_size(src->reg.type) * (width + src->reg.subnr) > 32) {
+                    horiz_stride = 0;
+                    width = 1;
+                    vert_stride = 0;
+                }
+            }
+        }
+
+        src->reg.vstride = ffs(vert_stride);
+        src->reg.width = ffs(width) - 1;
+        src->reg.hstride = ffs(horiz_stride);
+    }
+}
+
+static void set_instruction_opcode(struct brw_program_instruction *instr,
+				  unsigned opcode)
+{
+    if (IS_GENp(8))
+	gen8_set_opcode(GEN8(instr), opcode);
+    else
+	GEN(instr)->header.opcode = opcode;
+}
+
+/**
+ * Fills in the destination register information in instr from the bits in dst.
+ */
+static int set_instruction_dest(struct brw_program_instruction *instr,
+				struct brw_reg *dest)
+{
+	if (!validate_dst_reg(instr, dest))
+		return 1;
+
+	/* the assembler support expressing subnr in bytes or in number of
+	 * elements. */
+	resolve_subnr(dest);
+
+	if (IS_GENp(8)) {
+		gen8_set_exec_size(GEN8(instr), dest->width);
+		gen8_set_dst(GEN8(instr), *dest);
+	} else {
+		brw_set_dest(&genasm_compile, GEN(instr), *dest);
+	}
+
+	return 0;
+}
+
+/* Sets the first source operand for the instruction.  Returns 0 on success. */
+static int set_instruction_src0(struct brw_program_instruction *instr,
+				struct src_operand *src,
+				YYLTYPE *location)
+{
+
+	if (advanced_flag)
+		reset_instruction_src_region(GEN(instr), src);
+
+	if (!validate_src_reg(instr, src->reg, location))
+		return 1;
+
+	/* the assembler support expressing subnr in bytes or in number of
+	 * elements. */
+	resolve_subnr(&src->reg);
+
+	if (IS_GENp(8))
+		gen8_set_src0(GEN8(instr), src->reg);
+	else
+		brw_set_src0(&genasm_compile, GEN(instr), src->reg);
+
+	return 0;
+}
+
+/* Sets the second source operand for the instruction.  Returns 0 on success.
+ */
+static int set_instruction_src1(struct brw_program_instruction *instr,
+				struct src_operand *src,
+				YYLTYPE *location)
+{
+	if (advanced_flag)
+		reset_instruction_src_region(GEN(instr), src);
+
+	if (!validate_src_reg(instr, src->reg, location))
+		return 1;
+
+	/* the assembler support expressing subnr in bytes or in number of
+	 * elements. */
+	resolve_subnr(&src->reg);
+
+	if (IS_GENp(8))
+		gen8_set_src1(GEN8(instr), src->reg);
+	else
+		brw_set_src1(&genasm_compile, GEN(instr), src->reg);
+
+	return 0;
+}
+
+static int set_instruction_dest_three_src(struct brw_program_instruction *instr,
+					  struct brw_reg *dest)
+{
+    resolve_subnr(dest);
+    brw_set_3src_dest(&genasm_compile, GEN(instr), *dest);
+    return 0;
+}
+
+static int set_instruction_src0_three_src(struct brw_program_instruction *instr,
+					  struct src_operand *src)
+{
+    if (advanced_flag)
+	reset_instruction_src_region(GEN(instr), src);
+
+    resolve_subnr(&src->reg);
+
+    // TODO: src0 modifier, src0 rep_ctrl
+    brw_set_3src_src0(&genasm_compile, GEN(instr), src->reg);
+    return 0;
+}
+
+static int set_instruction_src1_three_src(struct brw_program_instruction *instr,
+					  struct src_operand *src)
+{
+    if (advanced_flag)
+	reset_instruction_src_region(GEN(instr), src);
+
+    resolve_subnr(&src->reg);
+
+    // TODO: src1 modifier, src1 rep_ctrl
+    brw_set_3src_src1(&genasm_compile, GEN(instr), src->reg);
+    return 0;
+}
+
+static int set_instruction_src2_three_src(struct brw_program_instruction *instr,
+					  struct src_operand *src)
+{
+    if (advanced_flag)
+	reset_instruction_src_region(GEN(instr), src);
+
+    resolve_subnr(&src->reg);
+
+    // TODO: src2 modifier, src2 rep_ctrl
+    brw_set_3src_src2(&genasm_compile, GEN(instr), src->reg);
+    return 0;
+}
+
+static void set_instruction_saturate(struct brw_program_instruction *instr,
+				     int saturate)
+{
+    if (IS_GENp(8))
+	gen8_set_saturate(GEN8(instr), saturate);
+    else
+	GEN(instr)->header.saturate = saturate;
+}
+
+static void set_instruction_options(struct brw_program_instruction *instr,
+				    struct options options)
+{
+    if (IS_GENp(8)) {
+	gen8_set_access_mode(GEN8(instr), options.access_mode);
+	gen8_set_thread_control(GEN8(instr), options.thread_control);
+	gen8_set_dep_control(GEN8(instr), options.dependency_control);
+	gen8_set_mask_control(GEN8(instr), options.mask_control);
+	gen8_set_debug_control(GEN8(instr), options.debug_control);
+	gen8_set_acc_wr_control(GEN8(instr), options.acc_wr_control);
+	gen8_set_eot(GEN8(instr), options.end_of_thread);
+    } else {
+	GEN(instr)->header.access_mode = options.access_mode;
+	GEN(instr)->header.compression_control = options.compression_control;
+	GEN(instr)->header.thread_control = options.thread_control;
+	GEN(instr)->header.dependency_control = options.dependency_control;
+	GEN(instr)->header.mask_control = options.mask_control;
+	GEN(instr)->header.debug_control = options.debug_control;
+	GEN(instr)->header.acc_wr_control = options.acc_wr_control;
+	GEN(instr)->bits3.generic.end_of_thread = options.end_of_thread;
+    }
+}
+
+static void set_instruction_predicate(struct brw_program_instruction *instr,
+				      struct predicate *p)
+{
+    if (IS_GENp(8)) {
+	gen8_set_pred_control(GEN8(instr), p->pred_control);
+	gen8_set_pred_inv(GEN8(instr), p->pred_inverse);
+	gen8_set_flag_reg_nr(GEN8(instr), p->flag_reg_nr);
+	gen8_set_flag_subreg_nr(GEN8(instr), p->flag_subreg_nr);
+    } else {
+	GEN(instr)->header.predicate_control = p->pred_control;
+	GEN(instr)->header.predicate_inverse = p->pred_inverse;
+	GEN(instr)->bits2.da1.flag_reg_nr = p->flag_reg_nr;
+	GEN(instr)->bits2.da1.flag_subreg_nr = p->flag_subreg_nr;
+    }
+}
+
+static void set_instruction_pred_cond(struct brw_program_instruction *instr,
+				      struct predicate *p,
+				      struct condition *c,
+				      YYLTYPE *location)
+{
+    set_instruction_predicate(instr, p);
+
+    if (IS_GENp(8))
+	gen8_set_cond_modifier(GEN8(instr), c->cond);
+    else
+	GEN(instr)->header.destreg__conditionalmod = c->cond;
+
+    if (c->flag_subreg_nr == -1)
+	return;
+
+    if (p->pred_control != BRW_PREDICATE_NONE &&
+	(p->flag_reg_nr != c->flag_reg_nr ||
+	 p->flag_subreg_nr != c->flag_subreg_nr))
+    {
+	warn(ALWAYS, location, "must use the same flag register if both "
+	     "prediction and conditional modifier are enabled\n");
+    }
+
+    if (IS_GENp(8)) {
+	gen8_set_flag_reg_nr(GEN8(instr), c->flag_reg_nr);
+	gen8_set_flag_subreg_nr(GEN8(instr), c->flag_subreg_nr);
+    } else {
+	GEN(instr)->bits2.da1.flag_reg_nr = c->flag_reg_nr;
+	GEN(instr)->bits2.da1.flag_subreg_nr = c->flag_subreg_nr;
+    }
+}
+
+static void set_direct_dst_operand(struct brw_reg *dst, struct brw_reg *reg,
+				   int type)
+{
+	*dst = *reg;
+	dst->address_mode = BRW_ADDRESS_DIRECT;
+	dst->type = type;
+	dst->hstride = 1;
+	dst->dw1.bits.writemask = BRW_WRITEMASK_XYZW;
+}
+
+static void set_direct_src_operand(struct src_operand *src, struct brw_reg *reg,
+				   int type)
+{
+	memset(src, 0, sizeof(*src));
+	src->reg.address_mode = BRW_ADDRESS_DIRECT;
+	src->reg.file = reg->file;
+	src->reg.type = type;
+	src->reg.subnr = reg->subnr;
+	src->reg.nr = reg->nr;
+	src->reg.vstride = 0;
+	src->reg.width = 0;
+	src->reg.hstride = 0;
+	src->reg.negate = 0;
+	src->reg.abs = 0;
+	SWIZZLE(src->reg) = BRW_SWIZZLE_NOOP;
+}
+
+static inline int instruction_opcode(struct brw_program_instruction *insn)
+{
+    if (IS_GENp(8))
+	return gen8_opcode(GEN8(insn));
+    else
+	return GEN(insn)->header.opcode;
+}
+
+/*
+ * return the offset used in native flow control (branch) instructions
+ */
+static inline int branch_offset(struct brw_program_instruction *insn, int offset)
+{
+    /*
+     * bspec: Unlike other flow control instructions, the offset used by JMPI
+     * is relative to the incremented instruction pointer rather than the IP
+     * value for the instruction itself.
+     */
+    if (instruction_opcode(insn) == BRW_OPCODE_JMPI)
+        offset--;
+
+    /*
+     * Gen4- bspec: the jump distance is in number of sixteen-byte units
+     * Gen5+ bspec: the jump distance is in number of eight-byte units
+     * Gen7.5+: the offset is in unit of 8bits for JMPI, 64bits for other flow
+     * control instructions
+     */
+    if (gen_level >= 75 &&
+        (instruction_opcode(insn) == BRW_OPCODE_JMPI))
+        offset *= 16;
+    else if (gen_level >= 50)
+        offset *= 2;
+
+    return offset;
+}
+
+void set_branch_two_offsets(struct brw_program_instruction *insn, int jip_offset, int uip_offset)
+{
+    int jip = branch_offset(insn, jip_offset);
+    int uip = branch_offset(insn, uip_offset);
+
+    assert(instruction_opcode(insn) != BRW_OPCODE_JMPI);
+
+    if (IS_GENp(8)) {
+        gen8_set_jip(GEN8(insn), jip);
+	gen8_set_uip(GEN8(insn), uip);
+    } else {
+        GEN(insn)->bits3.break_cont.jip = jip;
+        GEN(insn)->bits3.break_cont.uip = uip;
+    }
+}
+
+void set_branch_one_offset(struct brw_program_instruction *insn, int jip_offset)
+{
+    int jip = branch_offset(insn, jip_offset);
+
+    if (IS_GENp(8)) {
+        gen8_set_jip(GEN8(insn), jip);
+    } else if (IS_GENx(7)) {
+        /* Gen7 JMPI Restrictions in bspec:
+         * The JIP data type must be Signed DWord
+         */
+        if (instruction_opcode(insn) == BRW_OPCODE_JMPI)
+            GEN(insn)->bits3.JIP = jip;
+        else
+            GEN(insn)->bits3.break_cont.jip = jip;
+    } else if (IS_GENx(6)) {
+        if ((instruction_opcode(insn) == BRW_OPCODE_CALL) ||
+            (instruction_opcode(insn) == BRW_OPCODE_JMPI))
+            GEN(insn)->bits3.JIP = jip;
+        else
+            GEN(insn)->bits1.branch_gen6.jump_count = jip; // for CASE,ELSE,FORK,IF,WHILE
+    } else {
+        GEN(insn)->bits3.JIP = jip;
+
+        if (instruction_opcode(insn) == BRW_OPCODE_ELSE)
+            GEN(insn)->bits3.break_cont.uip = 1; // Set the istack pop count, which must always be 1.
+    }
+}

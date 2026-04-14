@@ -1,0 +1,60 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 2.2b kernel — multi-row Media Block Read with inline
+ * (X, Y) origin.
+ *
+ * Reads a 32-byte-wide × 4-row block from the input surface (BTI 0,
+ * SURFTYPE_2D, linear, R8_UINT) at origin (X, Y) provided via the
+ * MEDIA_OBJECT inline data (g1.0 = X, g1.1 = Y), then writes the
+ * resulting 128 bytes to the output buffer (BTI 1, SURFTYPE_BUFFER)
+ * via OWord Block Write (8 OWords = 128 bytes).
+ *
+ * This extends Phase 2.2's single-row proof to:
+ *   - verify multi-row reads return contiguous GRFs (rlen=4)
+ *   - verify the hardware honors non-zero (X, Y) coordinates from
+ *     the header in both dimensions
+ *
+ * Block encoding (PRM Vol 4 Part 1 §5.10.5):
+ *   M0.2 [21:16] = Block Height - 1 (4 rows → 3)
+ *   M0.2 [4:0]   = Block Width  - 1 (32 bytes → 31)
+ *   → value = (3 << 16) | 31 = 0x0003001F
+ */
+
+// Copy R0 (thread dispatch header) to g3 to preserve FFTID at M0.5.
+mov (8) g3<1>UD    g0<8,8,1>UD                        { align1 };
+
+// M0.0 = X byte offset from inline data
+mov (1) g3.0<1>UD  g1<0,1,0>UD                        { align1 };
+
+// M0.1 = Y row offset from inline data (g1 DW1 = byte offset 4)
+mov (1) g3.4<1>UD  g1.4<0,1,0>UD                      { align1 };
+
+// M0.2 = block size: 32 bytes wide × 4 rows
+mov (1) g3.8<1>UD  0x0003001FUD                       { align1 };
+
+// Media Block Read, sampler cache: 32-byte × 4-row block → g4..g7
+// (rlen=4 GRFs, one per row, 128 bytes total).
+send (16) 0  g4<1>UW  g3<8,8,1>UW
+	read(0, 2, 0, 2) mlen 1 rlen 4                    { align1 };
+
+// Fresh OWord Block Write header in g8, byte offset 0 into output.
+mov (8) g8<1>UD    g0<8,8,1>UD                        { align1 };
+mov (1) g8.8<1>UD  0UD                                { align1 };
+
+// Stage the 4 read GRFs into 4 MRFs for the write payload.
+mov (8) m1<1>UD    g4<8,8,1>UD                        { align1 };
+mov (8) m2<1>UD    g5<8,8,1>UD                        { align1 };
+mov (8) m3<1>UD    g6<8,8,1>UD                        { align1 };
+mov (8) m4<1>UD    g7<8,8,1>UD                        { align1 };
+
+// Write 8 OWords (= 128 bytes = 4 GRFs) to BTI 1.
+//   write(bti=1, msg_control=4 [8_OWORDS], msg_type=0, commit=0)
+//   mlen = 5 (header + 4 payload GRFs), rlen = 0.
+send (16) 0  acc0<1>UW  g8<8,8,1>UW
+	write(1, 4, 0, 0) mlen 5 rlen 0                   { align1 };
+
+// EOT via thread spawner.
+send (16) 0  acc0<1>UW  g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

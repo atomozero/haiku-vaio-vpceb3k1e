@@ -1,0 +1,80 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 2.2 kernel — first MEDIA_BLOCK_READ via sampler cache.
+ *
+ * Single-thread kernel that reads a 1-row × 32-byte block from the
+ * input surface (BTI 0, SURFTYPE_2D, linear, R8_UINT) at origin
+ * (X=0, Y=0) via the data port's Media Block Read message routed
+ * through the sampler cache, then writes those same 32 bytes to the
+ * output buffer (BTI 1, SURFTYPE_BUFFER) via the already-validated
+ * OWord Block Write path.
+ *
+ * This is the minimum viable proof that:
+ *   1. SURFTYPE_2D surface state is consumed correctly by the data
+ *      port Media Block Read message;
+ *   2. the sampler cache (target_cache = 2) path is alive on Gen5;
+ *   3. the 6-DWord message header (X offset, Y offset, block
+ *      height/width) is formatted correctly;
+ *   4. the read data lands in R(response_start) as expected (1 GRF
+ *      for a 32-byte block).
+ *
+ * PRM Vol 4 Part 1 §5.10.5 "Media Block Read/Write":
+ *   - surface type MUST be non-arrayed, non-mipmapped SURFTYPE_2D
+ *   - header M0.0 = X byte offset, M0.1 = Y row offset
+ *   - header M0.2 [4:0]   = Block Width - 1 in bytes
+ *   - header M0.2 [21:16] = Block Height - 1 in rows
+ *   - header M0.5 [7:0]   = FFTID, must be preserved from R0
+ *   - execution mask is ignored (block parameters drive the transfer)
+ *
+ * Verified against libva-intel-driver mpeg2/vld/field_read_x0y0_y.g4i
+ * which uses the same message descriptor shape (msg_type=2 is the
+ * Gen5 2-bit encoding for MEDIA_BLOCK_READ, confirmed via
+ * gen4disasm of field_forward.g4b.gen5).
+ */
+
+// 1. Copy R0 (thread dispatch header) to g3. R0.5 contains FFTID at
+//    [7:0] which MUST be preserved into the media block read header,
+//    so we clone the whole R0 first and then overwrite only the
+//    specific header DWORDs that carry block parameters.
+mov (8) g3<1>UD    g0<8,8,1>UD                        { align1 };
+
+// 2. Header M0.0 = X byte offset = 0
+//    (position of left edge of block in input surface)
+mov (1) g3.0<1>UD  0UD                                { align1 };
+
+// 3. Header M0.1 = Y row offset = 0
+mov (1) g3.4<1>UD  0UD                                { align1 };
+
+// 4. Header M0.2 = block size = (height - 1)<<16 | (width_bytes - 1)
+//    height=1 → 0, width=32 → 31 → value 0x0000001F
+mov (1) g3.8<1>UD  0x0000001FUD                       { align1 };
+
+// 5. Issue Media Block Read:
+//      read(bti=0, target_cache=2 [sampler], msg_control=0, msg_type=2)
+//    mlen=1 (one GRF header), rlen=1 (32-byte block = 1 GRF response).
+send (16) 0  g4<1>UW  g3<8,8,1>UW
+	read(0, 2, 0, 2) mlen 1 rlen 1                    { align1 };
+
+// 6. Prepare a fresh OWord Block Write header in g5 (again cloning
+//    R0 so FFTID is preserved). Byte offset = 0 (destination is
+//    output surface at byte 0).
+mov (8) g5<1>UD    g0<8,8,1>UD                        { align1 };
+mov (1) g5.8<1>UD  0UD                                { align1 };
+
+// 7. Stage the 32 bytes of read data into MRF m1 for the write
+//    message payload.
+mov (8) m1<1>UD    g4<8,8,1>UD                        { align1 };
+
+// 8. Write 2 OWords (= 32 bytes) to the output buffer (BTI 1)
+//    using the already-validated SURFTYPE_BUFFER + OWord Block
+//    Write path.
+//      write(bti=1, msg_control=2 [2_OWORDS], msg_type=0, commit=0)
+//    mlen=2 (header + 1 GRF payload), rlen=0.
+send (16) 0  acc0<1>UW  g5<8,8,1>UW
+	write(1, 2, 0, 0) mlen 2 rlen 0                   { align1 };
+
+// 9. End of thread via thread spawner.
+send (16) 0  acc0<1>UW  g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

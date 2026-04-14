@@ -11,6 +11,10 @@
 #include "accelerant.h"
 #include "render.h"
 
+#ifdef MEDIA_PIPELINE_HELLO_TEST
+#	include "media_pipeline.h"
+#endif
+
 #include "utility.h"
 
 #include <Debug.h>
@@ -532,6 +536,23 @@ intel_init_accelerant(int device)
 		uninit_common();
 		return status;
 	}
+
+#ifdef MEDIA_PIPELINE_HELLO_TEST
+	// One-shot EU-array bring-up diagnostic. Opt in by building with
+	// -DMEDIA_PIPELINE_HELLO_TEST; disabled in normal builds because a
+	// hanging test would block further accelerant init.
+	//
+	// MUST run synchronously inside init_accelerant: while we are here,
+	// app_server is blocked waiting for this function to return, which
+	// gives the test exclusive access to the primary render ring. An
+	// earlier attempt to defer this via spawn_thread+snooze broke
+	// everything because once app_server is unblocked it starts using
+	// the ring for 2D/cursor ops, and our direct-ring writes race
+	// against its writes — every marker failed to fire, INSTDONE bit 8
+	// IS stalled, IPEHR returned a command fragment matching neither
+	// our batch nor any known command. Stay synchronous.
+	media_pipeline_run_sampler_2b_test();
+#endif
 
 	return B_OK;
 }

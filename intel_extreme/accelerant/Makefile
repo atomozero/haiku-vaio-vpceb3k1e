@@ -29,9 +29,21 @@ CFLAGS_COMMON = -Wall -O2 \
 CXXFLAGS = $(CFLAGS_COMMON) -std=c++17 -fPIC
 CFLAGS   = $(CFLAGS_COMMON) -std=c11 -fPIC
 
+# Gen4/5 EU assembler (in-tree, ported from igt-gpu-tools). Used to compile
+# .g4a kernel sources into .g4b.gen5 C array initializer fragments that are
+# #include'd by media_pipeline.cpp.
+GEN4ASM = ../tools/gen4asm/gen4asm
+
+# Kernel sources live in kernels/ and are compiled into kernels/*.g4b.gen5.
+KERNEL_SRCS = kernels/hello_world.g4a kernels/memset_indexed.g4a \
+	kernels/saxpy_simd8.g4a kernels/sampler_read.g4a \
+	kernels/sampler_read_4row.g4a
+KERNEL_BINS = $(KERNEL_SRCS:.g4a=.g4b.gen5)
+
 # Accelerant source files
-ACCEL_SRCS = accelerant.cpp cursor.cpp dpms.cpp engine.cpp hooks.cpp \
-	memory.cpp mode.cpp overlay.cpp pll.cpp render.cpp \
+ACCEL_SRCS = accelerant.cpp bench.cpp cursor.cpp dpms.cpp engine.cpp \
+	gpu_bo.cpp gpu_debug.cpp hooks.cpp media_pipeline.cpp memory.cpp \
+	mode.cpp overlay.cpp pll.cpp render.cpp \
 	FlexibleDisplayInterface.cpp PanelFitter.cpp Ports.cpp Pipes.cpp \
 	TigerLakePLL.cpp
 
@@ -53,9 +65,60 @@ COMMON_OBJS = $(COMMON_CPP_SRCS:.cpp=.o) $(COMMON_C_SRCS:.c=.o)
 
 TARGET = ../intel_extreme.accelerant
 
-.PHONY: all clean install
+.PHONY: all clean install kernels test test-install revert-test
 
-all: $(TARGET)
+all: kernels $(TARGET)
+
+# Build with the media-pipeline hello-world probe enabled. This is the
+# only sanctioned way to produce a test-enabled accelerant; the flag is
+# deliberately not a runtime toggle so that a hanging probe cannot brick
+# subsequent boots silently.
+test:
+	$(MAKE) clean
+	$(MAKE) all CFLAGS_COMMON="$(CFLAGS_COMMON) -DMEDIA_PIPELINE_HELLO_TEST"
+	@echo ""
+	@echo "=== TEST-ENABLED ACCELERANT BUILT ==="
+	@echo "  binary: $(TARGET)"
+	@echo "  probe fires once per library load at intel_init_accelerant"
+	@echo "  install: sudo make test-install  (saves a safety backup)"
+	@echo "  rollback: sudo make revert-test"
+	@echo ""
+
+# Install the test-enabled accelerant to the user override path, first
+# saving whatever is currently there as .revert-backup so a rollback is
+# one command away.
+INSTALL_DIR  = /boot/system/non-packaged/add-ons/accelerants
+INSTALL_NAME = intel_extreme.accelerant
+test-install: $(TARGET)
+	@mkdir -p $(INSTALL_DIR)
+	@if [ -f $(INSTALL_DIR)/$(INSTALL_NAME) ]; then \
+		cp $(INSTALL_DIR)/$(INSTALL_NAME) $(INSTALL_DIR)/$(INSTALL_NAME).revert-backup; \
+		echo "backup saved: $(INSTALL_DIR)/$(INSTALL_NAME).revert-backup"; \
+	fi
+	cp $(TARGET) $(INSTALL_DIR)/$(INSTALL_NAME)
+	@echo ""
+	@echo "=== TEST ACCELERANT INSTALLED ==="
+	@echo "  reboot to run the probe"
+	@echo "  after boot:  grep 'intel_extreme media' /boot/system/var/log/syslog"
+	@echo "  rollback: sudo make revert-test"
+
+revert-test:
+	@if [ -f $(INSTALL_DIR)/$(INSTALL_NAME).revert-backup ]; then \
+		cp $(INSTALL_DIR)/$(INSTALL_NAME).revert-backup $(INSTALL_DIR)/$(INSTALL_NAME); \
+		echo "reverted from backup"; \
+	else \
+		rm -f $(INSTALL_DIR)/$(INSTALL_NAME); \
+		echo "removed override, will fall back to packaged accelerant"; \
+	fi
+
+# Build the in-tree EU assembler if missing, then all kernel binaries.
+kernels: $(KERNEL_BINS)
+
+$(GEN4ASM):
+	$(MAKE) -C ../tools/gen4asm
+
+kernels/%.g4b.gen5: kernels/%.g4a $(GEN4ASM)
+	$(GEN4ASM) -g5 -o $@ $<
 
 # Build common library
 ../libaccelerantscommon.a: $(COMMON_OBJS)
@@ -64,6 +127,10 @@ all: $(TARGET)
 # Build accelerant shared library
 $(TARGET): $(ACCEL_OBJS) ../libaccelerantscommon.a
 	$(CXX) -shared -o $@ $(ACCEL_OBJS) ../libaccelerantscommon.a -lbe -lstdc++
+
+# media_pipeline.cpp #include's assembled kernel binaries; force it to
+# rebuild when any kernel source changes.
+media_pipeline.o: $(KERNEL_BINS)
 
 # Compile rules
 %.o: %.cpp
@@ -76,7 +143,8 @@ $(TARGET): $(ACCEL_OBJS) ../libaccelerantscommon.a
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(ACCEL_OBJS) $(COMMON_OBJS) ../libaccelerantscommon.a $(TARGET)
+	rm -f $(ACCEL_OBJS) $(COMMON_OBJS) ../libaccelerantscommon.a $(TARGET) \
+		$(KERNEL_BINS)
 
 install: $(TARGET)
 	mkdir -p /boot/system/non-packaged/add-ons/accelerants

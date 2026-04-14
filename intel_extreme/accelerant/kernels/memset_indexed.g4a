@@ -1,0 +1,65 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 1.3 diagnostic kernel — version 10.
+ *
+ * Version 9 proved the data port OWord Block Write path end-to-end:
+ * row 5 of the output received cafebabe×4, exactly as programmed with
+ * a hardcoded byte offset of 80 in the send header DW[2]. That closed
+ * the "can we write memory at all via BTI 0 → surface state → output
+ * BO" question.
+ *
+ * Version 10 is the per-thread differentiation test — the real Phase
+ * 1.3 deliverable. Each of the 48 MEDIA_OBJECT dispatches carries a
+ * distinct thread_index in its DW4 inline data (set CPU-side in
+ * emit_media_object_indexed). On Gen5 media pipeline with the IDRT
+ * const_urb_entry_read_len=0 config that we use, that inline data
+ * lands at g1.0 of the thread's payload (first register after the
+ * R0 dispatch header, because no CURBE is pushed). Each thread then:
+ *
+ *   1. reads its index from g1.0
+ *   2. computes a per-thread byte offset = (idx & 0x3f) * 16
+ *   3. computes a per-thread value = 0xdead0000 | (idx & 0x3f)
+ *   4. writes that value (broadcast 4× to fill one OWord) to the
+ *      computed offset in output_bo, via the same OWord Block Write
+ *      path that worked in v9
+ *
+ * The mask 0x3f is a safety clamp: our output BO is 4096 bytes, so
+ * any idx in [0,63] produces an offset in [0,1008] which is always
+ * inside the BO even if g1.0 happens to contain garbage. CPU-side
+ * we only dispatch 48 threads with indices 0..47, so in the happy
+ * path the mask is a no-op.
+ *
+ * Pass criterion (checked by verify_memwrite_output): every row r in
+ * [0..47] contains 0xdead0000|r × 4 DWORDs. That is distinguishable
+ * from "one thread wrote and 47 did nothing" (which would leave 47
+ * rows at the 0xcc sentinel) — the failure mode v9 could not rule
+ * out.
+ */
+
+// Copy R0 (thread dispatch header) to g3. The send below uses g3 as
+// its source: DW[0..1] carry the header bits we inherit from R0,
+// and we overwrite DW[2] below with the per-thread global offset.
+mov (8) g3<1>UD g0<8,8,1>UD { align1 };
+
+// Clamp thread index to 0..63 so the computed offset can never leave
+// the 4 KB output BO even under unexpected payload contents.
+and (1) g4<1>UD g1<0,1,0>UD 0x3fUD { align1 };
+
+// g3.8 = header DW[2] = global offset in BYTES on Gen5.
+// offset = clamped_idx * 16 (one row per thread, 16 bytes per row).
+mul (1) g3.8<1>UD g4<0,1,0>UD 16UD { align1 };
+
+// Broadcast 0xdead0000|clamped_idx across 4 DWORDs of MRF m1
+// (one OWord = 16 bytes = 4 DWORDs of payload data).
+or (4) m1<1>UD g4<0,1,0>UD 0xdead0000UD { align1 };
+
+// OWord Block Write: 1 OWord, binding table index 0, write message
+// type 0 (OWORD_BLOCK_WRITE). mlen=2 (header + 1 GRF payload),
+// rlen=0 (no response). Identical encoding to v9.
+send (16) 0 acc0<1>UW g3<8,8,1>UW write(0, 0, 0, 0) mlen 2 rlen 0 { align1 };
+
+// EOT via thread spawner.
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

@@ -1,0 +1,72 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 2.1a kernel — first arithmetic compute kernel.
+ *
+ * Computes c[i] = alpha * x[i] + y[i] for 8 consecutive FP32 elements
+ * per thread, with alpha = 2.0f hardcoded. 48 threads × 8 elements =
+ * 384 elements total per dispatch. This is the correctness-first
+ * version: no loop, no per-thread variable stride, no scaling. Its
+ * only job is to prove that
+ *
+ *   - OWord Block Read via binding table entries works on Gen5
+ *   - FP32 mul + add produce bit-exact results on the EU ALU
+ *   - A 3-entry binding table (2 input surfaces, 1 output) can be
+ *     referenced by a single kernel
+ *   - MRF payloads can carry FP32 data for the data port write
+ *
+ * Binding table layout (set up CPU-side in setup_saxpy_buffers):
+ *   [0] = input_x surface (linear FP32, 48*8 elements)
+ *   [1] = input_y surface (linear FP32, 48*8 elements)
+ *   [2] = output_c surface (linear FP32, 48*8 elements)
+ *
+ * Each thread uses its inline thread index (delivered at g1.0 by
+ * MEDIA_OBJECT, same as memset_indexed v10) to compute a byte offset
+ * of (idx & 0x3f) * 32 — 32 bytes = 2 OWords = 8 FP32. The mask is
+ * the usual safety clamp: worst case the write still lands inside
+ * output_bo which is sized for up to 128 slots of 32 bytes.
+ *
+ * Chosen alpha = 2.0f is deliberate: multiplication by 2 is exact in
+ * IEEE-754 (exponent increment) so the expected output is bit-exact
+ * computable from x and y without any epsilon tolerance, simplifying
+ * the CPU-side verifier.
+ */
+
+// Copy R0 header into g3. The same g3 becomes the send header for
+// all three data port operations below.
+mov (8)  g3<1>UD    g0<8,8,1>UD                        { align1 };
+
+// Clamp the inline thread index to 0..1023 and compute the shared byte
+// offset into all three linear buffers. 32 bytes/row = 8 FP32/row.
+// Worst-case offset = 1023*32 = 32736 bytes, well within 64 KB buffers.
+// Phase 2.1b raised the mask from 0x3f to 0x3ff to allow dispatches
+// with more than 64 MEDIA_OBJECTs per batch.
+and (1)  g10<1>UD   g1<0,1,0>UD     0x3ffUD            { align1 };
+mul (1)  g3.8<1>UD  g10<0,1,0>UD    32UD               { align1 };
+
+// Read 8 FP32 of x from binding table index 0 into g4.
+// read(bti, target_cache=0=DATA, msg_control=2=2_OWORDS, msg_type=0=OWORD_BLOCK_READ)
+// mlen=1 (header only), rlen=1 (one GRF of response = 8 FP32).
+send (16) 0  g4<1>UW  g3<8,8,1>UW  read(0, 0, 2, 0) mlen 1 rlen 1 { align1 };
+
+// Read 8 FP32 of y from binding table index 1 into g5.
+send (16) 0  g5<1>UW  g3<8,8,1>UW  read(1, 0, 2, 0) mlen 1 rlen 1 { align1 };
+
+// g6 = 2.0f * x  (SIMD8 FP32 multiply)
+mul (8)  g6<1>F     g4<8,8,1>F      2.0F               { align1 };
+
+// g7 = 2.0f*x + y  (SIMD8 FP32 add)
+add (8)  g7<1>F     g6<8,8,1>F      g5<8,8,1>F         { align1 };
+
+// Stage the SIMD8 result into MRF m1 as the write payload.
+mov (8)  m1<1>F     g7<8,8,1>F                         { align1 };
+
+// Write 8 FP32 of c to binding table index 2.
+// write(bti, msg_control=2=2_OWORDS, msg_type=0=OWORD_BLOCK_WRITE, commit=0)
+// mlen=2 (header + 1 GRF payload), rlen=0 (no response).
+send (16) 0  acc0<1>UW  g3<8,8,1>UW  write(2, 2, 0, 0) mlen 2 rlen 0 { align1 };
+
+// EOT via thread spawner.
+send (16) 0  acc0<1>UW  g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };
