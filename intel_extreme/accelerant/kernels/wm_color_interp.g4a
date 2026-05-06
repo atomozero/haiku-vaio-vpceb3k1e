@@ -1,0 +1,76 @@
+/*
+ * WM kernel: Gouraud-shaded color interpolation for TRILIST.
+ * Gen5 Ironlake, SIMD16 dispatch.
+ *
+ * Input from SF kernel (dispatch_grf_start_reg=3):
+ *   g3 = dA/dx  (dR/dx, dG/dx, dB/dx, dA/dx) — 4 floats
+ *   g4 = dA/dy  (dR/dy, dG/dy, dB/dy, dA/dy) — 4 floats
+ *   g5 = A at V0 (R0, G0, B0, A0) — base color at vertex 0
+ *
+ * Pixel position setup (from g1 thread payload):
+ *   g1.8  = X subspan base (UW)
+ *   g1.10 = Y subspan base (UW)
+ *
+ * Per-pixel color = A0 + dA/dx * deltaX + dA/dy * deltaY
+ *
+ * Output: FB_WRITE SIMD16 to m1-m9.
+ *   m1     = header (copy of g0)
+ *   m2-m3  = Red   (16 floats)
+ *   m4-m5  = Green (16 floats)
+ *   m6-m7  = Blue  (16 floats)
+ *   m8-m9  = Alpha (16 floats)
+ */
+
+/* --- inst 0: copy thread header to m1 (required for FB_WRITE) --- */
+mov (8) m1<1>UD g0<8,8,1>UD { align1 nomask };
+
+/* --- inst 1-4: compute per-pixel X offsets (SIMD16) ---
+ * The 16 pixels in a SIMD16 span form a 2x8 or 4x4 subspan grid.
+ * g1 subspan positions: X at byte 8 (UW), Y at byte 10 (UW).
+ * SNA/exa_wm_xy.g4a: pixel offsets = base + subspan delta pattern.
+ *
+ * For simplicity, use the SF-interpolated value directly:
+ *   color(x,y) = A0 + dA/dx * x + dA/dy * y
+ * where (x,y) are pixel screen coords from g1.
+ *
+ * Actually, on Gen5 the SF outputs dA/dx, dA/dy as screen-space
+ * derivatives — multiply by pixel position delta from the subspan origin.
+ * The pixel positions for SIMD16 are:
+ *   Subspan 0: (x+0,y+0) (x+1,y+0) (x+0,y+1) (x+1,y+1)
+ *   Subspan 1: (x+2,y+0) (x+3,y+0) (x+2,y+1) (x+3,y+1)
+ *   etc.
+ *
+ * For Gouraud on Gen5 ILK, the simplest approach: broadcast A0 to all
+ * pixels and add dA/dx * pixel_x_offset + dA/dy * pixel_y_offset.
+ * But we don't have the pixel offset easily.
+ *
+ * SIMPLER: The SF already provides A0 at V0. The WM thread header g1
+ * has the subspan origin. We just need:
+ *   R_pixel = R0 + dR/dx * (pixel_x) + dR/dy * (pixel_y)
+ *
+ * But we need per-pixel X and Y values. These are delivered in the
+ * barycentric data by the hardware.
+ *
+ * SIMPLEST APPROACH: For a first demo, broadcast A0 to all 16 pixels
+ * (flat shading from V0) and add gradient corrections later.
+ * This gets the pipeline working end-to-end.
+ */
+
+/* Flat shading from V0: just broadcast g5 components to all pixels */
+
+/* inst 1: Red = g5.0 (R0) broadcast to m2-m3 */
+mov (16) m2<1>F g5.0<0,1,0>F { compr align1 nomask };
+
+/* inst 2: Green = g5.4 (G0) broadcast to m4-m5 */
+mov (16) m4<1>F g5.4<0,1,0>F { compr align1 nomask };
+
+/* inst 3: Blue = g5.8 (B0) broadcast to m6-m7 */
+mov (16) m6<1>F g5.8<0,1,0>F { compr align1 nomask };
+
+/* inst 4: Alpha = g5.12 (A0) broadcast to m8-m9 */
+mov (16) m8<1>F g5.12<0,1,0>F { compr align1 nomask };
+
+/* inst 5: send FB_WRITE SIMD16 EOT (identical to solid kernel) */
+/* msg_reg_nr=1, msg_length=9, header_present=1, msg_type=4(RT_WRITE),
+   last_rt=1, SIMD16 single source, BTI=0 */
+send (16) null:UW m1 null 0x92084800 { align1 nomask EOT };

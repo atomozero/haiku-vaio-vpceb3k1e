@@ -1,304 +1,246 @@
-# TODO: Accelerazione GPU Intel Gen5 su Haiku (modello X547)
+# TODO: Accelerazione GPU Intel Gen5 su Haiku
 
-**Obiettivo:** OpenGL hardware-accelerated su Intel Ironlake (Gen5) via
-Mesa crocus, seguendo l'architettura di X547 (RadeonGfx/libdrm2/accelerant2).
+**Hardware:** Intel HD Graphics 0x0046 (Ironlake Mobile, Gen5), Sony Vaio VPCEB3K1E
+**OS:** Haiku R1~beta5 (hrev59506+)
+**Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
+compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Hardware target:** Intel HD Graphics 0x0046 (Ironlake Mobile, Gen5)
-**Riferimento architetturale:** X547/RadeonGfx + X547/libdrm2 + X547/accelerant2
-
----
-
-## Fase 0: Preparazione e studio (1-2 settimane)
-
-### 0.1 Studio dell'architettura X547
-- [x] Clonare e studiare X547/RadeonGfx (server GPU, ring buffer, memory manager)
-- [x] Clonare e studiare X547/libdrm2 (shim DRM → accelerant2)
-- [x] Clonare e studiare X547/accelerant2 (API COM-like, vtable C/C++)
-- [x] Clonare e studiare X547/VideoStreams (buffer passing producer/consumer)
-- [x] Analizzare build system RadeonGfx: usa meson + subprojects
-      (SADomains, Locks, ThreadLink) + libaccelerant + libdrm + VideoStreams.
-      Kernel driver usa Makefile standard Haiku.  Non compilato per
-      dipendenze mancanti, ma struttura chiara dal sorgente.
-
-### 0.2 Studio del driver Intel i915 Linux
-- [x] Studiare il winsys crocus (crocus_bufmgr.c, crocus_batch.c, crocus_fence.c)
-- [x] Documentare tutti i DRM_IOCTL_I915_* usati da crocus
-      → 30 ioctl totali, 8 essenziali (Tier 1), 11 raccomandati (Tier 2)
-      → Analisi completa in intel_extreme/CROCUS_DRM_IOCTL_ANALYSIS.md
-- [x] Studiare GEM object management in i915 (create, mmap, execbuffer)
-- [x] Studiare la gestione GTT globale Gen5 (vs PPGTT Gen6+)
-- [x] Studiare il batch buffer submission (execbuffer2)
-      → Formato: exec_object2[] + relocation_entry[] + execbuffer2 header
-      → Gen5: no context (rsvd1=0), no PPGTT, global GTT offsets
-      → Batch structure: commands + MI_STORE_DWORD_INDEX + MI_BATCH_BUFFER_END
-
-### 0.3 Documentazione hardware Gen5
-- [x] Documentare il register map GTT (PGTBL_CTL 0x2020)
-- [x] Documentare il ring buffer RCS (TAIL 0x2030, HEAD 0x2034, START 0x2038, CTL 0x203C)
-- [x] Documentare il formato batch buffer e relocation
-      → Gen5: call-style nesting (1 level), no chain
-      → Relocation: global GTT offsets, presumed_offset caching
-- [x] Localizzare Intel Ironlake PRM (disponibili online):
-      Vol 1 Part 1: Graphics Core
-      Vol 1 Part 2: MMIO, Ring Buffer, Commands
-      Vol 1 Part 3: Memory Interface, Render Engine, 2D BLT
-      Vol 4 Part 2: URB, Message Gateway
-      Mirror: https://kiwitree.net/~lina/intel-gfx-docs/prm/ilk/
-      Ufficiale: https://www.intel.com/content/www/us/en/docs/graphics-for-linux/developer-reference/1-0/intel-core-processor-2010.html
-      GitHub: https://github.com/Igalia/intel-osrc-gfx-prm
+**Ultimo aggiornamento:** 2026-05-06
 
 ---
 
-## Fase 1: Accesso GPU dal server userspace (1 settimana)
+## Legenda
 
-**Decisione architetturale:** NON serve un kernel driver separato.
-Il kernel driver `intel_extreme` esistente fornisce gia' tutto:
-MMIO registers, GTT aperture, ring buffer, HWS page.  Il server GPU
-accede al device esistente `/dev/graphics/intel_extreme_*` via ioctl
-`INTEL_GET_PRIVATE_DATA` e `clone_area()`, come fa l'accelerant.
-
-### 1.1 Struttura progetto IntelGfx
-- [ ] Creare directory `intel_gfx_server/`
-- [ ] Struttura base: BApplication con thread di ascolto IPC
-- [ ] Aprire `/dev/graphics/intel_extreme_*` come device fd
-- [ ] Ottenere shared_info via `ioctl(INTEL_GET_PRIVATE_DATA)`
-- [ ] Clonare aree: shared_info, registers, graphics_memory
-
-### 1.2 Verifica accesso hardware
-- [ ] Leggere registri MMIO (device ID, GTT size, ring status)
-- [ ] Verificare accesso GTT aperture (leggere/scrivere pixel framebuffer)
-- [ ] Verificare che il ring buffer lock funzioni cross-process
-- [ ] Test: scrivere un pixel al framebuffer via MI_STORE_DATA_IMM
-      dal server (non dall'accelerant)
-
-### 1.3 Gestione conflitti con accelerant
-- [ ] L'accelerant (in app_server) e il server GPU condividono:
-  - Ring buffer RCS (serializzato via benaphore in shared_info)
-  - GTT aperture (allocazioni separate, no overlap)
-  - Registri MMIO (letture concorrenti ok, scritture serializzate)
-- [ ] Definire protocollo di allocazione GTT (server alloca dalla fine,
-      accelerant dall'inizio, o usa allocatore condiviso)
-- [ ] Test: BLT fill da accelerant + MI_STORE da server, verificare
-      che non si corrompano
+- [x] Completato e verificato su hardware
+- [-] Parzialmente completato / funzionante con limitazioni
+- [ ] Da fare
 
 ---
 
-## Fase 2: Server GPU `IntelGfx` (4-8 settimane)
+## Fase 0: Infrastruttura e preparazione — COMPLETATA
 
-Server userspace BApplication che gestisce il GPU.  Piu' semplice di
-RadeonGfx perche' Gen5 ha GTT globale e un solo ring.
-
-### 2.1 Struttura base
-- [ ] BApplication con loop messaggi
-- [ ] Apertura device `/dev/graphics/intel_gfx/0`
-- [ ] Mapping dei registri MMIO dal shared_info
-- [ ] Shutdown pulito con rilascio risorse
-
-### 2.2 GTT Manager
-- [ ] Leggere GTT size dal registro PGTBL_CTL (0x2020)
-- [ ] Allocatore di GTT entries (bitmap o free list)
-- [ ] Funzione: alloca N pagine contigue nel GTT
-- [ ] Funzione: mappa pagine fisiche → GTT entries
-- [ ] Funzione: libera GTT entries
-- [ ] NOTA: Gen5 usa GTT globale, non per-process PPGTT
-
-### 2.3 GEM Object Manager
-- [ ] Struttura `IntelBufferObject`: size, GTT offset, CPU mapping, handle
-- [ ] `gem_create()`: alloca area Haiku + GTT entries
-- [ ] `gem_mmap()`: mappa area in address space del client
-- [ ] `gem_close()`: libera area + GTT entries
-- [ ] Handle table per-client (modello RadeonGfx TeamState)
-- [ ] Reference counting per oggetti condivisi
-
-### 2.4 Ring Buffer Manager
-- [ ] Inizializzazione ring RCS (disable → reset HEAD → enable)
-- [ ] Workaround Gen5 (MI_MODE, _3D_CHICKEN2, CACHE_MODE_0)
-- [ ] Funzione: scrivi comandi al ring (gestione wrap-around)
-- [ ] Funzione: aggiorna TAIL per submit
-- [ ] Funzione: attendi completamento (poll HEAD o HWS sequence)
-- [ ] MI_STORE_DWORD_INDEX per sequence number in HWS page
-
-### 2.5 Batch Buffer Execution
-- [ ] `execbuffer()`: ricevi batch buffer dal client
-  - Validare handle degli oggetti referenziati
-  - Applicare relocations (patch indirizzi GTT nel batch)
-  - Emettere MI_BATCH_BUFFER_START nel ring
-  - Registrare fence/sequence number
-- [ ] Supporto per lista di buffer objects (exec_object2)
-- [ ] Gestione delle dipendenze (wait su fence precedenti)
-
-### 2.6 Fencing e Sync
-- [ ] Sequence number via HWS page
-- [ ] `wait_rendering()`: attendi che un batch completi
-- [ ] Sync objects (create, destroy, wait, signal) per accelerant2
-- [ ] Timeout con fallback a poll HEAD==TAIL
-
-### 2.7 IPC Client-Server
-- [ ] Protocollo messaggi (modello RadeonGfx PortLink)
-- [ ] Operazioni: gem_create, gem_close, gem_mmap, execbuffer, wait
-- [ ] Serializzazione/deserializzazione parametri
-- [ ] Gestione errori e cleanup alla disconnessione del client
-
-### 2.8 Test standalone
-- [ ] Test: alloca buffer, scrivi dati, verifica via CPU
-- [ ] Test: submit batch con MI_STORE_DATA_IMM, verifica write
-- [ ] Test: submit batch con BLT fill, verifica framebuffer
-- [ ] Test: submit batch con comandi 3D (pipeline state + primitive)
+- [x] Studio architettura X547/RadeonGfx, libdrm2, accelerant2
+- [x] Studio driver i915 Linux (crocus winsys, GEM, execbuffer, DRM ioctl)
+- [x] Documentazione hardware Gen5 (register map, ring buffer, PRM)
+- [x] Patch display LVDS (EDID fallback, dual/single channel, IBX watermark)
+- [x] Display 1366x768 32bit 59.9Hz funzionante
+- [x] 2D BLT acceleration (XY_SOURCE_BLIT, XY_COLOR_BLIT, pattern fill)
+- [x] Port intel-gen4asm, correzione opcode Gen5
 
 ---
 
-## Fase 3: Interfaccia accelerant2 (2-3 settimane)
+## Fase 1: Pipeline 3D (Render Engine) — COMPLETATA (base)
 
-### 3.1 Implementare AccelerantIntel
-- [ ] Struttura add-on accelerant2 (dlopen, instantiate_accelerant)
-- [ ] Implementare `AccelerantBase`: QueryInterface, reference counting
-- [ ] Implementare `AccelerantDrm` ("drm/v1"):
-  - `DrmMmap()` - mappa buffer in address space client
-  - `DrmGemClose()` - chiudi handle
-  - `DrmPrimeHandleToFd()` / `DrmPrimeFdToHandle()` - export/import
-  - `DrmSyncobjCreate/Destroy/Wait/Signal()` - sync objects
-- [ ] Implementare `AccelerantI915` ("i915/v1") (interfaccia custom):
-  - `I915GemCreate()` - crea buffer object
-  - `I915GemMmap()` - mappa in CPU
-  - `I915Execbuffer()` - submit batch buffer
-  - `I915GemWait()` - attendi completamento
-  - `I915GetParam()` - query capabilities (chipset, GTT size, etc.)
-
-### 3.2 IPC verso IntelGfx server
-- [ ] Ogni metodo AccelerantI915 serializza e invia al server
-- [ ] Ricevi risposta con risultato e handle
-- [ ] Cache locale degli handle per performance
-
-### 3.3 Integrazione con AccelerantRoster
-- [ ] Registrare l'add-on in `/boot/system/non-packaged/add-ons/accelerants/`
-- [ ] Device signature matching per `/dev/graphics/intel_gfx/*`
-- [ ] Test: client carica accelerant2, esegue gem_create + execbuffer
+- [x] PIPELINE_SELECT 3D, STATE_BASE_ADDRESS, URB_FENCE, 3DPRIMITIVE
+- [x] SF kernel (7 istr) + WM kernel (6 istr) — solid fill SIMD16
+- [x] Workaround Ironlake (RC6 wake, MI_MODE, _3D_CHICKEN2)
+- [x] render_fill_rect funzionante con marker diagnostici
+- [ ] 3D avanzato: alpha blending, texture sampling, compositing
 
 ---
 
-## Fase 4: libdrm2 Intel shim (2-3 settimane)
+## Fase 2: Media Pipeline (Compute) — COMPLETATA
 
-### 4.1 Implementare libdrm_intel
-- [ ] Nuovo subdirectory `intel/` in libdrm2
-- [ ] `drm_intel_bufmgr_gem_init()` - inizializza, connetti ad accelerant2
-- [ ] Struttura `drm_intel_bo`:
-  - `drm_intel_bo_alloc()` → AccelerantI915::I915GemCreate()
-  - `drm_intel_bo_map()` → AccelerantI915::I915GemMmap()
-  - `drm_intel_bo_unmap()`
-  - `drm_intel_bo_subdata()` - scrivi dati nel buffer
-  - `drm_intel_bo_exec()` → AccelerantI915::I915Execbuffer()
-  - `drm_intel_bo_wait_rendering()`
-  - `drm_intel_bo_unreference()`
-- [ ] Relocations: `drm_intel_bo_emit_reloc()`
-- [ ] Context management (opzionale per Gen5)
-
-### 4.2 Alternativa: intercettare DRM ioctl i915
-- [ ] Mappare `DRM_IOCTL_I915_GEM_CREATE` → I915GemCreate()
-- [ ] Mappare `DRM_IOCTL_I915_GEM_EXECBUFFER2` → I915Execbuffer()
-- [ ] Mappare `DRM_IOCTL_I915_GEM_MMAP` → I915GemMmap()
-- [ ] Mappare `DRM_IOCTL_I915_GEM_WAIT` → I915GemWait()
-- [ ] Mappare `DRM_IOCTL_I915_GETPARAM` → I915GetParam()
-- [ ] Totale: ~15-20 ioctl da mappare per crocus
-
-### 4.3 Test con programma standalone
-- [ ] Scrivere test C che usa libdrm_intel per allocare e eseguire batch
-- [ ] Verificare che la catena libdrm2 → accelerant2 → server funzioni
+- [x] Infrastruttura: gpu_bo allocator, gpu_debug, bench module
+- [x] Phase I.B: primo kernel EU (hello_world.g4a, 10-command batch)
+- [x] Phase 1.2: 48-thread parallel dispatch
+- [x] Phase 1.3: per-thread memory write (OWord Block Write, SURFTYPE_BUFFER)
+- [x] Phase 2.1: SAXPY FP32 bit-exact (384 elementi, benchmark MFLOPS)
+- [x] Phase 2.2: MEDIA_BLOCK_READ sampler cache, CURBE 30 GRF, libva ABI
+- [x] Phase 2.3b: MPEG-2 IQ kernel (quantizzazione inversa, bit-exact)
 
 ---
 
-## Fase 5: Mesa crocus winsys (2-4 settimane)
+## Fase 3: Decoder MPEG-2 — FASE ATTIVA
 
-### 5.1 Adattare il winsys crocus per Haiku
-- [ ] Copiare `src/gallium/winsys/crocus/drm/` nel fork Mesa
-- [ ] Sostituire le chiamate `drmIoctl(DRM_IOCTL_I915_*)` con libdrm_intel
-- [ ] Adattare `crocus_drm_winsys.c` per usare le API Haiku
-  (area_id per mapping, thread per sync)
-- [ ] Compilare crocus come driver Gallium per Haiku
+### 3.1 IDCT kernel standalone — COMPLETATO
+- [x] idct_single.g4a — IDCT 2-pass dp4 (109 istruzioni)
+- [x] DO_IDCT subroutine con jmpi/ip, a0.0 dual-half addressing
+- [x] Riferimento CPU (idct_ref.h) bit-exact
 
-### 5.2 State tracker e frontend
-- [ ] Verificare che il Gallium state tracker OpenGL compili per Haiku
-- [ ] Collegare al BGLView di Haiku (o al EGL driver)
-- [ ] Primo test: glxgears o equivalente Haiku (GLTeapot)
+### 3.2 Kernel IQ + IDCT combinato — COMPLETATO
+- [x] iq_idct_intra.g4a (149 istruzioni) con output U8 a SURFTYPE_2D
+- [x] Media Block Write (msg_type=2) con coordinate (x,y) da inline data
+- [x] Versione no-level-shift per decode reale (145 istruzioni)
+- [x] Bug scoperti e corretti:
+  - {compr} UB→UW widening scrive solo metà GRF (dati stale)
+  - gen4asm .N subregister è in BYTE senza -a flag
+  - {compr} su W add/mov scrive solo metà GRF
 
-### 5.3 Integrazione display
-- [ ] Connettere il framebuffer 3D al display tramite VideoStreams
-  oppure tramite swap-buffer diretto al framebuffer dell'accelerant
-- [ ] Test: finestra OpenGL con rendering hardware
+### 3.3 Parser MPEG-2 bitstream — COMPLETATO
+- [x] Bitstream reader, start code scanner
+- [x] Parser: sequence_header, picture_header, picture_coding_extension, slice_header
+- [x] DC VLC decoder (Table B-12 luma, B-13 chroma)
+- [x] AC VLC decoder (Table B-14 completa, 112 entries + escape codes)
+- [x] Table B-15 per intra_vlc_format=1 — implementata
+- [x] Macroblock address increment (Table B-1, fino a 33 + escape + stuffing)
+- [x] Macroblock type I-picture (Table B-2) e P-picture (Table B-3)
+- [x] Coded Block Pattern Table B-9 completa (64 entries)
+- [x] Intra macroblock decoder (6 blocchi: 4Y + Cb + Cr, DC prediction)
+- [x] Non-intra macroblock decoder (P-frame inter blocks)
+- [x] Motion vector decode (Table B-10 + f_code expansion)
+- [x] IQ inline nel parser (come ffmpeg): segno applicato DOPO >>4
+- [x] Mismatch control §7.4.3: block[63] ^= 1
+- [x] Error recovery: continue su MB fail (non resync_to_next_slice)
+- [x] Fix EOB dopo blocco pieno (idx>=64): consumare trailing EOB
+- [-] IDCT precision: ±1-3 pixel vs ffmpeg (cosine table libva, non IEEE 1180)
 
-### 5.4 Ottimizzazione e debug
-- [ ] Verificare rendering corretto con glmark2 o piglit
-- [ ] Profile performance vs llvmpipe
-- [ ] Fix bug di rendering specifici Gen5
+### 3.4 Integrazione parser → GPU decode — COMPLETATO
+- [x] Parse I-frame → dispatch batch GPU → verifica pixel
+- [x] 100% coverage su tutti i file di test (gray, dark, testsrc, real, mandel)
+
+### 3.5 Output visibile — COMPLETATO
+- [x] Decode Y su GPU, Cb/Cr su CPU, YCbCr→RGB32 (BT.601)
+- [x] Output PPM visualizzabile con ShowImage
+- [x] Test results finali:
+  | File | Risoluzione | MB | Copertura | PSNR vs ffmpeg |
+  |------|------------|:---:|:---------:|:-----------:|
+  | Gray q31 | 64×64 | 16/16 | **100%** | exact |
+  | Dark q20 | 320×240 | 300/300 | **100%** | 44+ dB |
+  | Real q31 | 640×480 | 1200/1200 | **100%** | 44.5 dB |
+  | Testsrc q15 | 320×240 | 300/300 | **100%** | 44.3 dB |
+  | Mandel q2 | 320×240 | 300/300 | **100%** | 50.0 dB |
+  | Mandel q5 | 320×240 | 300/300 | **100%** | 49.4 dB |
+
+### 3.6 GPU path IDCT-only — COMPLETATO
+- [x] Kernel idct_to_u8.g4a: IDCT + clamp + Media Block Write U8
+- [x] Batch dispatch submit_blocks_batch_gpu() fino a 400 blocchi
+
+### 3.7 Motion Compensation P-frame — CPU COMPLETATA
+- [x] test_mc_decode.cpp: decoder multi-frame I+P con MC CPU
+- [x] Half-pel bilinear interpolation (4 casi)
+- [x] Chroma MC con scaling MV /2
+- [x] Skipped MB handling, reference frame management
+
+### 3.8 media_kit codec add-on — COMPLETATO (I+P)
+- [x] Plugin MPEG2DecoderPlugin + MPEG2Decoder (DecoderPlugin API)
+- [x] Registrazione formato B_MPEG_2_VIDEO via BMediaFormats
+- [x] Output B_YCbCr420 (Y + Cb + Cr planes)
+- [x] I-frame decode via mpeg2_parser + compute_idct_reference
+- [x] P-frame decode con motion compensation (half-pel bilinear)
+- [x] Reference frame management (I/P → reference per P successivi)
+- [x] Skipped MB handling (copia da reference, zero MV)
+- [x] Build come .so, installato in ~/config/non-packaged/add-ons/media/plugins/
+- [x] Viewer standalone (mpeg2_viewer) con I+P playback visuale
+- [x] Test multi-frame: 10 frame (2 I + 8 P), 320x240, 100% MB coverage
+- [ ] Test con MediaPlayer su file .m2v
+- [ ] B-frame decode (output nero per ora)
+
+### 3.9 GPU Motion Compensation kernel — COMPLETATO
+- [x] mc_fullpel_only.g4b.gen5: kernel MC full-pel (13 istruzioni)
+  - Media Block Read da reference surface (BTI 2)
+  - Media Block Write a output surface (BTI 1)
+- [x] Test boot-time: MC su reference sintetico 32x32 gradient
+  - Verifica pixel-exact vs CPU mc_block_cpu(): 64/64 correct
+- [x] Benchmark GPU vs CPU (48 dispatch batch, single submission)
+  - GPU: 17 µs / 48 blocchi = 2.8M blocks/s
+  - CPU: 7 µs / 48 blocchi = 6.9M blocks/s
+  - Ratio: 0.41x (CPU vince per blocco singolo 8×8, overhead dispatch domina)
+  - Limiti Gen5 scoperti:
+    - URB recycling rotto: iterations ≤ num_urb_entries (max 48)
+    - No second ring submission per media: IS stall dopo MI_FLUSH
+    - Soluzione: tutto in singola submission ring (state + N dispatch + flush)
+- [ ] mc_idct_inter.g4a: MC + IDCT residual addition combinato
+- [ ] Integrazione batch dispatch per P-frame (MC per ogni block)
+- [x] Benchmark IDCT 400 blocchi — **GPU VINCE 4×**
+      GPU: 114-126 µs, CPU: 458-475 µs → speedup **4.01×**
+      Fix: busy-wait puro (no snooze), timing solo ring kick→marker.
+      Tool standalone: tests/gpu_idct_bench (no reboot, clona accelerant)
+
+### 3.10 GPU 3D Triangle (demo visiva) — IN CORSO
+- [x] Clone accelerant da userspace (device open + shared_info + registers)
+- [x] Ring submission da clone funzionante (MI_STORE_DATA_IMM OK)
+- [x] render_draw_triangle: TRILIST 3DPRIMITIVE completa (marker stage 0x0E)
+- [x] BWindow + BBitmap display loop a 47 FPS
+- [x] Framebuffer readback in BWindow funzionante
+- [-] **BUG**: 3DPRIMITIVE TRILIST non produce pixel output (0 pixel cambiati)
+      - Pipeline completa (marker OK) ma nessun pixel nel framebuffer/BO
+      - RECTLIST (render_fill_rect) funziona da app_server con stessi state
+      - Ipotesi: TRILIST richiede coordinate NDC o attributo utente nella VUE
+      - Da indagare: formato VUE per TRILIST vs RECTLIST su Gen5
+- [ ] Off-screen render target (surface state RC_READ_WRITE + pitch fix)
+- [ ] Gouraud shading (WM kernel con interpolazione colore)
+- [ ] Teapot geometry + rotation
+
+### 3.11 Prossimi passi
+- [ ] GPU IDCT nel plugin (sostituire compute_idct_reference con GPU dispatch)
+- [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
+- [ ] IDCT IEEE 1180 (sostituire cosine table)
+- [ ] B-frame support
+- [ ] Framebuffer blit post-modeset
 
 ---
 
-## Fase 6: Integrazione sistema (1-2 settimane)
+## Fase 4: Decoder H.264 — dopo MPEG-2
 
-### 6.1 Coesistenza con intel_extreme
-- [ ] intel_extreme: continua a gestire display (mode setting, DPMS)
-- [ ] intel_gfx: gestisce 3D (batch submit, GEM, GTT)
-- [ ] Condivisione del framebuffer tra i due driver
-- [ ] Strategia per evitare conflitti sul ring buffer
-
-### 6.2 Packaging
-- [ ] HPKG per kernel driver intel_gfx
-- [ ] HPKG per server IntelGfx
-- [ ] HPKG per accelerant2 add-on
-- [ ] HPKG per libdrm2 con supporto Intel
-- [ ] HPKG per Mesa con crocus
-
-### 6.3 Documentazione
-- [ ] README con istruzioni di installazione
-- [ ] Architettura e design document
-- [ ] Lista GPU supportate (Gen4-Gen7 con crocus)
-- [ ] Known issues e limitazioni
+- [ ] Parser H.264 (NAL, SPS, PPS, slice, CAVLC/CABAC)
+- [ ] Kernel GPU H.264 (MC quarter-pel, IDCT 4x4/8x8, deblocking)
+- [ ] Reference frame management (DPB, MMCO)
+- [ ] Profili Baseline → Main → High
 
 ---
 
-## Dipendenze esterne
+## Fase 5: Compute / LLM — dopo video decode
 
-| Dipendenza | Stato | Azione |
+- [ ] Kernel compute (matmul, softmax, RMSNorm, RoPE)
+- [ ] Runtime inferenza (GPT-2 small / TinyLlama)
+
+---
+
+## Fase 6: OpenGL via Mesa crocus — futuro
+
+- [ ] Server GPU IntelGfx, accelerant2, libdrm2 Intel, Mesa crocus winsys
+
+---
+
+## Bug Gen5 scoperti e documentati
+
+| # | Bug | Impatto | Fix |
+|---|-----|---------|-----|
+| 1 | {compr} UB→UW widening scrive solo metà GRF | Dati stale non deterministici | Widening esplicita 2×SIMD8 |
+| 2 | gen4asm .N subreg è in BYTE (senza -a) | Pack D→W alla posizione sbagliata | Usare .16 per UW elem 8 |
+| 3 | {compr} su W add/mov scrive solo metà GRF | +128 applicato solo a metà blocco | 4× add(16) senza {compr} |
+| 4 | dc_pred init include level shift | +128 dopo IDCT raddoppia l'offset | NON aggiungere +128 |
+| 5 | GOP code 0xB8 > SLICE_START_MAX | Parser esce dal loop header | Check <= SLICE_MAX |
+| 6 | EOB '10' non controllato per primo AC | Blocchi DC-only non terminano | EOB check prima di '1s' |
+| 7 | URB entry stale data oltre 48 dispatch | Thread leggono dati sbagliati | Padding 16 DW per inline |
+| 8 | SURFTYPE_2D per OWord Block R/W | Silent OOB drops | Usare SURFTYPE_BUFFER |
+| 9 | MEDIA_BLOCK_READ msg_type=4 (PRM) | Silently fails | Usare msg_type=2 |
+| 10 | Send payload da GRF (non MRF) | Output corrotto | Header da GRF, payload da MRF |
+| 11 | Table B-14 VLC codes 12-bit SBAGLIATI | Coefficienti AC decodificati errati | Codici corretti da ffmpeg ff_mpeg1_vlc_table |
+| 12 | Start code 00 00 01 dentro macroblocco | Parser legge start code come DC VLC | Check peek(23)==0 prima di ogni blocco |
+| 13 | quantiser_scale mai aggiornato | AC IQ con q_scale=1 (hardcoded) | Compute da q_scale_code per-slice |
+| 14 | EOB non consumato dopo blocco pieno | Drift 2 bit per blocco con 64 coeff | Leggere trailing EOB quando idx>=64 |
+| 15 | CBP Table B-9 incompleta | Silent corruption P-frame inter MB | Implementata tabella completa 64 entries |
+| 16 | resync_to_next_slice su MB fail | Perde tutti i MB rimanenti della slice | Sostituito con continue (skip+retry) |
+| 17 | VFE num_urb_entries=1, >6 dispatch | IS stall al 7° MEDIA_OBJECT | num_urb_entries = dispatch_count (max 48) |
+| 18 | Second ring submission media post-MI_FLUSH | IS stall, thread EU non dispatcha | Tutto in singola ring submission |
+| 19 | MC kernel EOT non rilascia URB entry | URB recycling rotto per MC kernel | IDCT kernel funziona, MC no (indagare) |
+| 20 | gpu_debug_wait_value snooze(500) | Timing benchmark falsato (60ms vs µs) | Busy-wait puro per benchmark |
+
+---
+
+## Milestone chiave
+
+| # | Milestone | Stato |
 |---|---|---|
-| X547/accelerant2 API headers | Prototipo 2023 | Forkare, adattare per Intel |
-| X547/libdrm2 framework | AMDGPU-only | Estendere con modulo Intel |
-| Mesa 22+ con crocus | Upstream | Forkare, adattare winsys |
-| Intel Gen5 PRM | Pubblico | Scaricare da 01.org |
-| Haiku kernel headers | hrev59506 | Disponibile nel sistema |
-
-## Semplificazioni Gen5 rispetto a RadeonGfx
-
-| Aspetto | RadeonGfx (AMD) | IntelGfx (Gen5) |
-|---|---|---|
-| Address space | Per-client PPGTT + VMID | GTT globale (piu' semplice) |
-| Ring buffers | GFX + SDMA + compute | Solo RCS (uno) |
-| Firmware GPU | Si (MC, RLC, CP firmware) | No (tutto in hardware) |
-| Page tables | 2-level per client | Nessuna (GTT flat) |
-| Command format | PM4 packets | MI + Type 2/3 commands |
-| Memory domains | VRAM + GTT | Solo GTT (UMA) |
-
-## Rischi e mitigazioni
-
-| Rischio | Impatto | Mitigazione |
-|---|---|---|
-| Gen5 troppo vecchio per la community | Basso interesse | Crocus supporta Gen4-7, il lavoro e' estendibile |
-| Conflitto intel_extreme/intel_gfx | Instabilita' | Separare chiaramente display vs 3D |
-| Complessita' Mesa winsys | Blocco prolungato | Iniziare con test standalone, poi Mesa |
-| X547 cambia API accelerant2 | Incompatibilita' | Forkare accelerant2, sync periodico |
-| Hardware non disponibile per test | Rallentamento | Il Sony Vaio VPCEB3K1E e' il test bed |
-
----
-
-## Timeline stimata
-
-```
-Mese 1:  Fase 0 (studio) + Fase 1 (kernel driver)
-Mese 2:  Fase 2 (server GPU - GTT, ring buffer, GEM)
-Mese 3:  Fase 2 (server GPU - execbuffer, fencing, IPC) + Fase 3 (accelerant2)
-Mese 4:  Fase 4 (libdrm2 Intel) + Fase 5 (Mesa crocus)
-Mese 5:  Fase 5 (integrazione, debug) + Fase 6 (packaging)
-```
-
-**Primo milestone visibile:** fine Mese 2 - batch buffer execution con
-BLT fill verificato via server GPU (senza Mesa).
-
-**Secondo milestone:** fine Mese 4 - GLTeapot hardware-rendered su Ironlake.
+| M1 | Display 1366x768 funzionante | ✅ |
+| M2 | 2D BLT acceleration | ✅ |
+| M3 | 3D solid fill via render engine | ✅ |
+| M4 | Primo kernel EU via media pipeline | ✅ |
+| M5 | 48-thread parallel dispatch | ✅ |
+| M6 | Aritmetica FP32 bit-exact (SAXPY) | ✅ |
+| M7 | Sampler cache + CURBE + libva ABI | ✅ |
+| M8 | MPEG-2 IQ kernel | ✅ |
+| M9 | MPEG-2 IDCT kernel (2-pass dp4) | ✅ |
+| M10 | IQ+IDCT+clamp+U8+Media Block Write | ✅ |
+| M11 | Parser MPEG-2 + GPU decode I-frame | ✅ |
+| M12 | Primo frame MPEG-2 visibile (PPM) | ✅ |
+| M13 | I-frame 100% decode (tutti i file) | ✅ 100%, PSNR 44-50 dB vs ffmpeg |
+| M14 | Motion compensation P-frame (CPU) | ✅ MC + parser fix EOB/CBP |
+| M14b | Plugin media_kit I+P decode | ✅ 10 frame, 100% MB coverage |
+| M14c | GPU IDCT batch benchmark | ✅ 400 blocks, GPU 4× faster than CPU |
+| M15 | GPU MC+IDCT P-frame decode completo | ⬜ |
+| M16 | Playback MPEG-2 in MediaPlayer | ⬜ |
+| M16 | H.264 decode | ⬜ |
+| M17 | LLM inference su GPU | ⬜ |

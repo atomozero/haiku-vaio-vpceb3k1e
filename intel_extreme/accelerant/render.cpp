@@ -67,7 +67,8 @@ static render_state sRenderState;
 //   4: add       r7 = v2 - v0
 //   5: mul       m2 = (v2-v0) * inv (dA/dy)
 //   6: send      URB_WRITE EOT (msg_length=4: m0-m3)
-static const uint32 gen5_sf_kernel[] = {
+extern const uint32 gen5_sf_kernel[];
+const uint32 gen5_sf_kernel[] = {
 	0x00400031, 0x20c01fbd, 0x1069002c, 0x02100001,
 	0x00400001, 0x206003be, 0x00690060, 0x00000000,
 	0x00400040, 0x20e077bd, 0x00690080, 0x006940a0,
@@ -80,45 +81,48 @@ static const uint32 gen5_sf_kernel[] = {
 #define SF_KERNEL_SIZE sizeof(gen5_sf_kernel)
 
 
-// WM kernel: solid color fill, SIMD8 dispatch.
-// Loads RGBA color as immediate float values (patched per fill),
-// copies the thread header to m1, and sends FB_WRITE with EOT.
+// WM kernel: solid color fill, SIMD16 dispatch (matching SNA gen5).
+// Gen5 Ironlake requires SIMD16 dispatch for WM — SIMD8 threads are
+// not dispatched for RECTLIST primitives.
 //
-// Thread payload: r0 = header, r1 = pixel X/Y (barycentric)
-// Output: m1 (header copy) + m2-m5 (R,G,B,A as float) -> FB_WRITE
+// Loads RGBA color as immediate float values (patched per fill),
+// copies the thread header to m1, sends FB_WRITE SIMD16 with EOT.
+//
+// SIMD16 FB_WRITE layout:
+//   m1      = header (8 DW)
+//   m2-m3   = Red   (16 floats = 2 GRF regs)
+//   m4-m5   = Green (16 floats)
+//   m6-m7   = Blue  (16 floats)
+//   m8-m9   = Alpha (16 floats)
+//   msg_length = 9 (1 header + 4×2 color)
 //
 // The color immediates in instructions 1-4 (DW3 of each) are
 // overwritten by render_patch_color() before every draw.
-static const uint32 gen5_wm_kernel_solid[] = {
+extern const uint32 gen5_wm_kernel_solid[];
+const uint32 gen5_wm_kernel_solid[] = {
 	// inst 0: mov(8) m1<1>:UD  r0<8,8,1>:UD  {NoMask}
-	//   Copy thread header for FB_WRITE message.
+	//   Copy thread header (always 8-wide).
 	0x00600201, 0x20200022, 0x008D0000, 0x00000000,
 
-	// inst 1: mov(8) m2<1>:F  <imm>:F  {NoMask}  -- Red
-	//   DW1: dest_file=MRF(2), type=F(7), dest_reg=2, hstride=1,
-	//         src0_file=IMM(3), src0_type=F(7)
-	0x00600201, 0x204003FE, 0x00000000, 0x3F800000,
+	// inst 1: mov(16) m2<1>:F  <imm>:F  {NoMask}  -- Red → m2,m3
+	0x00800201, 0x204003FE, 0x00000000, 0x3F800000,
 
-	// inst 2: mov(8) m3<1>:F  <imm>:F  {NoMask}  -- Green
-	0x00600201, 0x206003FE, 0x00000000, 0x3F800000,
+	// inst 2: mov(16) m4<1>:F  <imm>:F  {NoMask}  -- Green → m4,m5
+	0x00800201, 0x208003FE, 0x00000000, 0x3F800000,
 
-	// inst 3: mov(8) m4<1>:F  <imm>:F  {NoMask}  -- Blue
-	0x00600201, 0x208003FE, 0x00000000, 0x3F800000,
+	// inst 3: mov(16) m6<1>:F  <imm>:F  {NoMask}  -- Blue → m6,m7
+	0x00800201, 0x20C003FE, 0x00000000, 0x3F800000,
 
-	// inst 4: mov(8) m5<1>:F  <imm>:F  {NoMask}  -- Alpha
-	0x00600201, 0x20A003FE, 0x00000000, 0x3F800000,
+	// inst 4: mov(16) m8<1>:F  <imm>:F  {NoMask}  -- Alpha → m8,m9
+	0x00800201, 0x210003FE, 0x00000000, 0x3F800000,
 
-	// inst 5: send(8) null:UW  FB_WRITE  EOT  msg_reg_nr=1
-	//   DW0: SEND, SIMD8, msg_reg_nr=1 (bits[27:24]=1)
-	//         payload starts at MRF m1 (header,R,G,B,A = m1-m5)
-	//   DW2: SFID=DATAPORT_WRITE(5) bits[31:28], EOT=1 bit[26],
-	//         src0=r0 vec8
-	//   DW3: EOT=1 bit[31], msg_length=6 bits[28:25],
-	//         header_present=1 bit[19], msg_type=RT_WRITE(4) bits[14:12],
-	//         last_render_target=1 bit[11],
-	//         msg_control=SIMD8_SS01(2) bits[10:8],
-	//         binding_table_index=0 bits[7:0]
-	0x01600031, 0x20000128, 0x548D0000, 0x8C084A00,
+	// inst 5: send(16) null:UW  FB_WRITE SIMD16  EOT  msg_reg_nr=1
+	//   DW0: SEND opcode, exec_size=SIMD16, msg_reg_nr=1
+	//   DW3: EOT=1, msg_length=9, header_present=1,
+	//         msg_type=RT_WRITE(4), last_rt=1,
+	//         msg_control=0 (SIMD16 single source),
+	//         binding_table_index=0
+	0x01800031, 0x20000128, 0x548D0000, 0x92084800,
 };
 
 #define WM_KERNEL_SIZE sizeof(gen5_wm_kernel_solid)
@@ -158,8 +162,13 @@ static const uint32 gen5_wm_kernel_solid[] = {
 #define STATE_SF_OFFSET			0x180
 #define STATE_SF_KERNEL_OFFSET	0x1C0
 #define STATE_WM_KERNEL_OFFSET	0x240
+// Marker slot in the unused gap between WM kernel end (0x2C0) and
+// vertex buffer start (0x300).  Used by ring-health probe and by
+// render_fill_rect pre/post batch markers.  Must NOT overlap any
+// live state — writing the markers to base+0 corrupts vs[0].
+#define STATE_MARKER_OFFSET		0x2C0
 #define STATE_VERTEX_OFFSET		0x300
-#define STATE_TOTAL_SIZE		0x400
+#define STATE_TOTAL_SIZE		0x800	// includes batch area at 0x400+
 
 // Ironlake SF/WM max threads (from PRM)
 #define ILK_SF_MAX_THREADS		48
@@ -329,10 +338,15 @@ render_init()
 
 	uint32 stateOff = sRenderState.offset;
 
-	// ----- VS state (minimal passthrough) -----
+	// ----- VS state (matching SNA gen5_create_vs_unit_state) -----
 	uint32* vs = (uint32*)(base + STATE_VS_OFFSET);
 	vs[0] = 0;  // no kernel (passthrough)
-	vs[1] = (1 << 10);  // single program flow, 1 URB entry
+	vs[1] = 0;  // no binding table, no single program flow
+	// thread4: nr_urb_entries and urb_entry_allocation_size
+	vs[4] = ((URB_VS_ENTRIES >> 2) << 11)  // nr_urb_entries (SNA divides by 4)
+		| ((URB_VS_ENTRY_SIZE - 1) << 19);  // urb_entry_allocation_size
+	// vs6: vs_enable=0, vert_cache_disable=1 (matching SNA)
+	vs[6] = (1 << 1);  // vert_cache_disable at bit 1
 
 	// ----- SF state (matching SNA gen5_create_sf_state) -----
 	uint32 sfKernelOff = stateOff + STATE_SF_KERNEL_OFFSET;
@@ -373,7 +387,7 @@ render_init()
 	wm[5] = ((ILK_WM_MAX_THREADS - 1) << 25)
 		| (1 << 19)			// thread_dispatch_enable
 		| (1 << 18)			// early_depth_test
-		| WM_8_DISPATCH;	// enable_8_pix
+		| WM_16_DISPATCH;	// enable_16_pix (SNA uses SIMD16, not SIMD8)
 
 	// ----- CC state (no blending, just write) -----
 	uint32* cc = (uint32*)(base + STATE_CC_OFFSET);
@@ -398,6 +412,9 @@ render_init()
 	// are not yet valid.  The surface state is updated lazily in
 	// render_update_surface() before each draw call.
 
+	// Flush all CPU writes to physical memory so GPU can read them via GTT
+	asm volatile("mfence" ::: "memory");
+
 	sRenderState.initialized = true;
 
 	TRACE("Render engine initialized: state at GTT 0x%" B_PRIx32
@@ -406,6 +423,117 @@ render_init()
 		stateOff, stateOff + STATE_SF_KERNEL_OFFSET,
 		stateOff + STATE_WM_KERNEL_OFFSET);
 
+	// --- 3D Pipeline Probe ---
+	// PIPE_CONTROL Write Immediate hangs/fails on ILK without a fully
+	// initialized 3D context — don't use it for diagnostics.
+	// Use MI_STORE_DATA_IMM markers instead (always works via command streamer).
+	if (gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)) {
+		ring_buffer &ring = gInfo->shared_info->primary_ring_buffer;
+		volatile uint32* marker =
+			(volatile uint32*)(base + STATE_MARKER_OFFSET);
+
+		// Quick ring health check — writes to dedicated marker slot,
+		// NOT to base+0 (which is vs[0] and would corrupt VS state).
+		*marker = 0;
+		{
+			QueueCommands queue(ring);
+			queue.MakeSpace(4);
+			queue.Write((0x20 << 23) | (1 << 22) | 2);  // MI_STORE_DATA_IMM|GGTT
+			queue.Write(0);
+			queue.Write(stateOff + STATE_MARKER_OFFSET);
+			queue.Write(0xAAAAAAAA);
+		}
+		snooze(2000);
+		TRACE("Ring health: 0x%08" B_PRIx32 " (%s)\n",
+			*marker, *marker == 0xAAAAAAAA ? "OK" : "BROKEN");
+	}
+
+	return B_OK;
+}
+
+
+// Clone version: allocates state + kernels AND re-initializes the ring.
+// The ring may be hung from a prior media pipeline test.
+status_t
+render_init_clone()
+{
+	memset(&sRenderState, 0, sizeof(sRenderState));
+
+	// Sync with app_server's ring state — do NOT reset the ring.
+	// The CS must remain alive from the kernel driver's initialization.
+	if (gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)) {
+		ring_buffer &ring = gInfo->shared_info->primary_ring_buffer;
+		uint32 hwTail = read32(ring.register_base + RING_BUFFER_TAIL)
+			& (ring.size - 1);
+		ring.position = hwTail;
+		ring.space_left = ring.size - 16;
+		TRACE("render_init_clone: synced to hw TAIL=0x%x\n", hwTail);
+	}
+
+	// Allocate GPU memory for state structures
+	addr_t base;
+	if (intel_allocate_memory(STATE_TOTAL_SIZE, 0, base) != B_OK) {
+		ERROR("render_init_clone: alloc failed\n");
+		return B_NO_MEMORY;
+	}
+
+	sRenderState.base = base;
+	sRenderState.offset = base - (addr_t)gInfo->shared_info->graphics_memory;
+	sRenderState.size = STATE_TOTAL_SIZE;
+
+	memset((void*)base, 0, STATE_TOTAL_SIZE);
+
+	// Copy SF + WM kernel code
+	memcpy((void*)(base + STATE_SF_KERNEL_OFFSET),
+		gen5_sf_kernel, SF_KERNEL_SIZE);
+	memcpy((void*)(base + STATE_WM_KERNEL_OFFSET),
+		gen5_wm_kernel_solid, WM_KERNEL_SIZE);
+
+	uint32 stateOff = sRenderState.offset;
+
+	// VS state (passthrough)
+	uint32* vs = (uint32*)(base + STATE_VS_OFFSET);
+	vs[0] = 0;
+	vs[1] = 0;
+	vs[4] = ((URB_VS_ENTRIES >> 2) << 11)
+		| ((URB_VS_ENTRY_SIZE - 1) << 19);
+	vs[6] = (1 << 1);
+
+	// SF state
+	uint32 sfKernelOff = stateOff + STATE_SF_KERNEL_OFFSET;
+	uint32* sf = (uint32*)(base + STATE_SF_OFFSET);
+	sf[0] = sfKernelOff;
+	sf[3] = (3 << 0) | (1 << 4) | (1 << 11);
+	sf[4] = ((ILK_SF_MAX_THREADS - 1) << 25)
+		| (1 << 19) | (URB_SF_ENTRIES << 11);
+	sf[6] = (1 << 29) | (0x8 << 9) | (0x8 << 13);
+	sf[7] = (2 << 12);
+
+	// WM state
+	uint32 wmKernelOff = stateOff + STATE_WM_KERNEL_OFFSET;
+	uint32* wm = (uint32*)(base + STATE_WM_OFFSET);
+	wm[0] = wmKernelOff | (2 << 1);
+	wm[1] = 0;
+	wm[3] = (3 << 0) | (0 << 4) | (2 << 11);
+	wm[5] = ((ILK_WM_MAX_THREADS - 1) << 25)
+		| (1 << 19) | (1 << 18) | WM_16_DISPATCH;
+
+	// CC state
+	uint32* cc = (uint32*)(base + STATE_CC_OFFSET);
+	uint32 ccVpOff = stateOff + STATE_CC_VP_OFFSET;
+	cc[4] = ccVpOff;
+	float* ccvp = (float*)(base + STATE_CC_VP_OFFSET);
+	ccvp[0] = 0.0f;
+	ccvp[1] = 1.0f;
+
+	// Binding table
+	uint32* bt = (uint32*)(base + STATE_BIND_OFFSET);
+	bt[0] = stateOff + STATE_SURF_DST_OFFSET;
+
+	asm volatile("mfence" ::: "memory");
+	sRenderState.initialized = true;
+
+	TRACE("render_init_clone: state at GTT 0x%x\n", stateOff);
 	return B_OK;
 }
 
@@ -448,6 +576,9 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 	render_update_surface();
 	render_patch_color(color);
 
+	// Flush surface state + patched kernel to physical memory for GPU
+	asm volatile("mfence" ::: "memory");
+
 	// Verify patched kernel color values
 	uint32* kw = (uint32*)(sRenderState.base + STATE_WM_KERNEL_OFFSET);
 	TRACE("Patched kernel: R=0x%08x G=0x%08x B=0x%08x A=0x%08x\n",
@@ -468,9 +599,12 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 	vb[4] = (float)left;
 	vb[5] = (float)top;
 
-	// Memory barrier
-	int32 flush = 0;
-	atomic_add(&flush, 1);
+	// Memory fence: flush CPU write-combining buffers to physical memory.
+	// Without this, GPU reads via GTT may see stale/zero data for all
+	// state structures (VS, SF, WM, CC, binding table, surface state,
+	// vertex buffer, kernel code) written by the CPU.
+	// atomic_add is NOT sufficient for WC memory — need x86 MFENCE.
+	asm volatile("mfence" ::: "memory");
 
 	// Diagnostic: dump all state block contents
 	uint32 stOff = sRenderState.offset;
@@ -496,204 +630,356 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 
 	uint32 stateBase = sRenderState.offset;
 
-	// Emit 3D commands via ring buffer (scoped so destructor submits)
+	// Write all 3D commands into a batch buffer, then submit via
+	// MI_BATCH_BUFFER_START.  i915 Linux NEVER puts 3D commands
+	// directly in the ring buffer — they always go through batch
+	// buffers.  On Gen5, 3D commands in the ring may be parsed by
+	// the command streamer but NOT dispatched to the 3D pipeline.
+
+	// Use the tail end of the state block as a mini batch buffer.
+	// STATE_VERTEX_OFFSET+256 gives us room after the vertex data.
+	#define BATCH_AREA_OFFSET  0x400  // after all state/vertex data
+	uint32* batch = (uint32*)(sRenderState.base + BATCH_AREA_OFFSET);
+	uint32 batchGTT = stateBase + BATCH_AREA_OFFSET;
+	uint32 markerGTT = stateBase + STATE_MARKER_OFFSET;
+	int bp = 0;  // batch position (in DWORDs)
+
+	#define EMIT(val) do { batch[bp++] = (val); } while(0)
+
+	// STAGE marker: emits an MI_STORE_DATA_IMM that writes `tag` to the
+	// marker slot.  After the batch runs, the marker slot holds the tag
+	// of the LAST stage the CS successfully executed.  Any stage at
+	// which the CS hangs leaves its predecessor's tag in the slot — so
+	// we can pinpoint the exact command that hung.  4 DW per stage.
+	#define STAGE(tag) do { \
+		EMIT((0x20 << 23) | (1 << 22) | 2); \
+		EMIT(0); \
+		EMIT(markerGTT); \
+		EMIT(0x3D3D00 | (tag)); \
+	} while(0)
+
+	STAGE(0x10);  // entered batch, before any 3D command
+
+	// MI_FLUSH at the start of the batch: drain BLT state from CS
+	// before transitioning to 3D via PIPELINE_SELECT.  Required on
+	// Gen5 when the previous ring activity was BLT.
+	EMIT(MI_FLUSH_CMD);
+	STAGE(0x20);  // MI_FLUSH done
+
+	// PIPELINE_SELECT = 3D
+	EMIT(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
+	STAGE(0x30);  // PIPELINE_SELECT done
+
+	// STATE_BASE_ADDRESS
+	EMIT(CMD_STATE_BASE_ADDRESS);
+	EMIT(0 | 1);  // general state base = 0
+	EMIT(0 | 1);  // surface state base = 0
+	EMIT(0 | 1);  // indirect object base = 0
+	EMIT(0 | 1);  // instruction base = 0
+	EMIT(0);       // general state upper (don't modify)
+	EMIT(0);       // indirect obj upper (don't modify)
+	EMIT(0);       // instruction upper (don't modify)
+	STAGE(0x40);  // STATE_BASE_ADDRESS done
+
+	// URB_FENCE
+	{
+		uint32 vsFence = URB_VS_ENTRIES * URB_VS_ENTRY_SIZE;
+		uint32 sfFence = vsFence + URB_SF_ENTRIES * URB_SF_ENTRY_SIZE;
+		EMIT(CMD_URB_FENCE | UF0_VS_REALLOC | UF0_GS_REALLOC
+			| UF0_CLIP_REALLOC | UF0_SF_REALLOC
+			| UF0_VFE_REALLOC | UF0_CS_REALLOC | 1);
+		EMIT((vsFence << 20) | (vsFence << 10) | vsFence);
+		EMIT((sfFence << 20) | (sfFence << 10) | sfFence);
+	}
+	STAGE(0x50);  // URB_FENCE done
+
+	// CS_URB_STATE
+	EMIT(CMD_CS_URB_STATE);
+	EMIT(((URB_CS_ENTRY_SIZE - 1) << 4) | URB_CS_ENTRIES);
+	STAGE(0x60);  // CS_URB_STATE done
+
+	// PIPELINED_POINTERS
+	EMIT(CMD_PIPELINED_POINTERS);
+	EMIT(stateBase + STATE_VS_OFFSET);
+	EMIT(0);  // GS disabled
+	EMIT(0);  // CLIP disabled
+	EMIT(stateBase + STATE_SF_OFFSET);
+	EMIT(stateBase + STATE_WM_OFFSET);
+	EMIT(stateBase + STATE_CC_OFFSET);
+	STAGE(0x70);  // PIPELINED_POINTERS done
+
+	// DRAWING_RECTANGLE
+	{
+		intel_shared_info &info = *gInfo->shared_info;
+		EMIT(CMD_DRAWING_RECTANGLE);
+		EMIT(0);
+		EMIT(((info.current_mode.timing.v_display - 1) << 16)
+			| (info.current_mode.timing.h_display - 1));
+		EMIT(0);
+	}
+	STAGE(0x80);  // DRAWING_RECTANGLE done
+
+	// BINDING_TABLE_POINTERS
+	EMIT(CMD_BINDING_TABLE_PTRS | 4);
+	EMIT(0); EMIT(0); EMIT(0); EMIT(0);
+	EMIT(stateBase + STATE_BIND_OFFSET);
+	STAGE(0x90);  // BINDING_TABLE_POINTERS done
+
+	// VERTEX_BUFFERS
+	EMIT(CMD_VERTEX_BUFFERS | 3);
+	EMIT((0 << 26) | (8 << 0));
+	EMIT(stateBase + STATE_VERTEX_OFFSET);
+	EMIT(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);
+	EMIT(0);
+	STAGE(0xA0);  // VERTEX_BUFFERS done
+
+	// VERTEX_ELEMENTS
+	EMIT(CMD_VERTEX_ELEMENTS | 1);
+	EMIT((0 << 27) | (1 << 26) | (FORMAT_R32G32_FLOAT << 16) | 0);
+	EMIT((VFCOMP_STORE_SRC << 28) | (VFCOMP_STORE_SRC << 24)
+		| (VFCOMP_STORE_0 << 20) | (VFCOMP_STORE_1_FP << 16));
+	STAGE(0xB0);  // VERTEX_ELEMENTS done
+
+	// 3DPRIMITIVE (RECTLIST, 3 vertices)
+	EMIT(CMD_3DPRIMITIVE | (PRIM_RECTLIST << 10) | (6 - 2));
+	EMIT(3);   // vertex count
+	EMIT(0);   // start vertex
+	EMIT(1);   // instance count
+	EMIT(0);   // start instance
+	EMIT(0);   // base vertex
+	STAGE(0xC0);  // 3DPRIMITIVE issued (draw may still be in flight)
+
+	// MI_FLUSH — serializes 3D and forces render cache flush so the
+	// framebuffer write from the WM FB_WRITE is visible to the CPU.
+	EMIT(MI_FLUSH_CMD);
+	STAGE(0xD0);  // MI_FLUSH post-draw done
+
+	// MI_BATCH_BUFFER_END (must be QWord aligned)
+	EMIT(MI_BATCH_BUFFER_END);
+	if (bp & 1)
+		EMIT(MI_NOOP);
+
+	// Flush batch buffer writes to physical memory
+	asm volatile("mfence" ::: "memory");
+
+	TRACE("Batch: %d DWORDs at GTT 0x%x\n", bp, batchGTT);
+
+	// Clear marker slot before submitting so post-batch readback is meaningful
+	*(volatile uint32*)(sRenderState.base + STATE_MARKER_OFFSET) = 0;
+
+	// Submit batch via ring buffer
 	{
 		QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 
-		// 1. MI_FLUSH to serialize before switching to 3D
+		// MI marker BEFORE batch (proves ring submission)
+		queue.MakeSpace(4);
+		queue.Write((0x20 << 23) | (1 << 22) | 2);
+		queue.Write(0);
+		queue.Write(markerGTT);
+		queue.Write(0x3D3D0001);
+
+		// MI_BATCH_BUFFER_START
 		queue.MakeSpace(2);
-		queue.Write(MI_FLUSH_CMD | MI_FLUSH_STATE_INST_CACHE);
-		queue.Write(MI_NOOP);
+		queue.Write(MI_BATCH_BUFFER_START);
+		queue.Write(batchGTT);
 
-		// 2. Apply Gen5 workarounds via MI_LOAD_REGISTER_IMM
-		//    (ring-based writes may be required for 3D context)
-		//    MI_LRI: opcode=0x22, length=1 per register pair
-		#define MI_LOAD_REGISTER_IMM	((0x22 << 23) | 1)
-
-		// MI_MODE: enable VS_TIMER_DISPATCH (bit 6, masked)
+		// MI marker AFTER batch return (proves batch completed)
 		queue.MakeSpace(4);
-		queue.Write(MI_LOAD_REGISTER_IMM);
-		queue.Write(0x209c);
-		queue.Write((1 << 22) | (1 << 6));
-		queue.Write(MI_NOOP);
-
-		// _3D_CHICKEN2: enable WM_READ_PIPELINED (bit 14, masked)
-		queue.MakeSpace(4);
-		queue.Write(MI_LOAD_REGISTER_IMM);
-		queue.Write(0x208c);
-		queue.Write((1 << 30) | (1 << 14));
-		queue.Write(MI_NOOP);
-
-		// CACHE_MODE_0: disable RC_OP_FLUSH (bit 0), enable
-		// CM0_PIPELINED_RENDER_FLUSH_DISABLE (bit 8)
-		queue.MakeSpace(4);
-		queue.Write(MI_LOAD_REGISTER_IMM);
-		queue.Write(0x2120);
-		queue.Write((1 << 24) | (1 << 16) | (1 << 8));
-		queue.Write(MI_NOOP);
-
-		// 3. PIPELINE_SELECT = 3D
-		queue.MakeSpace(2);
-		queue.Write(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
-		queue.Write(MI_NOOP);
-
-		// 3. STATE_BASE_ADDRESS - all bases = 0 so all pointers are
-		//    absolute GTT offsets (same approach as SNA/xf86-video-intel)
-		//    Gen5: 8 DWORDs (length=6), all Modify Enable bits set
-		queue.MakeSpace(8);
-		queue.Write(CMD_STATE_BASE_ADDRESS);
-		queue.Write(0 | 1);		// general state base = 0 (modify)
-		queue.Write(0 | 1);		// surface state base = 0 (modify)
-		queue.Write(0 | 1);		// indirect object base = 0 (modify)
-		queue.Write(0 | 1);		// instruction base = 0 (modify)
-		queue.Write(0 | 1);		// general state upper = 0 = no limit (modify)
-		queue.Write(0 | 1);		// indirect obj upper = 0 = no limit (modify)
-		queue.Write(0 | 1);		// instruction upper = 0 = no limit (modify)
-
-		// 4. URB_FENCE - partition URB between pipeline stages
-		//    ILK has 1024 rows; VS=256×1=256 rows, SF=64×2=128 rows
-		//    DW0: opcode | realloc_flags | length(1)
-		//    DW1: clip_fence[29:20] | gs_fence[19:10] | vs_fence[9:0]
-		//    DW2: cs_fence[30:20] | vfe_fence[19:10] | sf_fence[9:0]
-		{
-			uint32 vsFence = URB_VS_ENTRIES * URB_VS_ENTRY_SIZE;	// 256
-			uint32 sfFence = vsFence + URB_SF_ENTRIES * URB_SF_ENTRY_SIZE; // 384
-
-			queue.MakeSpace(6);
-			queue.Write(CMD_URB_FENCE
-				| UF0_VS_REALLOC | UF0_GS_REALLOC
-				| UF0_CLIP_REALLOC | UF0_SF_REALLOC
-				| UF0_VFE_REALLOC | UF0_CS_REALLOC
-				| 1);								// length = 1 (3 DWords)
-			queue.Write((vsFence << 20)				// CLIP fence
-				| (vsFence << 10)					// GS fence
-				| (vsFence << 0));					// VS fence
-			queue.Write((sfFence << 20)				// CS fence
-				| (sfFence << 10)					// VFE fence
-				| (sfFence << 0));					// SF fence
-
-			// CS_URB_STATE (2 DWords)
-			queue.Write(CMD_CS_URB_STATE);
-			queue.Write(((URB_CS_ENTRY_SIZE - 1) << 4)
-				| (URB_CS_ENTRIES << 0));
-			queue.Write(MI_NOOP);
-		}
-
-		// 5. 3DSTATE_PIPELINED_POINTERS (7 DWORDs)
-		queue.MakeSpace(8);
-		queue.Write(CMD_PIPELINED_POINTERS);
-		queue.Write(stateBase + STATE_VS_OFFSET);	// VS state
-		queue.Write(0);								// GS disabled
-		queue.Write(0);								// CLIP disabled
-		queue.Write(stateBase + STATE_SF_OFFSET);	// SF state
-		queue.Write(stateBase + STATE_WM_OFFSET);	// WM state
-		queue.Write(stateBase + STATE_CC_OFFSET);	// CC state
-		queue.Write(MI_NOOP);
-
-		// 6. 3DSTATE_DRAWING_RECTANGLE - set clip rect to framebuffer
-		{
-			intel_shared_info &info = *gInfo->shared_info;
-			queue.MakeSpace(4);
-			queue.Write(CMD_DRAWING_RECTANGLE);
-			queue.Write(0);		// top-left: (0, 0)
-			queue.Write(((info.current_mode.timing.v_display - 1) << 16)
-				| (info.current_mode.timing.h_display - 1));
-			queue.Write(0);		// origin: (0, 0)
-		}
-
-		// 7. 3DSTATE_BINDING_TABLE_POINTERS (6 DWORDs)
-		queue.MakeSpace(6);
-		queue.Write(CMD_BINDING_TABLE_PTRS | 4);	// length = 4
-		queue.Write(0);								// VS binding table
-		queue.Write(0);								// GS binding table
-		queue.Write(0);								// CLIP binding table
-		queue.Write(0);								// SF binding table
-		queue.Write(stateBase + STATE_BIND_OFFSET);	// WM binding table
-
-		// 8. 3DSTATE_VERTEX_BUFFERS (one buffer, 2 floats per vertex)
-		//    Gen5: 4 DWORDs per VB entry, length = 4*1 - 1 = 3
-		queue.MakeSpace(6);
-		queue.Write(CMD_VERTEX_BUFFERS | 3);
-		queue.Write((0 << 26) | (8 << 0));					// VB0: pitch=8
-		queue.Write(stateBase + STATE_VERTEX_OFFSET);		// start address
-		queue.Write(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);	// end addr
-		queue.Write(0);										// instance step rate
-
-		// 9. 3DSTATE_VERTEX_ELEMENTS (1 element: X,Y position)
-		//    Gen5: 2 DWORDs per element, length = 2*1 - 1 = 1
-		//    DW0: VB_index[31:27], Valid[26], Format[25:16], Offset[11:0]
-		queue.MakeSpace(4);
-		queue.Write(CMD_VERTEX_ELEMENTS | 1);
-		queue.Write((0 << 27)					// VB index = 0
-			| (1 << 26)						// Valid = 1
-			| (FORMAT_R32G32_FLOAT << 16)		// source format
-			| (0 << 0));						// source offset = 0
-		queue.Write((VFCOMP_STORE_SRC << 28)	// comp0 = X
-			| (VFCOMP_STORE_SRC << 24)			// comp1 = Y
-			| (VFCOMP_STORE_0 << 20)			// comp2 = 0.0
-			| (VFCOMP_STORE_1_FP << 16));		// comp3 = 1.0
-
-		// 10. 3DPRIMITIVE (draw RECTLIST, 3 vertices)
-		queue.MakeSpace(6);
-		queue.Write(CMD_3DPRIMITIVE | (PRIM_RECTLIST << 10) | (6 - 2));
-		queue.Write(3);		// vertex count
-		queue.Write(0);		// start vertex
-		queue.Write(1);		// instance count
-		queue.Write(0);		// start instance
-		queue.Write(0);		// base vertex location
-
-		// PIPE_CONTROL: write marker to verify 3D pipeline is active
-		// Gen5 needs WC_FLUSH (bit 12) for Post-Sync data to reach memory
-		queue.MakeSpace(4);
-		queue.Write(CMD_PIPE_CONTROL);
-		queue.Write((1 << 20) | (1 << 14) | (1 << 12));	// CS_STALL + Write Immediate + WC_FLUSH
-		queue.Write((stateBase & ~0x7) | (1 << 2));	// QWord aligned + GGTT
-		queue.Write(0xDEADBEEF);			// marker value
-
-		// MI_FLUSH to complete 3D and allow BLT again
-		queue.MakeSpace(2);
-		queue.Write(MI_FLUSH_CMD);
-		queue.Write(MI_NOOP);
-
-		// MI_STORE_DATA_IMM: write a white pixel directly to framebuffer
-		// This bypasses the entire 3D/BLT pipeline - pure command streamer
-		{
-			intel_shared_info &info = *gInfo->shared_info;
-			uint32 fbOff = info.frame_buffer_offset;
-			uint32 bpr = info.bytes_per_row;
-			// Write 20x20 white block at (380,50) as ring-write test
-			for (int y = 50; y < 70; y++) {
-				for (int x = 380; x < 400; x++) {
-					uint32 addr = fbOff + y * bpr + x * 4;
-					queue.MakeSpace(4);
-					queue.Write((0x20 << 23) | (1 << 22) | 2);  // MI_STORE_DATA_IMM|GGTT
-					queue.Write(0);            // reserved
-					queue.Write(addr);         // GTT address
-					queue.Write(0xFFFFFFFF);   // white
-				}
-			}
-		}
+		queue.Write((0x20 << 23) | (1 << 22) | 2);
+		queue.Write(0);
+		queue.Write(markerGTT);
+		queue.Write(0x3D3D0002);
 	}
 	// QueueCommands destructor has now written TAIL → commands submitted
 
-	// Check if PIPE_CONTROL marker was written (proves 3D pipeline is active)
+	// Check MI_STORE_DATA_IMM markers (reliable, unlike PIPE_CONTROL on ILK)
 	snooze(10000);
-	uint32 marker = *(uint32*)(sRenderState.base);
+	uint32 marker = *(volatile uint32*)(sRenderState.base + STATE_MARKER_OFFSET);
 	TRACE("render_fill_rect: %d,%d - %d,%d color 0x%08" B_PRIx32 "\n",
 		left, top, right, bottom, color);
-	TRACE("PIPE_CONTROL marker: 0x%08" B_PRIx32
-		" (%s)\n", marker,
-		marker == 0xDEADBEEF ? "3D ACTIVE" : "3D NOT ACTIVE");
+	TRACE("MI marker: 0x%08" B_PRIx32 " (%s)\n", marker,
+		marker == 0x3D3D0002 ? "POST-DRAW OK" :
+		marker == 0x3D3D0001 ? "PRE-DRAW ONLY (3DPRIMITIVE hung?)" :
+		"NO MARKERS (ring stuck?)");
 
-	// Wait for GPU to process, then dump error registers
-	snooze(10000);
-	uint32 instdone = read32(0x206C);
-	uint32 ipeir = read32(0x2064);
-	uint32 ipehr = read32(0x2068);
-	uint32 eir = read32(0x20B0);
-	TRACE("GPU diag: INSTDONE=0x%08" B_PRIx32 " IPEIR=0x%08" B_PRIx32
-		" IPEHR=0x%08" B_PRIx32 " EIR=0x%08" B_PRIx32 "\n",
-		instdone, ipeir, ipehr, eir);
+	// Dump GPU error state
+	TRACE("GPU: INSTDONE=0x%08" B_PRIx32 " IPEHR=0x%08" B_PRIx32
+		" EIR=0x%08" B_PRIx32 " HEAD=0x%08" B_PRIx32 "\n",
+		read32(0x206C), read32(0x2068), read32(0x20B0),
+		read32(gInfo->shared_info->primary_ring_buffer.register_base
+			+ RING_BUFFER_HEAD));
+
+	return B_OK;
+}
+
+
+status_t
+render_draw_triangle(uint32 color,
+	float x0, float y0, float x1, float y1, float x2, float y2)
+{
+	if (!sRenderState.initialized)
+		return B_NOT_INITIALIZED;
+
+	render_update_surface();
+	render_patch_color(color);
+
+	// Write vertex data: 3 vertices, (X, Y) floats each
+	float* vb = (float*)(sRenderState.base + STATE_VERTEX_OFFSET);
+	vb[0] = x0;  vb[1] = y0;
+	vb[2] = x1;  vb[3] = y1;
+	vb[4] = x2;  vb[5] = y2;
+
+	asm volatile("mfence" ::: "memory");
+
+	uint32 stateBase = sRenderState.offset;
+	uint32 markerGTT = stateBase + STATE_MARKER_OFFSET;
+
+	uint32* batch = (uint32*)(sRenderState.base + BATCH_AREA_OFFSET);
+	uint32 batchGTT = stateBase + BATCH_AREA_OFFSET;
+	int bp = 0;
+
+	// Use STAGE markers (write to markerGTT) to track progress.
+	#define EMIT_T(val) do { batch[bp++] = (val); } while(0)
+	#define STAGE_T(tag) do { \
+		EMIT_T((0x20 << 23) | (1 << 22) | 2); \
+		EMIT_T(0); EMIT_T(markerGTT); EMIT_T(0xAA000000 | (tag)); \
+	} while(0)
+
+	// Clear marker
+	*(volatile uint32*)(sRenderState.base + STATE_MARKER_OFFSET) = 0;
+
+	STAGE_T(0x01);  // entered ring
+
+	EMIT_T(MI_FLUSH_CMD);
+	STAGE_T(0x02);  // MI_FLUSH done
+
+	EMIT_T(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
+	STAGE_T(0x03);  // PIPELINE_SELECT done
+
+	EMIT_T(CMD_STATE_BASE_ADDRESS);
+	EMIT_T(0 | 1); EMIT_T(0 | 1); EMIT_T(0 | 1); EMIT_T(0 | 1);
+	EMIT_T(0); EMIT_T(0); EMIT_T(0);
+	STAGE_T(0x04);  // STATE_BASE_ADDRESS done
+
+	{
+		uint32 vsFence = URB_VS_ENTRIES * URB_VS_ENTRY_SIZE;
+		uint32 sfFence = vsFence + URB_SF_ENTRIES * URB_SF_ENTRY_SIZE;
+		EMIT_T(CMD_URB_FENCE | UF0_VS_REALLOC | UF0_GS_REALLOC
+			| UF0_CLIP_REALLOC | UF0_SF_REALLOC
+			| UF0_VFE_REALLOC | UF0_CS_REALLOC | 1);
+		EMIT_T((vsFence << 20) | (vsFence << 10) | vsFence);
+		EMIT_T((sfFence << 20) | (sfFence << 10) | sfFence);
+	}
+	STAGE_T(0x05);  // URB_FENCE done
+
+	EMIT_T(CMD_CS_URB_STATE);
+	EMIT_T(((URB_CS_ENTRY_SIZE - 1) << 4) | URB_CS_ENTRIES);
+	STAGE_T(0x06);  // CS_URB_STATE done
+
+	EMIT_T(CMD_PIPELINED_POINTERS);
+	EMIT_T(stateBase + STATE_VS_OFFSET);
+	EMIT_T(0);
+	EMIT_T(0);
+	EMIT_T(stateBase + STATE_SF_OFFSET);
+	EMIT_T(stateBase + STATE_WM_OFFSET);
+	EMIT_T(stateBase + STATE_CC_OFFSET);
+	STAGE_T(0x07);  // PIPELINED_POINTERS done
+
+	{
+		intel_shared_info &info = *gInfo->shared_info;
+		EMIT_T(CMD_DRAWING_RECTANGLE);
+		EMIT_T(0);
+		EMIT_T(((info.current_mode.timing.v_display - 1) << 16)
+			| (info.current_mode.timing.h_display - 1));
+		EMIT_T(0);
+	}
+	STAGE_T(0x08);  // DRAWING_RECTANGLE done
+
+	EMIT_T(CMD_BINDING_TABLE_PTRS | 4);
+	EMIT_T(0); EMIT_T(0); EMIT_T(0); EMIT_T(0);
+	EMIT_T(stateBase + STATE_BIND_OFFSET);
+	STAGE_T(0x09);  // BINDING_TABLE done
+
+	EMIT_T(CMD_VERTEX_BUFFERS | 3);
+	EMIT_T((0 << 26) | (8 << 0));
+	EMIT_T(stateBase + STATE_VERTEX_OFFSET);
+	EMIT_T(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);
+	EMIT_T(0);
+	STAGE_T(0x0A);  // VERTEX_BUFFERS done
+
+	EMIT_T(CMD_VERTEX_ELEMENTS | 1);
+	EMIT_T((0 << 27) | (1 << 26) | (FORMAT_R32G32_FLOAT << 16) | 0);
+	EMIT_T((VFCOMP_STORE_SRC << 28) | (VFCOMP_STORE_SRC << 24)
+		| (VFCOMP_STORE_0 << 20) | (VFCOMP_STORE_1_FP << 16));
+	STAGE_T(0x0B);  // VERTEX_ELEMENTS done
+
+	STAGE_T(0x0C);  // before 3DPRIMITIVE
+
+	// 3DPRIMITIVE — TRILIST!
+	EMIT_T(CMD_3DPRIMITIVE | (PRIM_TRILIST << 10) | (6 - 2));
+	EMIT_T(3);
+	EMIT_T(0);
+	EMIT_T(1);
+	EMIT_T(0);
+	EMIT_T(0);
+
+	STAGE_T(0x0D);  // after 3DPRIMITIVE
+
+	EMIT_T(MI_FLUSH_CMD);
+	STAGE_T(0x0E);  // after MI_FLUSH
+
+	if (bp & 1)
+		EMIT_T(MI_NOOP);
+
+	asm volatile("mfence" ::: "memory");
+
+	TRACE("render_draw_triangle: %d DWORDs to ring\n", bp);
+
+	{
+		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
+		QueueCommands queue(ring);
+		queue.MakeSpace(bp);
+		for (int i = 0; i < bp; i++)
+			queue.Write(batch[i]);
+	}
+
+	snooze(50000);
+	uint32 marker = *(volatile uint32*)(sRenderState.base
+		+ STATE_MARKER_OFFSET);
+
+	// Decode which stage we reached
+	uint32 stage = marker & 0xFF;
+	const char* stageName = "???";
+	switch (stage) {
+		case 0x00: stageName = "NOTHING (ring broken?)"; break;
+		case 0x01: stageName = "entered ring"; break;
+		case 0x02: stageName = "MI_FLUSH"; break;
+		case 0x03: stageName = "PIPELINE_SELECT"; break;
+		case 0x04: stageName = "STATE_BASE_ADDRESS"; break;
+		case 0x05: stageName = "URB_FENCE"; break;
+		case 0x06: stageName = "CS_URB_STATE"; break;
+		case 0x07: stageName = "PIPELINED_POINTERS"; break;
+		case 0x08: stageName = "DRAWING_RECTANGLE"; break;
+		case 0x09: stageName = "BINDING_TABLE"; break;
+		case 0x0A: stageName = "VERTEX_BUFFERS"; break;
+		case 0x0B: stageName = "VERTEX_ELEMENTS"; break;
+		case 0x0C: stageName = "before 3DPRIMITIVE"; break;
+		case 0x0D: stageName = "after 3DPRIMITIVE"; break;
+		case 0x0E: stageName = "after MI_FLUSH (DONE!)"; break;
+	}
+
+	TRACE("render_draw_triangle: marker=0x%08x → stage 0x%02x = %s\n",
+		marker, stage, stageName);
+	printf("  marker=0x%08x → stage 0x%02x = %s\n",
+		marker, stage, stageName);
+
+	if (stage >= 0x0E) {
+		printf("  >>> TRIANGLE RENDERED! <<<\n");
+	} else {
+		printf("  HUNG at: %s\n", stageName);
+		printf("  INSTDONE=0x%08x IPEHR=0x%08x\n",
+			read32(0x206C), read32(0x2068));
+	}
 
 	return B_OK;
 }

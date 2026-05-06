@@ -509,102 +509,47 @@ intel_set_display_mode(display_mode* mode)
 	set_frame_buffer_base();
 		// triggers writing back double-buffered registers
 
-	// Render engine test: draw colored rectangles after mode set.
-	// Three tests: CPU fill (baseline), BLT fill, render 3D fill.
+	// Quick 3D render test — CPU pixel readback only, no file I/O.
+	// Safe: uses only syslog for output, no risky pointer math.
 	if (sharedInfo.device_type.InGroup(INTEL_GROUP_ILK)
 		&& access("/boot/home/Desktop/render_test", F_OK) == 0) {
+		snooze(50000);
 
-		// Write all diagnostics to a persistent file (syslog rotates)
-		FILE* diagFile = fopen("/boot/home/Desktop/render_diag.txt", "w");
-		if (diagFile) {
-			fprintf(diagFile, "=== Render Engine Diagnostics ===\n");
-			fprintf(diagFile, "MI_MODE=0x%08x _3D_CHICKEN2=0x%08x\n",
-				read32(0x209c), read32(0x208c));
-			fprintf(diagFile, "CACHE_MODE_0=0x%08x INSTPM=0x%08x\n",
-				read32(0x2120), read32(0x20c0));
-			fprintf(diagFile, "RING_CTL=0x%08x HWS_PGA=0x%08x\n",
-				read32(0x203c), read32(0x2080));
-			fprintf(diagFile, "IPEIR=0x%08x IPEHR=0x%08x EIR=0x%08x\n",
-				read32(0x2064), read32(0x2068), read32(0x20b0));
-			fflush(diagFile);
-		}
-
-		// Wait a moment for display to stabilize
-		snooze(100000);
-
-		// Test 1: CPU fill (green) - proves framebuffer is writable
 		uint32* fb = (uint32*)sharedInfo.frame_buffer;
 		uint32 stride = sharedInfo.bytes_per_row / 4;
+
+		// CPU fill green (baseline)
 		for (int y = 50; y < 150; y++)
 			for (int x = 50; x < 150; x++)
-				fb[y * stride + x] = 0xFF00FF00;  // green
-		_sPrintf("intel_extreme: render test: CPU fill done (green 50,50-150,150)\n");
+				fb[y * stride + x] = 0xFF00FF00;
 
-		// Test 2: BLT fill (blue) - proves BLT engine works
+		// BLT fill blue
 		{
 			QueueCommands queue(sharedInfo.primary_ring_buffer);
 			xy_color_blit_command blit(false);
-			blit.color = 0xFF0000FF;  // blue
-			blit.dest_left = 160;
-			blit.dest_top = 50;
-			blit.dest_right = 260;
-			blit.dest_bottom = 150;
+			blit.color = 0xFF0000FF;
+			blit.dest_left = 160; blit.dest_top = 50;
+			blit.dest_right = 260; blit.dest_bottom = 150;
 			queue.Put(blit, sizeof(blit));
 		}
-		_sPrintf("intel_extreme: render test: BLT fill done (blue 160,50-260,150)\n");
+		snooze(20000);
 
-		snooze(50000);
-
-		// Test 3: 3D render fill (red 270,50 - 370,150)
-		// Clear target to black, do 3D fill, read back pixels
+		// Clear 3D target area to black
 		for (int y = 50; y < 150; y++)
 			for (int x = 270; x < 370; x++)
 				fb[y * stride + x] = 0xFF000000;
 
-		status_t err = render_fill_rect(0xFFFF0000,
-			270, 50, 370, 150);
+		// 3D render fill red
+		render_fill_rect(0xFFFF0000, 270, 50, 370, 150);
+		snooze(50000);
 
-		snooze(100000);
-
-		// Read back pixels to check if 3D wrote anything
-		uint32 px_center = *(volatile uint32*)&fb[100 * stride + 320];
-		uint32 px_corner = *(volatile uint32*)&fb[51 * stride + 271];
-		uint32 px_outside = *(volatile uint32*)&fb[45 * stride + 320];
-
-		// Check MI_STORE_DATA_IMM test area (382,52) - should be white
-		uint32 px_mi = *(volatile uint32*)&fb[52 * stride + 382];
-
-		if (diagFile) {
-			fprintf(diagFile, "3D fill err=0x%08x\n", (uint32)err);
-			fprintf(diagFile, "Pixel readback:\n");
-			fprintf(diagFile, "  center(320,100): 0x%08x %s\n",
-				px_center,
-				px_center == 0xFFFF0000 ? "RED-3D WORKS!" :
-				px_center == 0xFF000000 ? "BLACK-no draw" : "OTHER");
-			fprintf(diagFile, "  corner(271,51):  0x%08x\n", px_corner);
-			fprintf(diagFile, "  outside(320,45): 0x%08x\n", px_outside);
-			fprintf(diagFile, "  MI_SDI(382,52):  0x%08x %s\n",
-				px_mi,
-				px_mi == 0xFFFFFFFF ? "WHITE-MI_STORE works!" :
-				px_mi == 0xFF000000 ? "BLACK-MI_STORE failed" :
-				px_mi == 0x00000000 ? "ZERO-not initialized" : "OTHER");
-			fprintf(diagFile, "IPEHR=0x%08x IPEIR=0x%08x EIR=0x%08x\n",
-				read32(0x2068), read32(0x2064), read32(0x20b0));
-			fprintf(diagFile, "INSTDONE=0x%08x\n", read32(0x206c));
-
-			// Read PIPE_CONTROL marker from state block
-			volatile uint32* stateBlock =
-				(volatile uint32*)gInfo->shared_info->graphics_memory;
-			// stateOff is typically 0x20000, marker written at stateBase
-			// Read first few DWords of state block for marker check
-			fprintf(diagFile, "State[0]=0x%08x (PIPE_CONTROL marker if 0xDEADBEEF)\n",
-				*(volatile uint32*)(sharedInfo.frame_buffer - sharedInfo.bytes_per_row * sharedInfo.current_mode.timing.v_display + 0x20000));
-			fclose(diagFile);
-		}
-
-		_sPrintf("intel_extreme: render test: err=0x%" B_PRIx32
-			" px3D=0x%08" B_PRIx32 " pxMI=0x%08" B_PRIx32 "\n",
-			(uint32)err, px_center, px_mi);
+		// Pixel readback via syslog only
+		uint32 px = *(volatile uint32*)&fb[100 * stride + 320];
+		_sPrintf("intel_extreme: 3D test: px(320,100)=0x%08" B_PRIx32
+			" %s\n", px,
+			px == 0xFFFF0000 ? "RED-3D WORKS!" :
+			px == 0xFF000000 ? "BLACK-no draw" :
+			px == 0x00000000 ? "ZERO" : "OTHER");
 	}
 
 	// Second register dump

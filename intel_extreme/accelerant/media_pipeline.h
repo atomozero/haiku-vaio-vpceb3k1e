@@ -217,5 +217,91 @@ status_t media_pipeline_run_sampler_test(void);
 // if all sub-tests pass.
 status_t media_pipeline_run_sampler_2b_test(void);
 
+// Phase 2.2c: prove the CURBE mechanism end-to-end. Fills curbe_bo
+// with an 8-DWORD known pattern, sets the interface descriptor's
+// const_urb_entry_read_len to 1 (push one GRF from CS URB into the
+// thread payload at R1), dispatches curbe_read.g4a which copies
+// g1 to the output, and verifies CPU-side that the first 8 DWORDs
+// of output match the pattern. Returns B_OK on match.
+status_t media_pipeline_run_curbe_test(void);
+
+// Phase 2.3a: libva ABI discovery probe. Pushes 30 GRFs of recognizable
+// pattern as CURBE (matching libva MPEG-2's const_urb_entry_read_len=30
+// configuration), dispatches a single thread that dumps g1, g15, g30,
+// and g31 to the output BO, and verifies that the 30-GRF push landed
+// correctly AND that MEDIA_OBJECT inline data lands at g31 (immediately
+// after the CURBE region). Returns B_OK on full 32/32 DWORD match.
+status_t media_pipeline_run_libva_probe_test(void);
+
+// Phase 2.3b: first MPEG-2-style integer arithmetic kernel. Runs an IQ
+// intra pass on one 8x8 block of S16 DCT coefficients:
+//   out[i] = (coeff[i] * quant_matrix[i] * quant_scale) >> 4
+//   out[0] = coeff[0] * intra_dc_mult     (DC override)
+// Uses CURBE to deliver the 64-byte quant matrix + scalars (read_len=3),
+// OWord Block Read for input, OWord Block Write for output, 2-entry
+// binding table. Inputs are chosen so no saturation is needed; output
+// is verified bit-exact against an in-process CPU reference computing
+// the same algorithm.
+status_t media_pipeline_run_iq_intra_test(void);
+
+// Phase 3.1: standalone 2-pass IDCT on a single 8x8 block. Loads the
+// MPEG-2 cosine table into CURBE (g5-g20), reads 64 S16 DCT coefficients
+// from BTI 0, applies the row transform (dp4 × 8 cosine rows, round,
+// shift, narrow) then the column transform (same algorithm on the
+// transposed intermediate), and writes 64 S16 results to BTI 1.
+// Runs two sub-tests: DC-only (flat output) and mixed-AC (varied output).
+// Both are verified bit-exact against a CPU reference implementing the
+// same algorithm. Returns B_OK if both pass.
+status_t media_pipeline_run_idct_test(void);
+
+// Phase 3.2: combined IQ + IDCT for one intra 8x8 block. Chains inverse
+// quantization and 2-pass IDCT in a single GPU dispatch, then adds the
+// DC offset (+128) and clamps to [0,255] via mov.sat, producing 64 U8
+// pixel values. CURBE carries the IQ matrix, scalars, and IDCT cosine
+// table (same layout as the separate tests). Verified bit-exact against
+// a CPU reference that chains compute_iq_intra_reference + compute_idct_
+// reference + offset + clamp.
+status_t media_pipeline_run_iq_idct_test(void);
+
+// Phase 3.4: parse embedded MPEG-2 I-frame, dispatch all Y blocks to
+// GPU via IQ+IDCT kernel, and verify output pixels against CPU decode.
+status_t media_pipeline_run_parse_gpu_test(void);
+
+// Phase 3.6: verify the IDCT-only kernel (idct_to_u8.g4a) against the
+// CPU reference. Uses synthetic IQ'd coefficients (DC=1024, some AC),
+// dispatches one block at (0,0) via Media Block Write to SURFTYPE_2D,
+// and compares the 64 U8 output pixels bit-exact against
+// compute_idct_reference + clamp[0,255]. This isolates the GPU IDCT +
+// clamp + 2D-write path from the parser, validating Phase 3.6 readiness.
+status_t media_pipeline_run_idct_to_u8_test(void);
+
+// Phase 3.9: GPU forward motion compensation test. Dispatches the
+// mc_forward.g4a kernel with 4 half-pel interpolation cases on a
+// synthetic reference frame. Verifies pixel-exact against CPU reference.
+status_t media_pipeline_run_mc_test(void);
+
+// Phase 3.9 benchmark: measures IDCT throughput on GPU vs CPU.
+status_t media_pipeline_run_mc_bench(void);
+
+// Set up the IDCT-to-U8 pipeline: upload kernel, configure surfaces
+// for 'block_count' stacked 8x8 blocks (output 8 x block_count*8),
+// CURBE cosine table, binding table. After this, call
+// submit_blocks_batch_gpu() per frame.
+status_t media_pipeline_setup_idct_to_u8(media_pipeline_context* ctx,
+	uint32 block_count);
+
+// One block for GPU batch dispatch: 64 S16 coefficients + (x,y) position.
+struct gpu_block_entry {
+	int16	coeffs[64];
+	uint32	x;
+	uint32	y;
+};
+
+// Submit up to 400 IDCT blocks to the GPU in a single ring submission.
+// ctx must have been set up with media_pipeline_setup_idct_to_u8().
+// Output pixels are in ctx->output_bo at y-stacked 8-wide blocks.
+status_t submit_blocks_batch_gpu(media_pipeline_context* ctx,
+	const gpu_block_entry* blocks, uint32 count);
+
 
 #endif // MEDIA_PIPELINE_H

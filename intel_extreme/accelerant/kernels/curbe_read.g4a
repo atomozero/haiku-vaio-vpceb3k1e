@@ -1,0 +1,46 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 2.2c kernel — first kernel that reads from CURBE.
+ *
+ * Minimal single-thread kernel that copies the first GRF of the
+ * thread payload's Constant URB Entry region (g1 = first 32 bytes
+ * of CURBE when const_urb_entry_read_len = 1 and read_offset = 0
+ * in the interface descriptor) to the first 32 bytes of the output
+ * buffer via OWord Block Write.
+ *
+ * This proves the CURBE mechanism end-to-end:
+ *   1. host fills curbe_bo with known data
+ *   2. CMD_CONSTANT_BUFFER loads it into the CS URB region
+ *   3. VFE pushes const_urb_entry_read_len GRFs from CS URB into
+ *      R(1 + const_urb_entry_read_offset) of the thread payload
+ *   4. kernel reads those GRFs and stores them somewhere CPU can
+ *      observe
+ *
+ * Previous phases all used `const_urb_entry_read_len = 0` so this
+ * is the first time we exercise the CURBE push path. Required as a
+ * prerequisite for porting libva kernels which all depend on CURBE
+ * holding IQ matrices / IDCT tables / scratch state.
+ */
+
+// Copy R0 header to g3 for the write send (preserves FFTID at M0.5).
+mov (8) g3<1>UD    g0<8,8,1>UD                        { align1 };
+
+// Byte offset 0 into the output buffer (M0.2 of OWord Block Write
+// header = DW2 = byte offset from our Phase 1.3 measurements).
+mov (1) g3.8<1>UD  0UD                                { align1 };
+
+// Stage g1 (= CURBE[0..7] DWs = first 32 bytes pushed by VFE) into
+// MRF m1 as the write payload.
+mov (8) m1<1>UD    g1<8,8,1>UD                        { align1 };
+
+// OWord Block Write: 2 OWords (= 32 bytes) to binding table index 0,
+// msg_control = 2 (2_OWORDS), msg_type = 0 (OWORD_BLOCK_WRITE).
+// mlen = 2 (header + 1 GRF payload), rlen = 0 (no response).
+send (16) 0  acc0<1>UW  g3<8,8,1>UW
+	write(0, 2, 0, 0) mlen 2 rlen 0                   { align1 };
+
+// EOT via thread spawner.
+send (16) 0  acc0<1>UW  g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

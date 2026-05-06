@@ -1,0 +1,233 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 3.6 kernel — IDCT-only with U8 output to SURFTYPE_2D.
+ *
+ * The MPEG-2 parser now does IQ inline (with correct sign handling
+ * and mismatch control). This kernel receives IQ'd S16 coefficients
+ * and performs:
+ *   1. 2-pass IDCT (row + column, dp4-based)
+ *   2. Saturate-clamp to [0,255]
+ *   3. Pack to U8
+ *   4. Media Block Write to SURFTYPE_2D at (x,y)
+ *
+ * NO +128 level shift: the parser initializes dc_pred to
+ * 1 << (7 + intra_dc_precision) = 128, which embeds the level
+ * shift in the DC prediction chain.
+ *
+ * CURBE layout (const_urb_entry_read_len = 20, read_offset = 0):
+ *   g1-g4:   (unused, zero padding)
+ *   g5-g20:  IDCT cosine table (128 int32)
+ *
+ * MEDIA_OBJECT inline data (at g21, after 20 GRF CURBE):
+ *   g21.0 UD = x coordinate (pixel column)
+ *   g21.4 UD = y coordinate (pixel row)
+ *   g21.8 UD = input byte offset within BTI 0 buffer (for batch dispatch)
+ *
+ * BTI 0: input  — SURFTYPE_BUFFER, N × 128 B of IQ'd S16 coefficients
+ * BTI 1: output — SURFTYPE_2D, R8_UINT, 8x8 U8 pixels
+ *
+ * GRF allocation:
+ *   g0:        thread header
+ *   g1-g20:    CURBE (g5-g20 = cosine table)
+ *   g21:       inline data (x, y coordinates)
+ *   g24:       send header (for OWord Block Read)
+ *   g26-g29:   input S16 data (4 GRFs = 128 bytes)
+ *   g40-g55:   dp4 scratch
+ *   g60:       Media Block Write header (x, y, block_size)
+ *   g80-g87:   IDCT accumulator (D)
+ *   g90-g93:   narrowed row results (W, column pass input)
+ *   g100-g103: final IDCT output (S16)
+ *   g110-g115: clamp + U8 repack workspace
+ *   g126:      DO_IDCT return address
+ */
+
+
+/* ================================================================
+ * Step 0: Setup + Read input
+ * ================================================================ */
+
+mov (8)  g24<1>UD   g0<8,8,1>UD                         { align1 };
+// OWord Block Read offset from inline data g21.8 (byte offset / 16 = OWord offset).
+// For single-block dispatch: inline2=0 → reads from base of BTI 0.
+// For batch dispatch: inline2=i*128 → reads block i from BTI 0.
+// OWord offset = byte_offset / 16 = inline2 >> 4.
+shr (1)  g24.8<1>UD g21.8<0,1,0>UD  4UD                 { align1 };
+send (16) 0 g26<1>UW g24<8,8,1>UW  read(0, 0, 4, 0) mlen 1 rlen 4 { align1 };
+
+
+/* ================================================================
+ * Step 1: IDCT Row Transform
+ * ================================================================ */
+mov (1)  a0.0<1>UD  0x03300320UD                        { align1 };
+
+mov (1)  g126.0<1>UD ip                                 { align1 };
+jmpi DO_IDCT;
+
+add (16) g80<1>D    g80<8,8,1>D    1024D                { align1 compr };
+add (16) g82<1>D    g82<8,8,1>D    1024D                { align1 compr };
+add (16) g84<1>D    g84<8,8,1>D    1024D                { align1 compr };
+add (16) g86<1>D    g86<8,8,1>D    1024D                { align1 compr };
+
+asr (16) g80<1>D    g80<8,8,1>D    11D                  { align1 compr };
+asr (16) g82<1>D    g82<8,8,1>D    11D                  { align1 compr };
+asr (16) g84<1>D    g84<8,8,1>D    11D                  { align1 compr };
+asr (16) g86<1>D    g86<8,8,1>D    11D                  { align1 compr };
+
+mov (16) g90.0<1>W  g80<16,8,2>W                        { align1 };
+mov (16) g91.0<1>W  g82<16,8,2>W                        { align1 };
+mov (16) g92.0<1>W  g84<16,8,2>W                        { align1 };
+mov (16) g93.0<1>W  g86<16,8,2>W                        { align1 };
+
+
+/* ================================================================
+ * Step 2: IDCT Column Transform
+ * ================================================================ */
+mov (1)  a0.0<1>UD  0x0B300B20UD                        { align1 };
+
+mov (1)  g126.0<1>UD ip                                 { align1 };
+jmpi DO_IDCT;
+
+add (16) g80<1>D    g80<8,8,1>D    524288D              { align1 compr };
+add (16) g82<1>D    g82<8,8,1>D    524288D              { align1 compr };
+add (16) g84<1>D    g84<8,8,1>D    524288D              { align1 compr };
+add (16) g86<1>D    g86<8,8,1>D    524288D              { align1 compr };
+
+asr (16) g80<1>D    g80<8,8,1>D    20D                  { align1 compr };
+asr (16) g82<1>D    g82<8,8,1>D    20D                  { align1 compr };
+asr (16) g84<1>D    g84<8,8,1>D    20D                  { align1 compr };
+asr (16) g86<1>D    g86<8,8,1>D    20D                  { align1 compr };
+
+mov (16) g100.0<1>W g80<16,8,2>W                        { align1 };
+mov (16) g101.0<1>W g82<16,8,2>W                        { align1 };
+mov (16) g102.0<1>W g84<16,8,2>W                        { align1 };
+mov (16) g103.0<1>W g86<16,8,2>W                        { align1 };
+
+
+/* ================================================================
+ * Step 3: Clamp [0,255] + pack to U8
+ * ================================================================
+ * NO +128 level shift: dc_pred in the parser starts at 128,
+ * which propagates through IQ/IDCT as the DC offset.
+ */
+
+// Saturate S16 -> U8. mov.sat clamps to [0,255].
+mov.sat (16) g110.0<2>UB g100.0<16,16,1>W               { align1 };
+mov.sat (16) g111.0<2>UB g101.0<16,16,1>W               { align1 };
+mov.sat (16) g112.0<2>UB g102.0<16,16,1>W               { align1 };
+mov.sat (16) g113.0<2>UB g103.0<16,16,1>W               { align1 };
+
+// Repack stride-2 UB to contiguous bytes.
+// g114: rows 0-3 (32 bytes), g115: rows 4-7 (32 bytes).
+mov (16) g114.0<1>UB  g110.0<16,16,2>UB                 { align1 };
+mov (16) g114.16<1>UB g111.0<16,16,2>UB                 { align1 };
+mov (16) g115.0<1>UB  g112.0<16,16,2>UB                 { align1 };
+mov (16) g115.16<1>UB g113.0<16,16,2>UB                 { align1 };
+
+
+/* ================================================================
+ * Step 4: Media Block Write to SURFTYPE_2D at (x,y)
+ * ================================================================
+ * Header: g60 with (x,y) from inline data at g21.
+ * Payload: m1-m2 = 64 bytes = 8x8 U8 pixels.
+ * write(BTI=1, ctrl=0, msg_type=2=MediaBlockWrite, cache=0)
+ */
+
+// Build Media Block Write header. Initialize from g0 (thread header)
+// first to get valid DW3-DW7, then override x/y/block_size.
+mov (8)  g60<1>UD   g0<8,8,1>UD                         { align1 };
+mov (2)  g60.0<1>UD g21.0<2,2,1>UD                      { align1 };
+mov (1)  g60.8<1>UD 0x00070007UD                         { align1 };
+
+// Stage pixel data to MRF.
+mov (8)  m1<1>UD    g114<8,8,1>UD                        { align1 };
+mov (8)  m2<1>UD    g115<8,8,1>UD                        { align1 };
+
+// Media Block Write: 8x8 to BTI 1. mlen=3 (header g60 + m1 + m2).
+send (16) 0 acc0<1>UW g60<8,8,1>UW write(1, 0, 2, 0) mlen 3 rlen 0 { align1 };
+
+// EOT
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+    thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };
+
+
+/* ================================================================
+ * DO_IDCT subroutine (identical to idct_single.g4a / Phase 3.1)
+ * ================================================================ */
+
+DO_IDCT:
+
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.0<1>D  g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.0<1>D  g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.0<1>D  g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.0<1>D  g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.0<1>D  g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.0<1>D  g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.0<1>D  g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.0<1>D  g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.8<1>D  g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.8<1>D  g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.8<1>D  g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.8<1>D  g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.8<1>D  g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.8<1>D  g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.8<1>D  g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.8<1>D  g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.16<1>D g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.16<1>D g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.16<1>D g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.16<1>D g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.16<1>D g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.16<1>D g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.16<1>D g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.16<1>D g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.24<1>D g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.24<1>D g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.24<1>D g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.24<1>D g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.24<1>D g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.24<1>D g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.24<1>D g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.24<1>D g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+add (1) ip         g126.0<1,1,1>UD 0x20UD               { align1 };

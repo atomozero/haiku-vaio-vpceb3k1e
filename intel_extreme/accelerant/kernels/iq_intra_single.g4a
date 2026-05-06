@@ -1,0 +1,115 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 2.3b kernel — first integer arithmetic kernel following
+ * the MPEG-2 inverse-quantization algorithm for an intra block.
+ *
+ * Computes per 8x8 block (64 S16 coefficients):
+ *
+ *   out[i] = (coeff[i] * quant_matrix[i] * quant_scale) >> 4     i > 0
+ *   out[0] = coeff[0] * intra_dc_mult                            (DC override)
+ *
+ * This is the `(F' * W * quant_scale * 2) / 32` formula from ISO/IEC
+ * 13818-2 §7.4.2.3, simplified: no saturation clamp, no mismatch
+ * handling. Those come in later phases — 2.3b is scoped to prove the
+ * compute path end-to-end with CURBE-driven parameters.
+ *
+ * Thread payload (IDRT const_urb_entry_read_len = 3, read_offset = 0):
+ *   g1 = quant_matrix[0..31]  (32 UB)
+ *   g2 = quant_matrix[32..63] (32 UB)
+ *   g3 = scalars: g3.0 UW = quant_scale
+ *                 g3.2 UW = intra_dc_mult
+ *                 (rest of g3 zero)
+ *
+ * MEDIA_OBJECT inline data is irrelevant for this kernel — we dispatch
+ * one thread with zero coordinates. Input DCT data is read from
+ * binding_table[0] (SURFTYPE_BUFFER over input_x_bo) via OWord Block
+ * Read, and output goes to binding_table[1] (SURFTYPE_BUFFER over
+ * output_bo) via OWord Block Write. Both use 8 OWords = 128 bytes = 4
+ * GRFs, one send each.
+ *
+ * Send header is kept in g60 so it doesn't collide with the CURBE
+ * region at g1..g3.
+ */
+
+// Copy R0 into g60 as the persistent send header.
+mov (8)  g60<1>UD   g0<8,8,1>UD                      { align1 };
+
+// Widen the UB quant_matrix in g1..g2 into a contiguous UW layout in
+// g70..g73 so we can use it as an operand of a SIMD16 D-producing
+// multiply. Each SIMD16 mov reads 16 UB (half a GRF) and writes 16 UW
+// (a full GRF).
+mov (16) g70<1>UW   g1.0<16,16,1>UB                  { align1 compr };
+mov (16) g71<1>UW   g1.16<16,16,1>UB                 { align1 compr };
+mov (16) g72<1>UW   g2.0<16,16,1>UB                  { align1 compr };
+mov (16) g73<1>UW   g2.16<16,16,1>UB                 { align1 compr };
+
+// OWord Block Read: 8 OWords (128 bytes = 4 GRFs) from binding table
+// index 0 into g62..g65. Byte offset 0 — we read the whole block from
+// the base of input_x_bo.
+mov (1)  g60.8<1>UD 0UD                              { align1 };
+send (16) 0 g62<1>UW g60<8,8,1>UW  read(0, 0, 4, 0) mlen 1 rlen 4 { align1 };
+
+// Step 1: S16 coefficient × UW quant_matrix → S32 intermediate.
+// Each SIMD16 mul processes 16 coefficients. {compr} causes the
+// destination D span to occupy 2 GRFs, so g80..g87 holds 64 D values.
+mul (16) g80<1>D    g62<8,8,1>W    g70<8,8,1>UW      { align1 compr };
+mul (16) g82<1>D    g63<8,8,1>W    g71<8,8,1>UW      { align1 compr };
+mul (16) g84<1>D    g64<8,8,1>W    g72<8,8,1>UW      { align1 compr };
+mul (16) g86<1>D    g65<8,8,1>W    g73<8,8,1>UW      { align1 compr };
+
+// Step 2: multiply by quant_scale (broadcast scalar from g3.0 UW).
+mul (16) g80<1>D    g80<8,8,1>D    g3.0<0,1,0>UW     { align1 compr };
+mul (16) g82<1>D    g82<8,8,1>D    g3.0<0,1,0>UW     { align1 compr };
+mul (16) g84<1>D    g84<8,8,1>D    g3.0<0,1,0>UW     { align1 compr };
+mul (16) g86<1>D    g86<8,8,1>D    g3.0<0,1,0>UW     { align1 compr };
+
+// Step 3: arithmetic shift right by 4 (the " / 16 " from the algorithm).
+asr (16) g80<1>D    g80<8,8,1>D    4D                { align1 compr };
+asr (16) g82<1>D    g82<8,8,1>D    4D                { align1 compr };
+asr (16) g84<1>D    g84<8,8,1>D    4D                { align1 compr };
+asr (16) g86<1>D    g86<8,8,1>D    4D                { align1 compr };
+
+// DC override: g80.0 = coeff[0] (S16 in g62.0) * intra_dc_mult (UW in g3.2).
+// Single-lane multiply — writes exactly one D result at g80.0, which
+// becomes the first output element when we pack D → W below.
+mul (1)  g80.0<1>D  g62.0<0,1,0>W  g3.2<0,1,0>UW     { align1 };
+
+// Pack D → UW (16 low-16 halves of 16 D values into 1 contiguous GRF).
+//
+// The D operands after asr fit in signed-16 range, so reading each D as
+// UW with a stride-2 region picks the low word (the valid payload) and
+// discards the sign-extended high word. The <16,8,2>UW region reads 8
+// UW per SIMD8 half from 8 consecutive D values.
+//
+// IMPORTANT: we cannot use SIMD16 {compr} here. Gen4/5 compression
+// always allocates 2 GRFs for the destination regardless of element
+// size, so `mov (16) g90<1>UW src {compr}` would write half-1 to g90
+// and half-2 to g91 (1 GRF apart), not g90.0..15. The upper 8 UW of
+// g90 would remain garbage, and half-2 would clobber the next pack's
+// destination. Instead, issue two non-compressed SIMD8 movs per pair
+// of source GRFs — each targets a 16-byte-aligned subregion of the
+// same destination GRF, giving the contiguous 16-UW packed result.
+mov (8)  g90.0<1>UW g80.0<16,8,2>UW                   { align1 };
+mov (8)  g90.8<1>UW g81.0<16,8,2>UW                   { align1 };
+mov (8)  g91.0<1>UW g82.0<16,8,2>UW                   { align1 };
+mov (8)  g91.8<1>UW g83.0<16,8,2>UW                   { align1 };
+mov (8)  g92.0<1>UW g84.0<16,8,2>UW                   { align1 };
+mov (8)  g92.8<1>UW g85.0<16,8,2>UW                   { align1 };
+mov (8)  g93.0<1>UW g86.0<16,8,2>UW                   { align1 };
+mov (8)  g93.8<1>UW g87.0<16,8,2>UW                   { align1 };
+
+// Stage the 4 output GRFs to MRF m1..m4 as full-GRF UD copies.
+mov (8)  m1<1>UD    g90<8,8,1>UD                     { align1 };
+mov (8)  m2<1>UD    g91<8,8,1>UD                     { align1 };
+mov (8)  m3<1>UD    g92<8,8,1>UD                     { align1 };
+mov (8)  m4<1>UD    g93<8,8,1>UD                     { align1 };
+
+// OWord Block Write: 8 OWords (128 bytes) to binding table index 1,
+// byte offset 0. mlen = 5 (header + 4 GRFs of payload), rlen = 0.
+send (16) 0 acc0<1>UW g60<8,8,1>UW write(1, 4, 0, 0) mlen 5 rlen 0 { align1 };
+
+// EOT
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

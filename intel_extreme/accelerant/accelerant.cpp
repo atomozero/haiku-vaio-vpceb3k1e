@@ -551,7 +551,7 @@ intel_init_accelerant(int device)
 	// against its writes — every marker failed to fire, INSTDONE bit 8
 	// IS stalled, IPEHR returned a command fragment matching neither
 	// our batch nor any known command. Stay synchronous.
-	media_pipeline_run_sampler_2b_test();
+	media_pipeline_run_mc_bench();
 #endif
 
 	return B_OK;

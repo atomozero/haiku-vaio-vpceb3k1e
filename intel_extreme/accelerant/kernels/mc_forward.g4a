@@ -1,0 +1,279 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 3.7 kernel — Forward Motion Compensation for P-frames.
+ *
+ * For each 8x8 block: reads reference pixels from the reference
+ * frame surface (BTI 2) using half-pel interpolated motion vectors,
+ * then writes the prediction block to the output surface (BTI 1).
+ *
+ * This is the MC-only variant (no IDCT residual addition). Used for
+ * inter MBs where CBP=0 (no coded residual) and for skipped MBs.
+ * A separate kernel handles MC+IDCT for blocks with residual.
+ *
+ * Half-pel interpolation follows the MPEG-2 spec (§7.6.4):
+ *   x0y0: pixel_out = ref[x][y]                       (full-pel)
+ *   x1y0: pixel_out = (ref[x][y] + ref[x+1][y] + 1) >> 1
+ *   x0y1: pixel_out = (ref[x][y] + ref[x][y+1] + 1) >> 1
+ *   x1y1: pixel_out = (ref[x][y] + ref[x+1][y] + ref[x][y+1]
+ *                       + ref[x+1][y+1] + 2) >> 2
+ *
+ * MEDIA_OBJECT inline data (const_urb_entry_read_len=0 → lands at g1):
+ *   g1.0 UD = dest_x (pixel column in output frame)
+ *   g1.4 UD = dest_y (pixel row in output frame)
+ *   g1.8 UD = ref_x  (integer-pel reference X = dest_x + mvx/2)
+ *   g1.12 UD = ref_y (integer-pel reference Y = dest_y + mvy/2)
+ *   g1.16 UW = frac_x (mvx & 1: 0=full, 1=half-pel in X)
+ *   g1.18 UW = frac_y (mvy & 1: 0=full, 1=half-pel in Y)
+ *
+ * BTI 0: (unused in this kernel, reserved for IDCT input buffer)
+ * BTI 1: output  — SURFTYPE_2D, R8_UINT (destination frame luma)
+ * BTI 2: reference — SURFTYPE_2D, R8_UINT (reference frame luma)
+ *
+ * GRF allocation:
+ *   g0:        thread header
+ *   g1:       inline data (dest_x, dest_y, ref_x, ref_y, frac)
+ *   g30:       send header for Media Block Read
+ *   g32-g39:   reference data from read (up to 9x16 bytes)
+ *   g40-g47:   second reference read (for y+8 rows)
+ *   g50-g57:   interpolated prediction as UW (for averaging)
+ *   g60:       Media Block Write header
+ *   g70-g71:   packed U8 output (2 GRFs = 64 bytes = 8x8)
+ */
+
+
+/* ================================================================
+ * Step 0: Setup Media Block Read header
+ * ================================================================
+ * Media Block Read: reads a rectangular block from SURFTYPE_2D.
+ * Header (g30):
+ *   DW0 (g30.0): X offset (in bytes)
+ *   DW1 (g30.4): Y offset (in rows)
+ *   DW2 (g30.8): block width/height descriptor
+ *              [7:0] = block width - 1 (in bytes)
+ *              [15:8] = block height - 1 (in rows)
+ */
+
+mov (8)  g30<1>UD   g0<8,8,1>UD                         { align1 };
+
+/* For full-pel (x0y0): read 8x8 from reference at (ref_x, ref_y).
+ * For half-pel: read 9x9 to have neighbors for interpolation.
+ * We always read 16x16 (max) and use what we need — simpler.
+ * Actually, Media Block Read is limited. Read 16 bytes wide x 8 rows.
+ * For half-pel Y, read 16x9. For x1y1, read 16x9 (9 cols used from 16).
+ */
+
+/* Branch on frac_x, frac_y */
+and.nz (1) null g1.16<0,1,0>UW 1UW                    { align1 };
+(f0) jmpi HALF_X;
+
+/* frac_x == 0 */
+and.nz (1) null g1.18<0,1,0>UW 1UW                    { align1 };
+(f0) jmpi HALF_Y_ONLY;
+
+/* ================================================================
+ * CASE x0y0: full-pel — just copy 8x8 reference block
+ * ================================================================
+ * Write directly from g32 without jmpi to WRITE_OUTPUT —
+ * eliminates the intermediate g70 copy and the long forward jump.
+ */
+FULL_PEL:
+mov (1)  g30.0<1>UD g1.8<0,1,0>UD                      { align1 };
+mov (1)  g30.4<1>UD g1.12<0,1,0>UD                     { align1 };
+mov (1)  g30.8<1>UD 0x00070007UD                         { align1 };
+/* Media Block Read: BTI 2, msg_type=2, 8 rows x 8 cols */
+send (16) 0 g32<1>UW g30<8,8,1>UW read(2, 2, 0, 2) mlen 1 rlen 2 { align1 };
+
+/* Write directly: g32/g33 → m1/m2 → Media Block Write to BTI 1 */
+mov (8)  g60<1>UD   g0<8,8,1>UD                         { align1 };
+mov (2)  g60.0<1>UD g1.0<2,2,1>UD                      { align1 };
+mov (1)  g60.8<1>UD 0x00070007UD                         { align1 };
+mov (8)  m1<1>UD    g32<8,8,1>UD                         { align1 };
+mov (8)  m2<1>UD    g33<8,8,1>UD                         { align1 };
+send (16) 0 acc0<1>UW g60<8,8,1>UW write(1, 0, 2, 0) mlen 3 rlen 0 { align1 };
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+    thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };
+
+
+/* ================================================================
+ * CASE x0y1: vertical half-pel — average row[y] and row[y+1]
+ * ================================================================ */
+HALF_Y_ONLY:
+mov (1)  g30.0<1>UD g1.8<0,1,0>UD                      { align1 };
+mov (1)  g30.4<1>UD g1.12<0,1,0>UD                     { align1 };
+/* Read 8 wide x 9 rows (need row y+8 for last interpolation) */
+mov (1)  g30.8<1>UD 0x00080007UD                         { align1 };
+send (16) 0 g32<1>UW g30<8,8,1>UW read(2, 2, 0, 2) mlen 1 rlen 3 { align1 };
+
+/* g32: rows 0-3 (32 bytes), g33: rows 4-7 (32 bytes), g34: row 8 (8 bytes).
+ * Average row[i] with row[i+1] for i=0..7.
+ * Work in UW to avoid overflow: (a + b + 1) >> 1 */
+add (16) g50.0<1>UW g32.0<16,16,1>UB g32.8<16,16,1>UB  { align1 };
+add (16) g51.0<1>UW g32.16<16,16,1>UB g32.24<16,16,1>UB { align1 };
+add (16) g52.0<1>UW g33.0<16,16,1>UB g33.8<16,16,1>UB  { align1 };
+add (16) g53.0<1>UW g33.16<16,16,1>UB g33.24<16,16,1>UB { align1 };
+
+/* Add 1 and shift right by 1 (rounding) */
+add (16) g50.0<1>UW g50.0<16,16,1>UW 1UW                { align1 };
+add (16) g51.0<1>UW g51.0<16,16,1>UW 1UW                { align1 };
+add (16) g52.0<1>UW g52.0<16,16,1>UW 1UW                { align1 };
+add (16) g53.0<1>UW g53.0<16,16,1>UW 1UW                { align1 };
+shr (16) g50.0<1>UW g50.0<16,16,1>UW 1UW                { align1 };
+shr (16) g51.0<1>UW g51.0<16,16,1>UW 1UW                { align1 };
+shr (16) g52.0<1>UW g52.0<16,16,1>UW 1UW                { align1 };
+shr (16) g53.0<1>UW g53.0<16,16,1>UW 1UW                { align1 };
+
+/* Pack UW -> UB */
+mov (16) g70.0<1>UB g50.0<16,16,2>UB                    { align1 };
+mov (16) g70.16<1>UB g51.0<16,16,2>UB                   { align1 };
+mov (16) g71.0<1>UB g52.0<16,16,2>UB                    { align1 };
+mov (16) g71.16<1>UB g53.0<16,16,2>UB                   { align1 };
+jmpi WRITE_OUTPUT;
+
+
+HALF_X:
+/* frac_x == 1 */
+and.nz (1) null g1.18<0,1,0>UW 1UW                    { align1 };
+(f0) jmpi HALF_XY;
+
+/* ================================================================
+ * CASE x1y0: horizontal half-pel — average col[x] and col[x+1]
+ * ================================================================ */
+mov (1)  g30.0<1>UD g1.8<0,1,0>UD                      { align1 };
+mov (1)  g30.4<1>UD g1.12<0,1,0>UD                     { align1 };
+/* Read 16 wide x 8 rows (need col x+8 for horizontal interpolation) */
+mov (1)  g30.8<1>UD 0x0007000FUD                         { align1 };
+send (16) 0 g32<1>UW g30<8,8,1>UW read(2, 2, 0, 2) mlen 1 rlen 4 { align1 };
+
+/* g32-g35: 16 bytes x 8 rows.
+ * Average byte[x] and byte[x+1] for each pixel position.
+ * Each row is 16 bytes; we need positions 0..7 and 1..8. */
+add (16) g50.0<1>UW g32.0<16,16,1>UB g32.1<16,16,1>UB  { align1 };
+add (16) g51.0<1>UW g33.0<16,16,1>UB g33.1<16,16,1>UB  { align1 };
+add (16) g52.0<1>UW g34.0<16,16,1>UB g34.1<16,16,1>UB  { align1 };
+add (16) g53.0<1>UW g35.0<16,16,1>UB g35.1<16,16,1>UB  { align1 };
+
+add (16) g50.0<1>UW g50.0<16,16,1>UW 1UW                { align1 };
+add (16) g51.0<1>UW g51.0<16,16,1>UW 1UW                { align1 };
+add (16) g52.0<1>UW g52.0<16,16,1>UW 1UW                { align1 };
+add (16) g53.0<1>UW g53.0<16,16,1>UW 1UW                { align1 };
+shr (16) g50.0<1>UW g50.0<16,16,1>UW 1UW                { align1 };
+shr (16) g51.0<1>UW g51.0<16,16,1>UW 1UW                { align1 };
+shr (16) g52.0<1>UW g52.0<16,16,1>UW 1UW                { align1 };
+shr (16) g53.0<1>UW g53.0<16,16,1>UW 1UW                { align1 };
+
+mov (16) g70.0<1>UB g50.0<16,16,2>UB                    { align1 };
+mov (16) g70.16<1>UB g51.0<16,16,2>UB                   { align1 };
+mov (16) g71.0<1>UB g52.0<16,16,2>UB                    { align1 };
+mov (16) g71.16<1>UB g53.0<16,16,2>UB                   { align1 };
+jmpi WRITE_OUTPUT;
+
+
+/* ================================================================
+ * CASE x1y1: bilinear half-pel — 4-point average
+ * ================================================================
+ * pixel_out = (ref[x][y] + ref[x+1][y] + ref[x][y+1]
+ *              + ref[x+1][y+1] + 2) >> 2
+ */
+HALF_XY:
+mov (1)  g30.0<1>UD g1.8<0,1,0>UD                      { align1 };
+mov (1)  g30.4<1>UD g1.12<0,1,0>UD                     { align1 };
+/* Read 16 wide x 9 rows */
+mov (1)  g30.8<1>UD 0x0008000FUD                         { align1 };
+send (16) 0 g32<1>UW g30<8,8,1>UW read(2, 2, 0, 2) mlen 1 rlen 5 { align1 };
+
+/* g32-g36: 16 bytes x 9 rows.
+ * 4-point bilinear for each 8x8 output pixel.
+ * Use the libva approach:
+ *   sum = ref[x,y] + ref[x+1,y] (horizontal pair, row i)
+ *   sum += ref[x,y+1] + ref[x+1,y+1] (horizontal pair, row i+1)
+ *   pixel = (sum + 2) >> 2
+ *
+ * Row layout in 16-byte reads (2 rows per GRF):
+ *   g32: row 0 (16 bytes) + row 1 (16 bytes)
+ *   g33: row 2 + row 3
+ *   g34: row 4 + row 5
+ *   g35: row 6 + row 7
+ *   g36: row 8 (only 16 bytes)
+ */
+
+/* Row 0+1: sum horizontally, then sum vertically */
+add (16) g50.0<1>UW g32.0<16,16,1>UB  g32.1<16,16,1>UB  { align1 };
+add (16) g50.0<1>UW g50.0<16,16,1>UW  g32.16<16,16,1>UB { align1 };
+add (16) g50.0<1>UW g50.0<16,16,1>UW  g32.17<16,16,1>UB { align1 };
+/* Row 1+2 */
+add (16) g51.0<1>UW g32.16<16,16,1>UB g32.17<16,16,1>UB { align1 };
+add (16) g51.0<1>UW g51.0<16,16,1>UW  g33.0<16,16,1>UB  { align1 };
+add (16) g51.0<1>UW g51.0<16,16,1>UW  g33.1<16,16,1>UB  { align1 };
+/* Row 2+3 */
+add (16) g52.0<1>UW g33.0<16,16,1>UB  g33.1<16,16,1>UB  { align1 };
+add (16) g52.0<1>UW g52.0<16,16,1>UW  g33.16<16,16,1>UB { align1 };
+add (16) g52.0<1>UW g52.0<16,16,1>UW  g33.17<16,16,1>UB { align1 };
+/* Row 3+4 */
+add (16) g53.0<1>UW g33.16<16,16,1>UB g33.17<16,16,1>UB { align1 };
+add (16) g53.0<1>UW g53.0<16,16,1>UW  g34.0<16,16,1>UB  { align1 };
+add (16) g53.0<1>UW g53.0<16,16,1>UW  g34.1<16,16,1>UB  { align1 };
+/* Row 4+5 */
+add (16) g54.0<1>UW g34.0<16,16,1>UB  g34.1<16,16,1>UB  { align1 };
+add (16) g54.0<1>UW g54.0<16,16,1>UW  g34.16<16,16,1>UB { align1 };
+add (16) g54.0<1>UW g54.0<16,16,1>UW  g34.17<16,16,1>UB { align1 };
+/* Row 5+6 */
+add (16) g55.0<1>UW g34.16<16,16,1>UB g34.17<16,16,1>UB { align1 };
+add (16) g55.0<1>UW g55.0<16,16,1>UW  g35.0<16,16,1>UB  { align1 };
+add (16) g55.0<1>UW g55.0<16,16,1>UW  g35.1<16,16,1>UB  { align1 };
+/* Row 6+7 */
+add (16) g56.0<1>UW g35.0<16,16,1>UB  g35.1<16,16,1>UB  { align1 };
+add (16) g56.0<1>UW g56.0<16,16,1>UW  g35.16<16,16,1>UB { align1 };
+add (16) g56.0<1>UW g56.0<16,16,1>UW  g35.17<16,16,1>UB { align1 };
+/* Row 7+8 */
+add (16) g57.0<1>UW g35.16<16,16,1>UB g35.17<16,16,1>UB { align1 };
+add (16) g57.0<1>UW g57.0<16,16,1>UW  g36.0<16,16,1>UB  { align1 };
+add (16) g57.0<1>UW g57.0<16,16,1>UW  g36.1<16,16,1>UB  { align1 };
+
+/* Add 2 and shift right by 2 for all 8 rows */
+add (16) g50.0<1>UW g50.0<16,16,1>UW 2UW                { align1 };
+add (16) g51.0<1>UW g51.0<16,16,1>UW 2UW                { align1 };
+add (16) g52.0<1>UW g52.0<16,16,1>UW 2UW                { align1 };
+add (16) g53.0<1>UW g53.0<16,16,1>UW 2UW                { align1 };
+add (16) g54.0<1>UW g54.0<16,16,1>UW 2UW                { align1 };
+add (16) g55.0<1>UW g55.0<16,16,1>UW 2UW                { align1 };
+add (16) g56.0<1>UW g56.0<16,16,1>UW 2UW                { align1 };
+add (16) g57.0<1>UW g57.0<16,16,1>UW 2UW                { align1 };
+shr (16) g50.0<1>UW g50.0<16,16,1>UW 2UW                { align1 };
+shr (16) g51.0<1>UW g51.0<16,16,1>UW 2UW                { align1 };
+shr (16) g52.0<1>UW g52.0<16,16,1>UW 2UW                { align1 };
+shr (16) g53.0<1>UW g53.0<16,16,1>UW 2UW                { align1 };
+shr (16) g54.0<1>UW g54.0<16,16,1>UW 2UW                { align1 };
+shr (16) g55.0<1>UW g55.0<16,16,1>UW 2UW                { align1 };
+shr (16) g56.0<1>UW g56.0<16,16,1>UW 2UW                { align1 };
+shr (16) g57.0<1>UW g57.0<16,16,1>UW 2UW                { align1 };
+
+/* Pack UW -> UB: take low byte of each UW */
+mov (8) g70.0<1>UB  g50.0<8,8,2>UB                      { align1 };
+mov (8) g70.8<1>UB  g51.0<8,8,2>UB                      { align1 };
+mov (8) g70.16<1>UB g52.0<8,8,2>UB                      { align1 };
+mov (8) g70.24<1>UB g53.0<8,8,2>UB                      { align1 };
+mov (8) g71.0<1>UB  g54.0<8,8,2>UB                      { align1 };
+mov (8) g71.8<1>UB  g55.0<8,8,2>UB                      { align1 };
+mov (8) g71.16<1>UB g56.0<8,8,2>UB                      { align1 };
+mov (8) g71.24<1>UB g57.0<8,8,2>UB                      { align1 };
+
+
+/* ================================================================
+ * WRITE_OUTPUT: Media Block Write 8x8 U8 to BTI 1 at (dest_x, dest_y)
+ * ================================================================ */
+WRITE_OUTPUT:
+
+mov (8)  g60<1>UD   g0<8,8,1>UD                         { align1 };
+mov (2)  g60.0<1>UD g1.0<2,2,1>UD                      { align1 };
+mov (1)  g60.8<1>UD 0x00070007UD                         { align1 };
+
+mov (8)  m1<1>UD    g70<8,8,1>UD                         { align1 };
+mov (8)  m2<1>UD    g71<8,8,1>UD                         { align1 };
+
+send (16) 0 acc0<1>UW g60<8,8,1>UW write(1, 0, 2, 0) mlen 3 rlen 0 { align1 };
+
+/* EOT */
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+    thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

@@ -36,14 +36,16 @@ GEN4ASM = ../tools/gen4asm/gen4asm
 
 # Kernel sources live in kernels/ and are compiled into kernels/*.g4b.gen5.
 KERNEL_SRCS = kernels/hello_world.g4a kernels/memset_indexed.g4a \
-	kernels/saxpy_simd8.g4a kernels/sampler_read.g4a \
-	kernels/sampler_read_4row.g4a
+	kernels/saxpy_simd8.g4a kernels/iq_intra_single.g4a kernels/sampler_read.g4a \
+	kernels/sampler_read_4row.g4a kernels/curbe_read.g4a \
+	kernels/libva_probe.g4a kernels/idct_single.g4a \
+	kernels/iq_idct_intra.g4a kernels/mc_forward.g4a kernels/idct_to_u8.g4a kernels/iq_idct_intra_nolevelshift.g4a
 KERNEL_BINS = $(KERNEL_SRCS:.g4a=.g4b.gen5)
 
 # Accelerant source files
 ACCEL_SRCS = accelerant.cpp bench.cpp cursor.cpp dpms.cpp engine.cpp \
 	gpu_bo.cpp gpu_debug.cpp hooks.cpp media_pipeline.cpp memory.cpp \
-	mode.cpp overlay.cpp pll.cpp render.cpp \
+	mode.cpp mpeg2_parser.cpp overlay.cpp pll.cpp render.cpp \
 	FlexibleDisplayInterface.cpp PanelFitter.cpp Ports.cpp Pipes.cpp \
 	TigerLakePLL.cpp
 

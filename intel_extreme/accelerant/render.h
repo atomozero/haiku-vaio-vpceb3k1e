@@ -65,6 +65,7 @@
 // 3DPRIMITIVE (SubType=3, Opcode=3, SubOpcode=0)
 #define CMD_3DPRIMITIVE				GEN5_3D(3, 3, 0)			// 0x7B000000
 #define PRIM_RECTLIST				0x0F
+#define PRIM_TRILIST				0x04
 
 // PIPE_CONTROL (SubType=3, Opcode=2, SubOpcode=0)
 #define CMD_PIPE_CONTROL			(GEN5_3D(3, 2, 0) | 0x02)	// 0x7A000002
@@ -135,9 +136,15 @@ struct render_state {
 
 // Render engine functions
 status_t render_init();
+status_t render_init_clone();  // safe for clones: no ring re-init
 void render_uninit();
 status_t render_fill_rect(uint32 color, int16 left, int16 top,
 	int16 right, int16 bottom);
+
+// Draw a solid-color triangle at arbitrary screen coordinates.
+// Vertices are in screen space (pixel coords). Color is 0xAARRGGBB.
+status_t render_draw_triangle(uint32 color,
+	float x0, float y0, float x1, float y1, float x2, float y2);
 
 
 #endif	// RENDER_H

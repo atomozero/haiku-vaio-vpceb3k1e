@@ -1,0 +1,72 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 2.3a kernel — libva ABI discovery probe.
+ *
+ * Libva-intel-driver's MPEG-2 VLD kernels all share the same GRF ABI:
+ *
+ *     g1..g30  = CURBE contents (30 GRFs, 960 bytes)
+ *                pushed by VFE from CS URB at thread start, because the
+ *                interface descriptor sets const_urb_entry_read_len = 30.
+ *     g31..    = per-thread URB entry (MEDIA_OBJECT inline data and/or
+ *                indirect data). First inline DWORD from the MEDIA_OBJECT
+ *                command lands at g31.0.
+ *
+ * Until Phase 2.2c we only ever exercised const_urb_entry_read_len = 1
+ * (single GRF push), so the 30-GRF case and the "what lands at g31"
+ * question were both theoretical. This kernel answers them on real
+ * hardware before we try to port any libva kernel.
+ *
+ * What it does: dump four specific GRFs to the output buffer, so the
+ * CPU can compare them against known patterns that host-side code
+ * placed in curbe_bo and the MEDIA_OBJECT inline3 slots:
+ *
+ *   output[ 0..31]  ← g1   (first GRF of CURBE)
+ *   output[32..63]  ← g15  (middle GRF of CURBE)
+ *   output[64..95]  ← g30  (last GRF of CURBE)
+ *   output[96..127] ← g31  (first GRF of thread URB entry, inline)
+ *
+ * Each dump is one OWord Block Write of 2 OWords (= 32 bytes = 1 GRF)
+ * to binding table index 0, using header DW[2] as the per-dump byte
+ * offset. The write encoding is the proven path from Phase 1.3 v10,
+ * memset_indexed.g4a.
+ *
+ * The interface descriptor for this kernel must set:
+ *   grf_reg_blocks = 15  (= 16 × 8 = 128 registers, matches libva MPEG-2)
+ *   const_urb_entry_read_len = 30
+ * and the surface state for binding table index 0 must be a
+ * SURFTYPE_BUFFER covering at least 128 bytes of the output BO.
+ */
+
+// Copy R0 header into g3. All four writes reuse this same header and
+// only patch DW[2] (byte offset) between them.
+mov (8)  g3<1>UD   g0<8,8,1>UD                          { align1 };
+
+// --- Dump g1 (= CURBE GRF 1) at output byte offset 0 ----------------
+mov (1)  g3.8<1>UD  0UD                                 { align1 };
+mov (8)  m1<1>UD    g1<8,8,1>UD                         { align1 };
+send (16) 0  acc0<1>UW  g3<8,8,1>UW
+	write(0, 2, 0, 0) mlen 2 rlen 0                     { align1 };
+
+// --- Dump g15 (= CURBE GRF 15) at output byte offset 32 -------------
+mov (1)  g3.8<1>UD  32UD                                { align1 };
+mov (8)  m1<1>UD    g15<8,8,1>UD                        { align1 };
+send (16) 0  acc0<1>UW  g3<8,8,1>UW
+	write(0, 2, 0, 0) mlen 2 rlen 0                     { align1 };
+
+// --- Dump g30 (= CURBE GRF 30, last) at output byte offset 64 -------
+mov (1)  g3.8<1>UD  64UD                                { align1 };
+mov (8)  m1<1>UD    g30<8,8,1>UD                        { align1 };
+send (16) 0  acc0<1>UW  g3<8,8,1>UW
+	write(0, 2, 0, 0) mlen 2 rlen 0                     { align1 };
+
+// --- Dump g31 (= first GRF after CURBE, inline data) at offset 96 ---
+mov (1)  g3.8<1>UD  96UD                                { align1 };
+mov (8)  m1<1>UD    g31<8,8,1>UD                        { align1 };
+send (16) 0  acc0<1>UW  g3<8,8,1>UW
+	write(0, 2, 0, 0) mlen 2 rlen 0                     { align1 };
+
+// EOT via thread spawner.
+send (16) 0  acc0<1>UW  g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

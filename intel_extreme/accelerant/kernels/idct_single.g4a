@@ -1,0 +1,237 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 Phase 3.1 kernel — standalone 2D IDCT on a single 8x8 block.
+ *
+ * Implements the IEEE 1180 / MPEG-2 inverse discrete cosine transform
+ * using the same dp4-based algorithm as libva-intel-driver idct.g4i.
+ * Two-pass separable: row transform, then column transform.
+ *
+ * CURBE layout (const_urb_entry_read_len = 20, read_offset = 0):
+ *   g1-g4:   (reserved, unused — IQ matrices in future combined kernel)
+ *   g5-g20:  IDCT cosine table (128 int32, same as libva idct_table[])
+ *             Each pair (g5+g6, g7+g8, ...) holds one cosine row
+ *             duplicated for SIMD16 {compr} dp4.
+ *
+ * Input:  64 S16 coefficients from BTI 0 via OWord Block Read (128 bytes)
+ * Output: 64 S16 IDCT results  to  BTI 1 via OWord Block Write (128 bytes)
+ *
+ * GRF allocation:
+ *   g0:        thread header (preserved for EOT)
+ *   g1-g20:    CURBE (g5-g20 = cosine table)
+ *   g24:       send header
+ *   g26-g29:   input S16 data (4 GRFs = 128 bytes)
+ *   g40-g55:   dp4 scratch (8 dp4 x 2 GRFs each, reused per iteration)
+ *   g80-g87:   transform accumulator (8 GRFs x 8 D values)
+ *   g90-g93:   narrowed row results (W format, column pass input)
+ *   g100-g103: final output (4 GRFs of S16)
+ *   g126:      return address for DO_IDCT subroutine
+ */
+
+
+/* ================================================================
+ * Step 0: Setup
+ * ================================================================ */
+
+// Copy g0 to g24 as the persistent send header.
+mov (8)  g24<1>UD   g0<8,8,1>UD                         { align1 };
+
+// OWord Block Read: 8 OWords (128 bytes = 4 GRFs) from BTI 0 into g26-g29.
+mov (1)  g24.8<1>UD 0UD                                 { align1 };
+send (16) 0 g26<1>UW g24<8,8,1>UW  read(0, 0, 4, 0) mlen 1 rlen 4 { align1 };
+
+
+/* ================================================================
+ * Step 1: Row transform
+ * ================================================================
+ * Initialize a0.0 for dual-row addressing into input data (g26).
+ * g26 byte offset = 26 * 32 = 832 = 0x340.
+ * Low half reads even rows (0,2,4,6), high half reads odd rows (1,3,5,7).
+ * High half = low half + 0x10 (16 bytes = one 8×S16 row ahead).
+ * Both halves are pre-decremented by 0x20 since DO_IDCT increments first.
+ *   Low:  0x340 - 0x20 = 0x320
+ *   High: 0x350 - 0x20 = 0x330
+ */
+mov (1)  a0.0<1>UD  0x03300320UD                        { align1 };
+
+mov (1)  g126.0<1>UD ip                                 { align1 };
+jmpi DO_IDCT;
+
+// Row rounding: add ROW_ADD = 0x400 (1024) before shift.
+add (16) g80<1>D    g80<8,8,1>D    1024D                { align1 compr };
+add (16) g82<1>D    g82<8,8,1>D    1024D                { align1 compr };
+add (16) g84<1>D    g84<8,8,1>D    1024D                { align1 compr };
+add (16) g86<1>D    g86<8,8,1>D    1024D                { align1 compr };
+
+// Row shift: arithmetic shift right by 11.
+asr (16) g80<1>D    g80<8,8,1>D    11D                  { align1 compr };
+asr (16) g82<1>D    g82<8,8,1>D    11D                  { align1 compr };
+asr (16) g84<1>D    g84<8,8,1>D    11D                  { align1 compr };
+asr (16) g86<1>D    g86<8,8,1>D    11D                  { align1 compr };
+
+// Narrow D -> W: pick low 16 bits of each D value.
+// g80-g81 (16 D) -> g90 (16 W), etc.
+mov (16) g90.0<1>W  g80<16,8,2>W                        { align1 };
+mov (16) g91.0<1>W  g82<16,8,2>W                        { align1 };
+mov (16) g92.0<1>W  g84<16,8,2>W                        { align1 };
+mov (16) g93.0<1>W  g86<16,8,2>W                        { align1 };
+
+
+/* ================================================================
+ * Step 2: Column transform
+ * ================================================================
+ * Set a0.0 for dual-row addressing into narrowed row results (g90).
+ * g90 byte offset = 90 * 32 = 2880 = 0xB40.
+ *   Low:  0xB40 - 0x20 = 0xB20
+ *   High: 0xB50 - 0x20 = 0xB30
+ */
+mov (1)  a0.0<1>UD  0x0B300B20UD                        { align1 };
+
+mov (1)  g126.0<1>UD ip                                 { align1 };
+jmpi DO_IDCT;
+
+// Column rounding: add COL_ADD = 0x80000 (524288) before shift.
+add (16) g80<1>D    g80<8,8,1>D    524288D              { align1 compr };
+add (16) g82<1>D    g82<8,8,1>D    524288D              { align1 compr };
+add (16) g84<1>D    g84<8,8,1>D    524288D              { align1 compr };
+add (16) g86<1>D    g86<8,8,1>D    524288D              { align1 compr };
+
+// Column shift: arithmetic shift right by 20.
+asr (16) g80<1>D    g80<8,8,1>D    20D                  { align1 compr };
+asr (16) g82<1>D    g82<8,8,1>D    20D                  { align1 compr };
+asr (16) g84<1>D    g84<8,8,1>D    20D                  { align1 compr };
+asr (16) g86<1>D    g86<8,8,1>D    20D                  { align1 compr };
+
+// Narrow D -> W for final output.
+mov (16) g100.0<1>W g80<16,8,2>W                        { align1 };
+mov (16) g101.0<1>W g82<16,8,2>W                        { align1 };
+mov (16) g102.0<1>W g84<16,8,2>W                        { align1 };
+mov (16) g103.0<1>W g86<16,8,2>W                        { align1 };
+
+
+/* ================================================================
+ * Step 3: Write output
+ * ================================================================ */
+
+// Stage 4 output GRFs to MRF m1-m4.
+mov (8)  m1<1>UD    g100<8,8,1>UD                       { align1 };
+mov (8)  m2<1>UD    g101<8,8,1>UD                       { align1 };
+mov (8)  m3<1>UD    g102<8,8,1>UD                       { align1 };
+mov (8)  m4<1>UD    g103<8,8,1>UD                       { align1 };
+
+// OWord Block Write: 8 OWords (128 bytes) to BTI 1, byte offset 0.
+mov (1)  g24.8<1>UD 0UD                                 { align1 };
+send (16) 0 acc0<1>UW g24<8,8,1>UW write(1, 4, 0, 0) mlen 5 rlen 0 { align1 };
+
+// EOT
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+    thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };
+
+
+/* ================================================================
+ * DO_IDCT subroutine
+ * ================================================================
+ * Implements one full 1D IDCT pass on 8 rows of 8 S16 values.
+ *
+ * On entry:
+ *   a0.0   = (base_address - 0x20) in both halves, pointing to the
+ *            input data minus one GRF.
+ *   g5-g20 = IDCT cosine table (via CURBE).
+ *   g126.0 = return address (ip at the call site).
+ *
+ * On exit:
+ *   g80-g87 = accumulated 8x8 D results (row-transformed, transposed).
+ *             g80[i] = Sigma(k=0..7) input[i][k] * cosine[0][k]
+ *             g81[i] = Sigma(k=0..7) input[i][k] * cosine[1][k]
+ *             etc.
+ *
+ * The subroutine processes 2 rows per iteration (via the dual-half a0
+ * trick), running 4 iterations total for all 8 rows.
+ *
+ * Each dp4 computes a 4-element dot product. Two dp4 halves (via
+ * SIMD16 {compr}) handle two rows simultaneously. The add instruction
+ * combines the low and high halves of each dp4 to get the full
+ * 8-element dot product.
+ */
+
+DO_IDCT:
+
+/* Iteration 1: rows 0,1 */
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.0<1>D  g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.0<1>D  g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.0<1>D  g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.0<1>D  g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.0<1>D  g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.0<1>D  g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.0<1>D  g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.0<1>D  g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+/* Iteration 2: rows 2,3 */
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.8<1>D  g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.8<1>D  g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.8<1>D  g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.8<1>D  g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.8<1>D  g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.8<1>D  g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.8<1>D  g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.8<1>D  g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+/* Iteration 3: rows 4,5 */
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.16<1>D g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.16<1>D g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.16<1>D g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.16<1>D g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.16<1>D g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.16<1>D g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.16<1>D g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.16<1>D g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+/* Iteration 4: rows 6,7 */
+add (1) a0.0<1>UD  a0.0<1,1,1>UD  0x00200020UD         { align1 };
+dp4 (16) g40<1>D   g[a0.0]<8,8,1>W g5<8,8,1>D          { align1 compr };
+dp4 (16) g42<1>D   g[a0.0]<8,8,1>W g7<8,8,1>D          { align1 compr };
+dp4 (16) g44<1>D   g[a0.0]<8,8,1>W g9<8,8,1>D          { align1 compr };
+dp4 (16) g46<1>D   g[a0.0]<8,8,1>W g11<8,8,1>D         { align1 compr };
+dp4 (16) g48<1>D   g[a0.0]<8,8,1>W g13<8,8,1>D         { align1 compr };
+dp4 (16) g50<1>D   g[a0.0]<8,8,1>W g15<8,8,1>D         { align1 compr };
+dp4 (16) g52<1>D   g[a0.0]<8,8,1>W g17<8,8,1>D         { align1 compr };
+dp4 (16) g54<1>D   g[a0.0]<8,8,1>W g19<8,8,1>D         { align1 compr };
+add (2) g80.24<1>D g40.0<8,1,8>D   g40.16<8,1,8>D      { align1 };
+add (2) g81.24<1>D g42.0<8,1,8>D   g42.16<8,1,8>D      { align1 };
+add (2) g82.24<1>D g44.0<8,1,8>D   g44.16<8,1,8>D      { align1 };
+add (2) g83.24<1>D g46.0<8,1,8>D   g46.16<8,1,8>D      { align1 };
+add (2) g84.24<1>D g48.0<8,1,8>D   g48.16<8,1,8>D      { align1 };
+add (2) g85.24<1>D g50.0<8,1,8>D   g50.16<8,1,8>D      { align1 };
+add (2) g86.24<1>D g52.0<8,1,8>D   g52.16<8,1,8>D      { align1 };
+add (2) g87.24<1>D g54.0<8,1,8>D   g54.16<8,1,8>D      { align1 };
+
+// Return to caller: jump back to the instruction after jmpi.
+add (1) ip         g126.0<1,1,1>UD 0x20UD               { align1 };
