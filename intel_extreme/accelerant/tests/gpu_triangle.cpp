@@ -1,6 +1,7 @@
 /*
- * gpu_triangle — GPU-accelerated triangle in a Haiku BWindow.
- * Renders via the 3D pipeline to an off-screen BO, copies to BBitmap.
+ * gpu_triangle — GPU-rasterized triangle via media pipeline (compute).
+ * Uses tile fill kernel: CPU computes triangle coverage per 8×8 tile,
+ * GPU writes colored tiles via Media Block Write.
  */
 #include <Application.h>
 #include <Bitmap.h>
@@ -19,27 +20,17 @@
 #include "intel_extreme.h"
 #include "lock.h"
 #include "accelerant.h"
-#include "render.h"
 #include "media_pipeline.h"
 #include "gpu_bo.h"
-#include "commands.h"
 
 extern accelerant_info* gInfo;
 
-// URB_FENCE defines (from render.cpp, not in header)
-#define CMD_URB_FENCE		(0x3 << 29 | 0 << 27 | 0 << 24 | 0 << 16)
-#define UF0_VS_REALLOC		(1 << 8)
-#define UF0_GS_REALLOC		(1 << 9)
-#define UF0_CLIP_REALLOC	(1 << 10)
-#define UF0_SF_REALLOC		(1 << 11)
-#define UF0_VFE_REALLOC		(1 << 12)
-#define UF0_CS_REALLOC		(1 << 13)
-#define CMD_CS_URB_STATE	(0x3 << 29 | 0 << 27 | 1 << 24 | 1 << 16)
-#define MI_FLUSH_CMD		(0x04 << 23)
-#define MI_NOOP				0
-
-#define TRI_W 480
-#define TRI_H 480
+#define IMG_W 160
+#define IMG_H 160
+#define TILE 8
+#define TILES_X (IMG_W / TILE)
+#define TILES_Y (IMG_H / TILE)
+#define NTILES (TILES_X * TILES_Y)  // 1600
 
 static bool
 init_gpu(void)
@@ -82,148 +73,51 @@ static void cleanup_gpu(void) {
 }
 
 
-// ---- Off-screen 3D render target ----
+// ---- Triangle edge function ----
 
-static gpu_bo sRenderBO;		// off-screen BGRA surface
-static gpu_bo sStateBO;		// 3D state block
-
-// Write a BGRA surface state at byte offset within sStateBO.
-static void
-write_render_surface(uint32 offset, uint32 bo_gtt, uint32 w, uint32 h,
-	uint32 pitch)
+// Returns > 0 if point (px,py) is on the left side of edge v0→v1
+static inline float
+edge(float v0x, float v0y, float v1x, float v1y, float px, float py)
 {
-	// SURFACE_2D, B8G8R8A8_UNORM, render target
-	uint32 ss[8] = {0};
-	ss[0] = (1 << 29)			// SURFACE_2D
-		| (0x0C0 << 18)		// B8G8R8A8_UNORM
-		| (1 << 8);			// RC_READ_WRITE (render target!)
-	ss[1] = bo_gtt;
-	ss[2] = ((w - 1) << 6) | ((h - 1) << 19);
-	ss[3] = ((pitch - 1) << 3);	// pitch in bytes - 1, bits [19:3]
-	gpu_bo_write(&sStateBO, offset, ss, 32);
+	return (v1x - v0x) * (py - v0y) - (v1y - v0y) * (px - v0x);
+}
+
+// Check if any pixel in an 8×8 tile overlaps the triangle.
+// Returns coverage fraction 0.0-1.0 (for anti-aliasing / smooth edges)
+static float
+tile_coverage(float v0x, float v0y, float v1x, float v1y,
+	float v2x, float v2y, uint32 tx, uint32 ty)
+{
+	uint32 inside = 0;
+	for (uint32 dy = 0; dy < TILE; dy++) {
+		for (uint32 dx = 0; dx < TILE; dx++) {
+			float px = (float)(tx + dx) + 0.5f;
+			float py = (float)(ty + dy) + 0.5f;
+			float e0 = edge(v0x, v0y, v1x, v1y, px, py);
+			float e1 = edge(v1x, v1y, v2x, v2y, px, py);
+			float e2 = edge(v2x, v2y, v0x, v0y, px, py);
+			if (e0 >= 0 && e1 >= 0 && e2 >= 0)
+				inside++;
+		}
+	}
+	return (float)inside / 64.0f;
 }
 
 
-// Build and submit the 3D draw commands for a triangle
-static status_t
-render_triangle_offscreen(float x0, float y0, float x1, float y1,
-	float x2, float y2, uint32 color)
+// ---- Grayscale to RGB32 ----
+
+static void
+gray_to_rgb(const uint8* gray, uint32* rgb, uint32 w, uint32 h,
+	uint8 r, uint8 g, uint8 b, uint8 bg_r, uint8 bg_g, uint8 bg_b)
 {
-	uint32 st = sStateBO.gtt_offset;
-
-	// Patch WM kernel color (same layout as gen5_wm_kernel_solid)
-	float r = ((color >> 16) & 0xFF) / 255.0f;
-	float g = ((color >> 8) & 0xFF) / 255.0f;
-	float b = (color & 0xFF) / 255.0f;
-	float a = ((color >> 24) & 0xFF) / 255.0f;
-	// WM kernel at offset 0x240, instructions 1-4 have imm at byte 12
-	uint32 wm_off = 0x240;
-	gpu_bo_write(&sStateBO, wm_off + 1*16+12, &r, 4);
-	gpu_bo_write(&sStateBO, wm_off + 2*16+12, &g, 4);
-	gpu_bo_write(&sStateBO, wm_off + 3*16+12, &b, 4);
-	gpu_bo_write(&sStateBO, wm_off + 4*16+12, &a, 4);
-
-	// Write vertices at 0x300
-	float vb[6] = { x0, y0, x1, y1, x2, y2 };
-	gpu_bo_write(&sStateBO, 0x300, vb, sizeof(vb));
-
-	gpu_bo_flush_cpu_writes();
-
-	// Build commands array
-	uint32 cmd[128];
-	int n = 0;
-	#define E(v) cmd[n++] = (v)
-
-	E(MI_FLUSH_CMD);
-	E(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
-
-	// STATE_BASE_ADDRESS
-	E(CMD_STATE_BASE_ADDRESS);
-	E(0|1); E(0|1); E(0|1); E(0|1); E(0); E(0); E(0);
-
-	// URB_FENCE
-	uint32 vsF = 256, sfF = vsF + 128;
-	E(CMD_URB_FENCE | UF0_VS_REALLOC | UF0_GS_REALLOC
-		| UF0_CLIP_REALLOC | UF0_SF_REALLOC
-		| UF0_VFE_REALLOC | UF0_CS_REALLOC | 1);
-	E((vsF << 20) | (vsF << 10) | vsF);
-	E((sfF << 20) | (sfF << 10) | sfF);
-
-	// CS_URB_STATE
-	E(CMD_CS_URB_STATE);
-	E(0);  // 0 entries, size 1
-
-	// PIPELINED_POINTERS
-	E(CMD_PIPELINED_POINTERS);
-	E(st + 0x000);  // VS
-	E(0);            // GS off
-	E(0);            // CLIP off
-	E(st + 0x180);   // SF
-	E(st + 0x040);   // WM
-	E(st + 0x080);   // CC
-
-	// DRAWING_RECTANGLE
-	E(CMD_DRAWING_RECTANGLE);
-	E(0);
-	E(((TRI_H-1) << 16) | (TRI_W-1));
-	E(0);
-
-	// BINDING_TABLE_POINTERS
-	E(CMD_BINDING_TABLE_PTRS | 4);
-	E(0); E(0); E(0); E(0);
-	E(st + 0x100);  // binding table
-
-	// VERTEX_BUFFERS
-	E(CMD_VERTEX_BUFFERS | 3);
-	E((0 << 26) | (8 << 0));  // stride 8
-	E(st + 0x300);             // vertex data
-	E(st + 0x300 + 3*8 - 1);
-	E(0);
-
-	// VERTEX_ELEMENTS
-	E(CMD_VERTEX_ELEMENTS | 1);
-	E((0 << 27) | (1 << 26) | (FORMAT_R32G32_FLOAT << 16) | 0);
-	E((VFCOMP_STORE_SRC << 28) | (VFCOMP_STORE_SRC << 24)
-		| (VFCOMP_STORE_0 << 20) | (VFCOMP_STORE_1_FP << 16));
-
-	// 3DPRIMITIVE TRILIST
-	E(CMD_3DPRIMITIVE | (PRIM_TRILIST << 10) | 4);
-	E(3); E(0); E(1); E(0); E(0);
-
-	// MI_FLUSH
-	E(MI_FLUSH_CMD);
-
-	// Marker
-	E((0x20 << 23) | (1 << 22) | 2);
-	E(0);
-	E(sStateBO.gtt_offset + 0x2C0);
-	E(0xBEEFCAFE);
-
-	if (n & 1) E(MI_NOOP);
-
-	#undef E
-
-	// Clear marker
-	uint32 zero = 0;
-	gpu_bo_write(&sStateBO, 0x2C0, &zero, 4);
-	gpu_bo_flush_cpu_writes();
-
-	// Submit to ring
-	{
-		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
-		QueueCommands queue(ring);
-		queue.MakeSpace(n);
-		for (int i = 0; i < n; i++)
-			queue.Write(cmd[i]);
+	for (uint32 i = 0; i < w * h; i++) {
+		uint8 v = gray[i];
+		// Blend: color = bg + (fg - bg) * v / 255
+		uint8 pr = bg_r + (((int)r - bg_r) * v) / 255;
+		uint8 pg = bg_g + (((int)g - bg_g) * v) / 255;
+		uint8 pb = bg_b + (((int)b - bg_b) * v) / 255;
+		rgb[i] = (255u << 24) | (pr << 16) | (pg << 8) | pb;
 	}
-
-	// Wait for completion
-	volatile uint32* marker = (volatile uint32*)(sStateBO.cpu_addr + 0x2C0);
-	bigtime_t t0 = system_time();
-	while (*marker != 0xBEEFCAFE) {
-		if (system_time() - t0 > 100000) return B_TIMED_OUT;
-	}
-	return B_OK;
 }
 
 
@@ -232,7 +126,7 @@ render_triangle_offscreen(float x0, float y0, float x1, float y1,
 class TriView : public BView {
 public:
 	TriView(BRect r) : BView(r, "tv", B_FOLLOW_ALL, B_WILL_DRAW) {
-		fBmp = new BBitmap(BRect(0, 0, TRI_W-1, TRI_H-1), B_RGB32);
+		fBmp = new BBitmap(BRect(0, 0, IMG_W-1, IMG_H-1), B_RGB32);
 	}
 	~TriView() { delete fBmp; }
 	void Draw(BRect) override { DrawBitmap(fBmp, Bounds()); }
@@ -243,8 +137,8 @@ private:
 
 class TriWin : public BWindow {
 public:
-	TriWin() : BWindow(BRect(50,50,50+TRI_W-1,50+TRI_H-1),
-		"GPU Triangle — Intel Gen5", B_TITLED_WINDOW,
+	TriWin() : BWindow(BRect(50, 50, 50+IMG_W*3-1, 50+IMG_H*3-1),
+		"GPU Triangle — Intel Gen5 Compute", B_TITLED_WINDOW,
 		B_NOT_RESIZABLE | B_QUIT_ON_WINDOW_CLOSE) {
 		fView = new TriView(Bounds());
 		AddChild(fView);
@@ -263,119 +157,80 @@ private:
 };
 
 
-// ---- Main ----
-
-// Gen5 kernel binaries (from render.cpp)
-extern const uint32 gen5_sf_kernel[];
-extern const uint32 gen5_wm_kernel_solid[];
-
-int main(int, char**)
+int
+main(int, char**)
 {
-	printf("GPU Triangle Demo — Intel Gen5 3D Pipeline\n\n");
+	printf("GPU Triangle Demo — Compute Rasterizer\n");
+	printf("  %dx%d px, %d tiles (%dx%d)\n\n", IMG_W, IMG_H,
+		NTILES, TILES_X, TILES_Y);
+
 	if (!init_gpu()) return 1;
 
-	// Allocate off-screen render target (BGRA, TRI_W × TRI_H)
-	uint32 fb_size = TRI_W * TRI_H * 4;
-	if (gpu_bo_alloc(&sRenderBO, "tri:fb", fb_size, 4096) != B_OK) {
-		printf("alloc render BO failed\n"); cleanup_gpu(); return 1;
+	media_pipeline_context ctx;
+	if (media_pipeline_init(&ctx) != B_OK) {
+		printf("pipeline init failed\n");
+		cleanup_gpu(); return 1;
 	}
-	// State block: same layout as render.cpp
-	if (gpu_bo_alloc(&sStateBO, "tri:state", 2048, 4096) != B_OK) {
-		printf("alloc state BO failed\n");
-		gpu_bo_free(&sRenderBO); cleanup_gpu(); return 1;
+	if (media_pipeline_setup_tile_fill(&ctx, IMG_W, IMG_H) != B_OK) {
+		printf("tile fill setup failed\n");
+		media_pipeline_uninit(&ctx);
+		cleanup_gpu(); return 1;
 	}
 
-	gpu_bo_clear(&sStateBO);
+	printf("GPU pipeline ready.\n");
 
-	// Copy SF + WM kernels
-	gpu_bo_write(&sStateBO, 0x1C0, gen5_sf_kernel, 7*16);
-	gpu_bo_write(&sStateBO, 0x240, gen5_wm_kernel_solid, 6*16);
-
-	uint32 st = sStateBO.gtt_offset;
-
-	// VS state (passthrough)
-	uint32 vs[8] = {0};
-	vs[4] = ((256/4) << 11) | (0 << 19);
-	vs[6] = (1 << 1);
-	gpu_bo_write(&sStateBO, 0x000, vs, 32);
-
-	// WM state
-	uint32 wm[8] = {0};
-	wm[0] = (st + 0x240) | (2 << 1);  // kernel + grf_reg_count
-	wm[3] = (3 << 0) | (0 << 4) | (2 << 11);
-	wm[5] = ((72-1) << 25) | (1 << 19) | (1 << 18) | (1 << 1);  // 16-dispatch
-	gpu_bo_write(&sStateBO, 0x040, wm, 32);
-
-	// CC state + viewport
-	uint32 cc[8] = {0};
-	cc[4] = st + 0x0C0;  // CC viewport
-	gpu_bo_write(&sStateBO, 0x080, cc, 32);
-	float ccvp[2] = {0.0f, 1.0f};
-	gpu_bo_write(&sStateBO, 0x0C0, ccvp, 8);
-
-	// Binding table → surface state at 0x140
-	uint32 bt[1] = { st + 0x140 };
-	gpu_bo_write(&sStateBO, 0x100, bt, 4);
-
-	// Surface state: off-screen BGRA render target
-	write_render_surface(0x140, sRenderBO.gtt_offset, TRI_W, TRI_H,
-		TRI_W * 4);
-
-	// SF state
-	uint32 sf[8] = {0};
-	sf[0] = st + 0x1C0;  // SF kernel
-	sf[3] = (3 << 0) | (1 << 4) | (1 << 11);
-	sf[4] = ((48-1) << 25) | (1 << 19) | (64 << 11);
-	sf[6] = (1 << 29) | (0x8 << 9) | (0x8 << 13);
-	sf[7] = (2 << 12);
-	gpu_bo_write(&sStateBO, 0x180, sf, 32);
-
-	gpu_bo_flush_cpu_writes();
-	printf("State at GTT 0x%x, render BO at GTT 0x%x\n",
-		st, sRenderBO.gtt_offset);
-
-	// Create window
 	BApplication app("application/x-gpu-triangle");
 	TriWin* win = new TriWin();
 	win->Show();
+
+	gpu_tile_entry* tiles = (gpu_tile_entry*)malloc(
+		NTILES * sizeof(gpu_tile_entry));
+	uint32* rgb = (uint32*)malloc(IMG_W * IMG_H * 4);
 
 	float angle = 0;
 	uint32 frame = 0;
 	uint32 fps_cnt = 0;
 	bigtime_t fps_t0 = system_time();
 
-	// Render to FRAMEBUFFER (proven to complete) then read back.
-	uint32 fb_off = gInfo->shared_info->frame_buffer_offset;
-	uint32 bpr = gInfo->shared_info->bytes_per_row;
-	uint32 disp_w = gInfo->shared_info->current_mode.timing.h_display;
-	uint32 disp_h = gInfo->shared_info->current_mode.timing.v_display;
-	uint8* fb_base = (uint8*)gInfo->shared_info->graphics_memory + fb_off;
-	printf("Framebuffer: off=0x%x bpr=%u %ux%u\n", fb_off, bpr, disp_w, disp_h);
-
 	while (win->Alive()) {
-		// Rotating triangle — render directly to framebuffer
-		float cx = disp_w / 2.0f, cy = disp_h / 2.0f, sz = 150.0f;
+		float cx = IMG_W / 2.0f, cy = IMG_H / 2.0f, sz = 120.0f;
 		float a0 = angle, a1 = angle + 2.094f, a2 = angle + 4.189f;
+		float v0x = cx + sz * sinf(a0), v0y = cy - sz * cosf(a0);
+		float v1x = cx + sz * sinf(a1), v1y = cy - sz * cosf(a1);
+		float v2x = cx + sz * sinf(a2), v2y = cy - sz * cosf(a2);
 
-		render_draw_triangle(0xFFFF0000,
-			cx + sz * sinf(a0), cy - sz * cosf(a0),
-			cx + sz * sinf(a1), cy - sz * cosf(a1),
-			cx + sz * sinf(a2), cy - sz * cosf(a2));
-
-		// Read back framebuffer center region into BBitmap
-		if (win->Lock()) {
-			BBitmap* bmp = win->View()->Bmp();
-			uint32* dst = (uint32*)bmp->Bits();
-			uint32 dst_bpr = bmp->BytesPerRow() / 4;
-
-			// Copy a TRI_W × TRI_H region from center of framebuffer
-			uint32 src_x = (disp_w - TRI_W) / 2;
-			uint32 src_y = (disp_h - TRI_H) / 2;
-			for (uint32 y = 0; y < TRI_H && (src_y + y) < disp_h; y++) {
-				uint32* src_row = (uint32*)(fb_base
-					+ (src_y + y) * bpr + src_x * 4);
-				memcpy(&dst[y * dst_bpr], src_row, TRI_W * 4);
+		// CPU: compute per-tile triangle coverage → fill color
+		uint32 tile_count = 0;
+		for (uint32 ty = 0; ty < TILES_Y; ty++) {
+			for (uint32 tx = 0; tx < TILES_X; tx++) {
+				float cov = tile_coverage(v0x, v0y, v1x, v1y,
+					v2x, v2y, tx * TILE, ty * TILE);
+				uint8 c = (uint8)(cov * 255.0f);
+				if (c > 0 || true) {  // always fill (background + triangle)
+					tiles[tile_count].x = tx * TILE;
+					tiles[tile_count].y = ty * TILE;
+					tiles[tile_count].color = c;
+					tile_count++;
+				}
 			}
+		}
+
+		// GPU: fill all tiles
+		status_t st = submit_tile_fill_batch(&ctx, tiles, tile_count);
+		if (st != B_OK) {
+			printf("GPU dispatch failed at frame %u: %s\n",
+				frame, strerror(st));
+			break;
+		}
+
+		// Read GPU output and convert to RGB
+		const uint8* gray = (const uint8*)ctx.output_bo.cpu_addr;
+		gray_to_rgb(gray, rgb, IMG_W, IMG_H,
+			255, 60, 60,    // triangle color (red)
+			26, 26, 46);    // background (dark blue)
+
+		if (win->Lock()) {
+			memcpy(win->View()->Bmp()->Bits(), rgb, IMG_W * IMG_H * 4);
 			win->View()->Invalidate();
 			win->Unlock();
 		}
@@ -388,19 +243,25 @@ int main(int, char**)
 		if (now - fps_t0 >= 1000000) {
 			float fps = fps_cnt * 1e6f / (now - fps_t0);
 			BString t;
-			t.SetToFormat("GPU Triangle — %.1f FPS — Intel Gen5 3D", fps);
-			if (win->Lock()) { win->SetTitle(t.String()); win->Unlock(); }
-			printf("  frame %u: %.1f FPS\n", frame, fps);
+			t.SetToFormat("GPU Triangle — %.1f FPS — %u tiles — "
+				"Intel Gen5 Compute", fps, tile_count);
+			if (win->Lock()) {
+				win->SetTitle(t.String());
+				win->Unlock();
+			}
+			printf("  frame %u: %.1f FPS, %u tiles\n",
+				frame, fps, tile_count);
 			fps_cnt = 0;
 			fps_t0 = now;
 		}
 
-		snooze(8000);  // ~120fps target
+		snooze(5000);
 	}
 
 	printf("Done, %u frames.\n", frame);
-	gpu_bo_free(&sRenderBO);
-	gpu_bo_free(&sStateBO);
+	free(tiles);
+	free(rgb);
+	media_pipeline_uninit(&ctx);
 	cleanup_gpu();
 	return 0;
 }

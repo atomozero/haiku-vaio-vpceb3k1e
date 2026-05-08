@@ -120,6 +120,10 @@ static const uint32 kMcFullpelOnlyKernel[][4] = {
 #include "kernels/mc_fullpel_only.g4b.gen5"
 };
 
+static const uint32 kTileFillKernel[][4] = {
+#include "kernels/rasterize_tri.g4b.gen5"
+};
+
 static const uint32 kIqOnlyDebugKernel[][4] = {
 #include "kernels/iq_only_debug.g4b.gen5"
 };
@@ -4045,6 +4049,129 @@ submit_blocks_batch_gpu(media_pipeline_context* ctx,
 	volatile uint32* slot = (volatile uint32*)(ctx->marker_bo.cpu_addr
 		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
 	uint32 timeout = 500000 + count * 5000;	// base + ~5ms per block headroom
+	return gpu_debug_wait_value(slot, tag, timeout) ? B_OK : B_TIMED_OUT;
+}
+
+
+// ---------------------------------------------------------------------------
+// Tile fill pipeline (compute rasterizer foundation)
+// ---------------------------------------------------------------------------
+
+status_t
+media_pipeline_setup_tile_fill(media_pipeline_context* ctx,
+	uint32 width, uint32 height)
+{
+	if (ctx == NULL || !ctx->initialized)
+		return B_NOT_INITIALIZED;
+
+	status_t st = media_pipeline_upload_kernel(ctx,
+		(const uint32*)kTileFillKernel, sizeof(kTileFillKernel));
+	if (st != B_OK)
+		return st;
+
+	// Surface state: BTI 0 = output 2D (U8 grayscale, width × height)
+	gpu_bo_clear(&ctx->surface_state_bo);
+	write_2d_surface_state_at(ctx, 0,
+		ctx->output_bo.gtt_offset, width, height, width);
+
+	// Binding table: entry 0 → surface state at offset 0
+	gpu_bo_clear(&ctx->binding_table_bo);
+	gpu_bo_write32(&ctx->binding_table_bo, 0,
+		ctx->surface_state_bo.gtt_offset);
+
+	return B_OK;
+}
+
+
+// Emit a MEDIA_OBJECT for the tile fill kernel.
+// Inline data: DW0=tile_x, DW1=tile_y, DW2=fill_value (low byte)
+static void
+emit_media_object_tile_fill(batch_writer* w, uint32 x, uint32 y,
+	uint32 fill_value)
+{
+	// MEDIA_OBJECT: header(4) + 16 inline DW = 20 DW total, length=18
+	bw_emit(w, CMD_MEDIA_OBJECT | 18);
+	bw_emit(w, 0);		// interface descriptor 0
+	bw_emit(w, 0);		// indirect data length
+	bw_emit(w, 0);		// indirect data pointer
+	// Inline data: lands at g1 (curbe_read_len=0)
+	bw_emit(w, x);			// g1.0 = tile_x
+	bw_emit(w, y);			// g1.4 = tile_y
+	bw_emit(w, fill_value);	// g1.8 = fill color byte
+	// Pad remaining 13 DWs
+	for (uint32 i = 3; i < 16; i++)
+		bw_emit(w, 0);
+}
+
+
+status_t
+submit_tile_fill_batch(media_pipeline_context* ctx,
+	const gpu_tile_entry* tiles, uint32 count)
+{
+	if (ctx == NULL || !ctx->initialized)
+		return B_NOT_INITIALIZED;
+	if (count == 0)
+		return B_OK;
+	if (count > BATCH_MAX_BLOCKS)
+		count = BATCH_MAX_BLOCKS;
+
+	// VFE: no CURBE (curbe_read_len=0), 1 BTI
+	uint32 max_threads = count < MEDIA_MAX_PARALLEL_THREADS
+		? count : MEDIA_MAX_PARALLEL_THREADS;
+	write_vfe_state(ctx, max_threads);
+	write_interface_descriptor_ex(ctx, 1,
+		ctx->binding_table_bo.gtt_offset, 0);  // 0 = no CURBE
+
+	gpu_bo_clear(&ctx->marker_bo);
+	for (uint32 i = 0; i < MEDIA_MARKER_COUNT; i++)
+		gpu_bo_write32(&ctx->marker_bo, i * 4, MEDIA_MARKER_SENTINEL);
+
+	batch_writer w;
+	bw_init(&w);
+
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_START);
+	emit_mi_flush(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MI_FLUSH_1);
+	emit_3dstate_depth_buffer_null(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_DEPTH_BUFFER);
+	emit_pipeline_select_media(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_PIPELINE_SELECT);
+	emit_urb_fence(&w, max_threads);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_URB_FENCE);
+	emit_state_base_address_ironlake(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_STATE_BASE);
+	emit_media_state_pointers(&w, ctx);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MEDIA_STATE_POINTERS);
+	emit_cs_urb_state(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_CS_URB);
+	emit_constant_buffer(&w, ctx, 1);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_CONSTANT_BUFFER);
+
+	for (uint32 i = 0; i < count; i++)
+		emit_media_object_tile_fill(&w, tiles[i].x, tiles[i].y,
+			tiles[i].color);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MEDIA_OBJECT);
+	emit_mi_flush(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	if ((w.count & 1) != 0)
+		bw_emit(&w, MI_NOOP);
+
+	if (w.overflow)
+		return B_NO_MEMORY;
+
+	gpu_bo_flush_cpu_writes();
+	{
+		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
+		QueueCommands queue(ring);
+		queue.MakeSpace(w.count);
+		for (uint32 i = 0; i < w.count; i++)
+			queue.Write(w.dwords[i]);
+	}
+
+	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	volatile uint32* slot = (volatile uint32*)(ctx->marker_bo.cpu_addr
+		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
+	uint32 timeout = 500000 + count * 5000;
 	return gpu_debug_wait_value(slot, tag, timeout) ? B_OK : B_TIMED_OUT;
 }
 

@@ -303,5 +303,21 @@ struct gpu_block_entry {
 status_t submit_blocks_batch_gpu(media_pipeline_context* ctx,
 	const gpu_block_entry* blocks, uint32 count);
 
+// Tile fill entry: coordinates + fill color byte.
+struct gpu_tile_entry {
+	uint32	x;		// pixel X of tile top-left
+	uint32	y;		// pixel Y of tile top-left
+	uint8	color;	// fill value (0-255)
+};
+
+// Set up the tile fill pipeline: upload fill kernel, configure
+// output surface (width × height), no CURBE needed.
+status_t media_pipeline_setup_tile_fill(media_pipeline_context* ctx,
+	uint32 width, uint32 height);
+
+// Submit up to 400 tile fills in a single batch.
+status_t submit_tile_fill_batch(media_pipeline_context* ctx,
+	const gpu_tile_entry* tiles, uint32 count);
+
 
 #endif // MEDIA_PIPELINE_H

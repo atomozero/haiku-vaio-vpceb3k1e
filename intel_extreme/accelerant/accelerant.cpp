@@ -551,7 +551,19 @@ intel_init_accelerant(int device)
 	// against its writes — every marker failed to fire, INSTDONE bit 8
 	// IS stalled, IPEHR returned a command fragment matching neither
 	// our batch nor any known command. Stay synchronous.
-	media_pipeline_run_mc_bench();
+	// Draw a GPU-accelerated triangle directly to screen!
+	render_draw_triangle(0xFFFF0000,
+		400.0f, 100.0f,    // top (red)
+		200.0f, 500.0f,    // bottom-left
+		600.0f, 500.0f);   // bottom-right
+	render_draw_triangle(0xFF00FF00,
+		700.0f, 150.0f,    // top (green)
+		500.0f, 550.0f,
+		900.0f, 550.0f);
+	render_draw_triangle(0xFF0000FF,
+		1000.0f, 200.0f,   // top (blue)
+		800.0f, 600.0f,
+		1200.0f, 600.0f);
 #endif
 
 	return B_OK;

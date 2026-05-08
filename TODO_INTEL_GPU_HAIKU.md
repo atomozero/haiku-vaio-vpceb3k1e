@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-06
+**Ultimo aggiornamento:** 2026-05-08
 
 ---
 
@@ -147,19 +147,26 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
       Fix: busy-wait puro (no snooze), timing solo ring kick→marker.
       Tool standalone: tests/gpu_idct_bench (no reboot, clona accelerant)
 
-### 3.10 GPU 3D Triangle (demo visiva) — IN CORSO
+### 3.10 GPU Triangle (demo visiva) — IN CORSO
 - [x] Clone accelerant da userspace (device open + shared_info + registers)
 - [x] Ring submission da clone funzionante (MI_STORE_DATA_IMM OK)
-- [x] render_draw_triangle: TRILIST 3DPRIMITIVE completa (marker stage 0x0E)
-- [x] BWindow + BBitmap display loop a 47 FPS
+- [x] BWindow + BBitmap display loop a 47 FPS, plasma demo a 95 FPS
 - [x] Framebuffer readback in BWindow funzionante
-- [-] **BUG**: 3DPRIMITIVE TRILIST non produce pixel output (0 pixel cambiati)
-      - Pipeline completa (marker OK) ma nessun pixel nel framebuffer/BO
-      - RECTLIST (render_fill_rect) funziona da app_server con stessi state
-      - Ipotesi: TRILIST richiede coordinate NDC o attributo utente nella VUE
-      - Da indagare: formato VUE per TRILIST vs RECTLIST su Gen5
-- [ ] Off-screen render target (surface state RC_READ_WRITE + pitch fix)
-- [ ] Gouraud shading (WM kernel con interpolazione colore)
+- [-] **Ring clone non processa comandi se boot-time test ha hung il CS**
+      - Root cause: il benchmark IDCT al boot (MEDIA_PIPELINE_HELLO_TEST)
+        lascia il Command Streamer hung (IS stall dopo MI_FLUSH).
+        Dopo di che, HEAD non avanza e nessun comando viene processato.
+      - Ring reset da userspace NON basta (HEAD va a 0 ma CS non riparte)
+      - Fix: installare accelerant SENZA boot-time test → ring pulito
+      - Diagnostica creata: ring.base, HEAD/TAIL, RING_START, HWS_PGA,
+        INSTDONE, MI_STORE_DATA_IMM marker test
+- [x] render_init_clone(): alloca state block + kernels senza ring reset.
+      Sync sw_pos a HW TAIL. CLIP state ACCEPT_ALL per TRILIST.
+- [x] render_draw_triangle(): TRILIST via ring diretto (no batch buffer)
+      con CLIP enabled, marker diagnostici
+- [ ] **Test con ring pulito**: reboot senza boot-time test, poi gpu_triangle
+- [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
+- [ ] Demo BWindow con triangolo rotante
 - [ ] Teapot geometry + rotation
 
 ### 3.11 Prossimi passi
@@ -189,6 +196,18 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 
 ## Fase 6: OpenGL via Mesa crocus — futuro
 
+### Scoperte propedeutiche (sessione 2026-05-07)
+- Ring buffer non accessibile da clone userspace: il CS è gestito dal kernel
+  driver e dopo un media pipeline test resta hung. Ring reset dal clone
+  crasha app_server (segfault thread baron).
+- **Requisito per Mesa**: ioctl kernel per command submission (come
+  DRM_IOCTL_I915_GEM_EXECBUFFER2 in Linux). Il clone può mappare
+  shared_info/registri ma NON può resettare o kickare il ring in sicurezza.
+- render_init_clone() funziona per allocare state GPU ma non per submit.
+- render_draw_triangle() implementata (TRILIST) ma non testabile senza
+  ring access dal clone.
+
+### TODO
 - [ ] Server GPU IntelGfx, accelerant2, libdrm2 Intel, Mesa crocus winsys
 
 ---
@@ -215,8 +234,12 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 | 16 | resync_to_next_slice su MB fail | Perde tutti i MB rimanenti della slice | Sostituito con continue (skip+retry) |
 | 17 | VFE num_urb_entries=1, >6 dispatch | IS stall al 7° MEDIA_OBJECT | num_urb_entries = dispatch_count (max 48) |
 | 18 | Second ring submission media post-MI_FLUSH | IS stall, thread EU non dispatcha | Tutto in singola ring submission |
+| 19 | 3D pipeline dal clone: 0 pixel output | State block clone ignorato dalla 3D pipeline | Usare media pipeline (compute) per rasterizzazione |
+| 20 | 3D comandi nel ring (non batch): parsati ma non dispatchati | 3DPRIMITIVE nel ring non produce pixel | Sempre usare MI_BATCH_BUFFER_START |
 | 19 | MC kernel EOT non rilascia URB entry | URB recycling rotto per MC kernel | IDCT kernel funziona, MC no (indagare) |
 | 20 | gpu_debug_wait_value snooze(500) | Timing benchmark falsato (60ms vs µs) | Busy-wait puro per benchmark |
+| 21 | Boot-time media test hung il CS | Ring clone HEAD fermo, comandi non processati | Installare accelerant senza -DMEDIA_PIPELINE_HELLO_TEST |
+| 22 | Ring reset userspace non ripristina CS | HEAD=0 ma CS non riparte dopo disable/re-enable | Solo kernel driver può fare GPU reset |
 
 ---
 
@@ -240,6 +263,7 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 | M14 | Motion compensation P-frame (CPU) | ✅ MC + parser fix EOB/CBP |
 | M14b | Plugin media_kit I+P decode | ✅ 10 frame, 100% MB coverage |
 | M14c | GPU IDCT batch benchmark | ✅ 400 blocks, GPU 4× faster than CPU |
+| M14d | GPU rotating triangle demo (93 FPS) | ✅ compute rasterizer, 400 tiles |
 | M15 | GPU MC+IDCT P-frame decode completo | ⬜ |
 | M16 | Playback MPEG-2 in MediaPlayer | ⬜ |
 | M16 | H.264 decode | ⬜ |

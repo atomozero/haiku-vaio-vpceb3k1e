@@ -166,6 +166,7 @@ const uint32 gen5_wm_kernel_solid[] = {
 // vertex buffer start (0x300).  Used by ring-health probe and by
 // render_fill_rect pre/post batch markers.  Must NOT overlap any
 // live state — writing the markers to base+0 corrupts vs[0].
+#define STATE_CLIP_OFFSET		0x280	// CLIP state for TRILIST (ACCEPT_ALL)
 #define STATE_MARKER_OFFSET		0x2C0
 #define STATE_VERTEX_OFFSET		0x300
 #define STATE_TOTAL_SIZE		0x800	// includes batch area at 0x400+
@@ -498,6 +499,24 @@ render_init_clone()
 	vs[4] = ((URB_VS_ENTRIES >> 2) << 11)
 		| ((URB_VS_ENTRY_SIZE - 1) << 19);
 	vs[6] = (1 << 1);
+
+	// CLIP state (CLIPMODE_ACCEPT_ALL — required for TRILIST)
+	// Gen5 CLIP unit state: 8 DWORDs
+	// DW0-3: thread config (all 0 for ACCEPT_ALL — no clip kernel needed)
+	// DW4 (thread4): nr_urb_entries, urb_entry_alloc_size, max_threads
+	// DW5 (clip5): clip_mode at bits [2:0] — 4 = ACCEPT_ALL
+	uint32* clip = (uint32*)(base + STATE_CLIP_OFFSET);
+	clip[0] = 0;  // no kernel
+	clip[1] = 0;
+	clip[2] = 0;
+	clip[3] = 0;
+	// DW4: nr_urb_entries=6 (bits[12:6]), urb_entry_alloc_size=0 (bits[18:14]),
+	//       max_threads=1 (bits[24:20] for ILK, 0-based)
+	clip[4] = (6 << 6) | (0 << 14) | (0 << 20);
+	// DW5: clip_mode = ACCEPT_ALL (4) at bits [2:0]
+	clip[5] = 4;  // GEN5_CLIPMODE_ACCEPT_ALL
+	clip[6] = 0;
+	clip[7] = 0;
 
 	// SF state
 	uint32 sfKernelOff = stateOff + STATE_SF_KERNEL_OFFSET;
@@ -850,8 +869,10 @@ render_draw_triangle(uint32 color,
 
 	STAGE_T(0x01);  // entered ring
 
-	EMIT_T(MI_FLUSH_CMD);
-	STAGE_T(0x02);  // MI_FLUSH done
+	// MI_FLUSH with State Instruction Cache Invalidate — critical for
+	// clone rendering where the GPU cache has stale state from app_server.
+	EMIT_T(MI_FLUSH_CMD | (1 << 1));
+	STAGE_T(0x02);  // MI_FLUSH + cache invalidate done
 
 	EMIT_T(CMD_PIPELINE_SELECT | PIPELINE_SELECT_3D);
 	STAGE_T(0x03);  // PIPELINE_SELECT done
@@ -878,8 +899,9 @@ render_draw_triangle(uint32 color,
 
 	EMIT_T(CMD_PIPELINED_POINTERS);
 	EMIT_T(stateBase + STATE_VS_OFFSET);
-	EMIT_T(0);
-	EMIT_T(0);
+	EMIT_T(0);  // GS disabled
+	// CLIP: pointer to CLIP_STATE | bit 0 = CLIP_ENABLE
+	EMIT_T((stateBase + STATE_CLIP_OFFSET) | 1);
 	EMIT_T(stateBase + STATE_SF_OFFSET);
 	EMIT_T(stateBase + STATE_WM_OFFSET);
 	EMIT_T(stateBase + STATE_CC_OFFSET);
@@ -901,22 +923,34 @@ render_draw_triangle(uint32 color,
 	STAGE_T(0x09);  // BINDING_TABLE done
 
 	EMIT_T(CMD_VERTEX_BUFFERS | 3);
-	EMIT_T((0 << 26) | (8 << 0));
+	EMIT_T((0 << 26) | (8 << 0));  // stride 8 bytes (X,Y floats)
 	EMIT_T(stateBase + STATE_VERTEX_OFFSET);
 	EMIT_T(stateBase + STATE_VERTEX_OFFSET + 3 * 8 - 1);
 	EMIT_T(0);
 	STAGE_T(0x0A);  // VERTEX_BUFFERS done
 
-	EMIT_T(CMD_VERTEX_ELEMENTS | 1);
+	// Vertex format: 2 elements matching SNA gen5_render.c VUE layout.
+	// Element 0: VUE header pad [0,0,0,0]
+	// Element 1: Position [X,Y,1.0,1.0]
+	EMIT_T(CMD_VERTEX_ELEMENTS | 3);
+	EMIT_T((0 << 27) | (1 << 26) | (FORMAT_R32G32_FLOAT << 16) | 0);
+	EMIT_T((VFCOMP_STORE_0 << 28) | (VFCOMP_STORE_0 << 24)
+		| (VFCOMP_STORE_0 << 20) | (VFCOMP_STORE_0 << 16));
 	EMIT_T((0 << 27) | (1 << 26) | (FORMAT_R32G32_FLOAT << 16) | 0);
 	EMIT_T((VFCOMP_STORE_SRC << 28) | (VFCOMP_STORE_SRC << 24)
-		| (VFCOMP_STORE_0 << 20) | (VFCOMP_STORE_1_FP << 16));
+		| (VFCOMP_STORE_1_FP << 20) | (VFCOMP_STORE_1_FP << 16));
 	STAGE_T(0x0B);  // VERTEX_ELEMENTS done
 
 	STAGE_T(0x0C);  // before 3DPRIMITIVE
 
-	// 3DPRIMITIVE — TRILIST!
-	EMIT_T(CMD_3DPRIMITIVE | (PRIM_TRILIST << 10) | (6 - 2));
+	// Try RECTLIST first (known working from app_server), then TRILIST.
+	// Toggle via a static flag to test both from the same binary.
+	static int sUseTrilist = 0;
+	int prim = (sUseTrilist++ & 1) ? PRIM_TRILIST : PRIM_RECTLIST;
+	TRACE("render_draw_triangle: using %s\n",
+		prim == PRIM_TRILIST ? "TRILIST" : "RECTLIST");
+
+	EMIT_T(CMD_3DPRIMITIVE | (prim << 10) | (6 - 2));
 	EMIT_T(3);
 	EMIT_T(0);
 	EMIT_T(1);
@@ -933,53 +967,58 @@ render_draw_triangle(uint32 color,
 
 	asm volatile("mfence" ::: "memory");
 
-	TRACE("render_draw_triangle: %d DWORDs to ring\n", bp);
+	// MI_BATCH_BUFFER_END (required when using MI_BATCH_BUFFER_START)
+	EMIT_T(MI_BATCH_BUFFER_END);
+	if (bp & 1)
+		EMIT_T(MI_NOOP);
 
+	asm volatile("mfence" ::: "memory");
+
+	TRACE("render_draw_triangle: %d DWORDs in batch at GTT 0x%x\n",
+		bp, batchGTT);
+
+	// Submit via MI_BATCH_BUFFER_START — 3D commands MUST go through
+	// batch buffers on Gen5, NOT directly in the ring!
 	{
 		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
 		QueueCommands queue(ring);
-		queue.MakeSpace(bp);
-		for (int i = 0; i < bp; i++)
-			queue.Write(batch[i]);
+
+		// Pre-batch marker
+		queue.MakeSpace(4);
+		queue.Write((0x20 << 23) | (1 << 22) | 2);
+		queue.Write(0);
+		queue.Write(markerGTT);
+		queue.Write(0xAA000001);
+
+		// MI_BATCH_BUFFER_START
+		queue.MakeSpace(2);
+		queue.Write(MI_BATCH_BUFFER_START);
+		queue.Write(batchGTT);
+
+		// Post-batch marker
+		queue.MakeSpace(4);
+		queue.Write((0x20 << 23) | (1 << 22) | 2);
+		queue.Write(0);
+		queue.Write(markerGTT);
+		queue.Write(0xAA00000F);
 	}
 
 	snooze(50000);
 	uint32 marker = *(volatile uint32*)(sRenderState.base
 		+ STATE_MARKER_OFFSET);
 
-	// Decode which stage we reached
-	uint32 stage = marker & 0xFF;
-	const char* stageName = "???";
-	switch (stage) {
-		case 0x00: stageName = "NOTHING (ring broken?)"; break;
-		case 0x01: stageName = "entered ring"; break;
-		case 0x02: stageName = "MI_FLUSH"; break;
-		case 0x03: stageName = "PIPELINE_SELECT"; break;
-		case 0x04: stageName = "STATE_BASE_ADDRESS"; break;
-		case 0x05: stageName = "URB_FENCE"; break;
-		case 0x06: stageName = "CS_URB_STATE"; break;
-		case 0x07: stageName = "PIPELINED_POINTERS"; break;
-		case 0x08: stageName = "DRAWING_RECTANGLE"; break;
-		case 0x09: stageName = "BINDING_TABLE"; break;
-		case 0x0A: stageName = "VERTEX_BUFFERS"; break;
-		case 0x0B: stageName = "VERTEX_ELEMENTS"; break;
-		case 0x0C: stageName = "before 3DPRIMITIVE"; break;
-		case 0x0D: stageName = "after 3DPRIMITIVE"; break;
-		case 0x0E: stageName = "after MI_FLUSH (DONE!)"; break;
-	}
+	const char* result;
+	if (marker == 0xAA00000F)
+		result = "BATCH COMPLETED (post-marker OK)";
+	else if (marker == 0xAA000001)
+		result = "PRE-BATCH ONLY (batch hung inside)";
+	else if ((marker & 0xFF000000) == 0xAA000000)
+		result = "BATCH IN PROGRESS (stuck at stage)";
+	else
+		result = "NO MARKERS (ring not processing)";
 
-	TRACE("render_draw_triangle: marker=0x%08x → stage 0x%02x = %s\n",
-		marker, stage, stageName);
-	printf("  marker=0x%08x → stage 0x%02x = %s\n",
-		marker, stage, stageName);
-
-	if (stage >= 0x0E) {
-		printf("  >>> TRIANGLE RENDERED! <<<\n");
-	} else {
-		printf("  HUNG at: %s\n", stageName);
-		printf("  INSTDONE=0x%08x IPEHR=0x%08x\n",
-			read32(0x206C), read32(0x2068));
-	}
+	TRACE("render_draw_triangle: marker=0x%08x — %s\n", marker, result);
+	printf("  marker=0x%08x — %s\n", marker, result);
 
 	return B_OK;
 }
