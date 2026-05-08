@@ -194,21 +194,33 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 
 ---
 
-## Fase 6: OpenGL via Mesa crocus — futuro
+## Fase 6: OpenGL via Mesa crocus — ROADMAP
 
-### Scoperte propedeutiche (sessione 2026-05-07)
-- Ring buffer non accessibile da clone userspace: il CS è gestito dal kernel
-  driver e dopo un media pipeline test resta hung. Ring reset dal clone
-  crasha app_server (segfault thread baron).
-- **Requisito per Mesa**: ioctl kernel per command submission (come
-  DRM_IOCTL_I915_GEM_EXECBUFFER2 in Linux). Il clone può mappare
-  shared_info/registri ma NON può resettare o kickare il ring in sicurezza.
-- render_init_clone() funziona per allocare state GPU ma non per submit.
-- render_draw_triangle() implementata (TRILIST) ma non testabile senza
-  ring access dal clone.
+### Scoperte propedeutiche (sessione 2026-05-08)
+- Ring buffer accessibile da clone userspace: NON resettare il ring (il CS
+  di app_server è vivo). Sincronizzare solo la sw_pos con TAIL hardware.
+  gpu_idct_bench e gpu_triangle funzionano dal clone a 93 FPS.
+- Ring reset dal clone UCCIDE il CS — non farlo mai.
+- render_init_clone(): alloca state GPU, sincronizza ring position, funziona.
+- MI_BATCH_BUFFER_START: necessario per Mesa (crocus invia batch buffer,
+  mai comandi diretti nel ring). Da testare dal clone.
 
-### TODO
-- [ ] Server GPU IntelGfx, accelerant2, libdrm2 Intel, Mesa crocus winsys
+### Roadmap Mesa (Option B: winsys shim — percorso più corto)
+- [ ] **Step 1**: Fake device node con GETPARAM + GET_APERTURE (chipset_id=0x0046)
+- [ ] **Step 2**: GEM_CREATE/CLOSE/MMAP → wrapper su INTEL_ALLOCATE_GRAPHICS_MEMORY
+      GEM handle = indice in tabella {cpu_addr, gtt_offset, size}
+- [ ] **Step 3**: GEM_CONTEXT_CREATE + GEM_WAIT → stub (ctx_id=1, HWS polling)
+- [ ] **Step 4**: **GEM_EXECBUFFER2** — il cuore:
+      riceve batch BO + exec_objects[] con relocations → patcha indirizzi GTT
+      nel batch BO → MI_BATCH_BUFFER_START nel ring → kick TAIL → wait HWS
+      (~150 righe di relocation patching, nostro GTT è flat: offset = addr - base)
+- [ ] **Step 5**: Shim libdrm per Haiku (header drm-uapi + thin ioctl wrapper)
+- [ ] **Step 6**: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
+- [ ] **Step 7**: Collegare output crocus al framebuffer LVDS (CPU-copy BO → fb)
+
+### Prossimo passo immediato
+- [ ] MI_BATCH_BUFFER_START dal clone (batch buffer in GPU memory → ring kick)
+      Questo è il prerequisito per EXECBUFFER2 e per TRILIST su hardware 3D
 
 ---
 
