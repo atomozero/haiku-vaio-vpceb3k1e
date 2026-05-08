@@ -11,7 +11,12 @@ CXXFLAGS = -Wall -O2 -fPIC \
 	-I/boot/system/develop/headers/os/interface \
 	-I/boot/system/develop/headers/os/app \
 	-I/boot/system/develop/headers/private/media \
-	-I/boot/system/develop/headers/private/graphics/intel_extreme
+	-I/boot/system/develop/headers/private/graphics/intel_extreme \
+	-I/boot/system/develop/headers/private/graphics/common \
+	-I/boot/system/develop/headers/os/add-ons/graphics \
+	-I/boot/system/develop/headers/os/drivers \
+	-I/boot/system/develop/headers/private/graphics \
+	-I/boot/system/develop/headers/private/shared
 
 LDFLAGS_PLUGIN = -shared
 LIBS_PLUGIN = -lbe -lmedia -lstdc++
@@ -19,7 +24,7 @@ LIBS_VIEWER = -lbe -lstdc++
 
 PARSER_SRC = ../accelerant/mpeg2_parser.cpp
 
-PLUGIN_SOURCES = mpeg2_decoder_plugin.cpp $(PARSER_SRC)
+PLUGIN_SOURCES = mpeg2_decoder_plugin.cpp gpu_idct.cpp $(PARSER_SRC)
 PLUGIN_TARGET = mpeg2_decoder.so
 
 VIEWER_SOURCES = mpeg2_viewer.cpp gpu_idct.cpp $(PARSER_SRC)

@@ -17,9 +17,12 @@
 
 #include "mpeg2_parser.h"
 #include "idct_ref.h"
+#include "gpu_idct.h"
 
 
 #define LOG(fmt, ...) fprintf(stderr, "mpeg2_plugin: " fmt, ##__VA_ARGS__)
+
+static int32 sGpuRefCount = 0;
 
 
 // ---------------------------------------------------------------------------
@@ -153,6 +156,27 @@ private:
 	uint32				fFrameNum;
 	media_format		fOutputFormat;
 
+	// GPU IDCT batch
+	static const uint32 kMaxBatch = GPU_IDCT_MAX_BATCH;
+	struct BatchEntry {
+		uint8*	dstPlane;
+		uint32	stride;
+		uint32	bx, by;
+		uint32	pw, ph;
+		bool	isInter;
+		uint8	mcRef[64];
+	};
+	int16				fBatchIn[GPU_IDCT_MAX_BATCH][64];
+	int16				fBatchOut[GPU_IDCT_MAX_BATCH][64];
+	BatchEntry			fBatchMeta[GPU_IDCT_MAX_BATCH];
+	uint32				fBatchCount;
+
+	void				_EnqueueBlock(const int16 coeffs[64],
+							uint8* plane, uint32 stride,
+							uint32 bx, uint32 by, uint32 pw, uint32 ph,
+							bool isInter, const uint8* mcRef);
+	void				_FlushBatch();
+
 	// Reference frame for P-frame motion compensation
 	uint8*				fRefY;
 	uint8*				fRefCb;
@@ -174,12 +198,22 @@ MPEG2Decoder::MPEG2Decoder()
 {
 	memset(&fDec, 0, sizeof(fDec));
 	memset(&fOutputFormat, 0, sizeof(fOutputFormat));
+	fBatchCount = 0;
+
+	if (atomic_add(&sGpuRefCount, 1) == 0) {
+		if (gpu_idct_init() == B_OK)
+			LOG("GPU IDCT enabled\n");
+		else
+			LOG("GPU IDCT not available, using CPU fallback\n");
+	}
 }
 
 
 MPEG2Decoder::~MPEG2Decoder()
 {
 	_FreeReference();
+	if (atomic_add(&sGpuRefCount, -1) == 1)
+		gpu_idct_uninit();
 }
 
 
@@ -280,6 +314,67 @@ MPEG2Decoder::SeekedTo(int64 frame, bigtime_t time)
 // Picture decode — handles both I and P frames
 // ---------------------------------------------------------------------------
 
+void
+MPEG2Decoder::_EnqueueBlock(const int16 coeffs[64],
+	uint8* plane, uint32 stride, uint32 bx, uint32 by,
+	uint32 pw, uint32 ph, bool isInter, const uint8* mcRef)
+{
+	uint32 idx = fBatchCount;
+	memcpy(fBatchIn[idx], coeffs, 128);
+	BatchEntry& e = fBatchMeta[idx];
+	e.dstPlane = plane;
+	e.stride = stride;
+	e.bx = bx;
+	e.by = by;
+	e.pw = pw;
+	e.ph = ph;
+	e.isInter = isInter;
+	if (isInter && mcRef)
+		memcpy(e.mcRef, mcRef, 64);
+	fBatchCount++;
+
+	if (fBatchCount >= kMaxBatch)
+		_FlushBatch();
+}
+
+
+void
+MPEG2Decoder::_FlushBatch()
+{
+	if (fBatchCount == 0)
+		return;
+
+	uint32 count = fBatchCount;
+
+	// GPU path: batch IDCT
+	if (gpu_idct_available()
+		&& gpu_idct_process(fBatchIn, fBatchOut, count) == B_OK) {
+		// GPU succeeded
+	} else {
+		// CPU fallback
+		for (uint32 i = 0; i < count; i++)
+			compute_idct_reference(fBatchIn[i], fBatchOut[i]);
+	}
+
+	// Apply results to output planes
+	for (uint32 i = 0; i < count; i++) {
+		BatchEntry& e = fBatchMeta[i];
+		uint8 pix[64];
+		if (e.isInter) {
+			for (int j = 0; j < 64; j++)
+				pix[j] = clamp8((int32)e.mcRef[j] + (int32)fBatchOut[i][j]);
+		} else {
+			for (int j = 0; j < 64; j++)
+				pix[j] = clamp8(fBatchOut[i][j]);
+		}
+		write_block(e.dstPlane, e.stride, e.pw, e.ph,
+			e.bx, e.by, pix, 8, 8);
+	}
+
+	fBatchCount = 0;
+}
+
+
 status_t
 MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 	uint8* yPlane, uint8* cbPlane, uint8* crPlane)
@@ -371,23 +466,19 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 				mb.quantiser_scale_code, fDec.pic_ext.q_scale_type);
 
 			if (mb.mb_type & MB_INTRA) {
-				// Intra MB: no MC, just IDCT
+				// Intra MB: no MC, just IDCT → enqueue for GPU batch
 				if (is_p) {
 					fDec.mv_pred_h = 0;
 					fDec.mv_pred_v = 0;
 				}
-				for (int b = 0; b < 4; b++) {
-					uint8 pix[64];
-					decode_intra_pixels(mb.blocks[b], pix);
-					write_block(yPlane, w, w, h,
-						mbx * 16 + ydx[b], mby * 16 + ydy[b], pix, 8, 8);
-				}
-				for (int cc = 0; cc < 2; cc++) {
-					uint8 pix[64];
-					decode_intra_pixels(mb.blocks[4 + cc], pix);
-					write_block(cc == 0 ? cbPlane : crPlane, cw, cw, ch,
-						mbx * 8, mby * 8, pix, 8, 8);
-				}
+				for (int b = 0; b < 4; b++)
+					_EnqueueBlock(mb.blocks[b], yPlane, w,
+						mbx * 16 + ydx[b], mby * 16 + ydy[b],
+						w, h, false, NULL);
+				for (int cc = 0; cc < 2; cc++)
+					_EnqueueBlock(mb.blocks[4 + cc],
+						cc == 0 ? cbPlane : crPlane, cw,
+						mbx * 8, mby * 8, cw, ch, false, NULL);
 			} else if (is_p && fHasReference) {
 				// Inter MB with forward motion compensation
 				int16 mv_h = mb.motion_h;
@@ -402,9 +493,8 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 						mc_ref_block, 8, 8);
 
 					if (mb.coded_block_pattern & (1 << (5 - b))) {
-						uint8 pix[64];
-						decode_inter_pixels(mb.blocks[b], mc_ref_block, pix);
-						write_block(yPlane, w, w, h, bx, by, pix, 8, 8);
+						_EnqueueBlock(mb.blocks[b], yPlane, w,
+							bx, by, w, h, true, mc_ref_block);
 					} else {
 						write_block(yPlane, w, w, h, bx, by,
 							mc_ref_block, 8, 8);
@@ -423,10 +513,8 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 						mc_ref_block, 8, 8);
 
 					if (mb.coded_block_pattern & (1 << (1 - cc))) {
-						uint8 pix[64];
-						decode_inter_pixels(mb.blocks[4 + cc],
-							mc_ref_block, pix);
-						write_block(plane, cw, cw, ch, cx, cy, pix, 8, 8);
+						_EnqueueBlock(mb.blocks[4 + cc], plane, cw,
+							cx, cy, cw, ch, true, mc_ref_block);
 					} else {
 						write_block(plane, cw, cw, ch, cx, cy,
 							mc_ref_block, 8, 8);
@@ -438,6 +526,9 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 			mbx++;
 		}
 	}
+
+	// Flush remaining batched blocks
+	_FlushBatch();
 
 	return (mbDecoded > 0) ? B_OK : B_ERROR;
 }

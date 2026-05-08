@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <OS.h>
 #include <intel_extreme.h>
@@ -320,7 +321,10 @@ gpu_idct_init(void)
 		return B_OK;
 
 	// Open device
-	sCtx.device_fd = open("/dev/graphics/intel_extreme/0", O_RDWR);
+	// Try both device path formats
+	sCtx.device_fd = open("/dev/graphics/intel_extreme_000200", O_RDWR);
+	if (sCtx.device_fd < 0)
+		sCtx.device_fd = open("/dev/graphics/intel_extreme/0", O_RDWR);
 	if (sCtx.device_fd < 0) {
 		LOG("cannot open GPU device\n");
 		return B_ERROR;
