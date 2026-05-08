@@ -128,15 +128,11 @@ frame_copy(frame_planes* dst, const frame_planes* src)
 static void
 decode_intra_pixels(const int16 coeffs[64], uint8 pixels[64])
 {
-	// Batch IDCT via GPU (or CPU fallback)
-	memcpy(sIdctInputBatch[sIdctBatchCount], coeffs, 128);
-	uint32 idx = sIdctBatchCount++;
-	if (sIdctBatchCount >= IDCT_BATCH_SIZE)
-		flush_idct_batch();
-	else if (idx == sIdctBatchCount - 1) {
-		// Not flushed yet — need result now, flush
-		flush_idct_batch();
-	}
+	// Enqueue + flush immediately (result needed now)
+	uint32 idx = sIdctBatchCount;
+	memcpy(sIdctInputBatch[idx], coeffs, 128);
+	sIdctBatchCount++;
+	flush_idct_batch();
 	for (int i = 0; i < 64; i++)
 		pixels[i] = clamp8(sIdctOutputBatch[idx][i]);
 }
@@ -145,14 +141,12 @@ static void
 decode_inter_pixels(const int16 coeffs[64], const uint8 mc_ref[64],
 	uint8 pixels[64])
 {
-	memcpy(sIdctInputBatch[sIdctBatchCount], coeffs, 128);
-	uint32 idx = sIdctBatchCount++;
-	if (sIdctBatchCount >= IDCT_BATCH_SIZE)
-		flush_idct_batch();
-	else
-		flush_idct_batch();  // Need result immediately
+	uint32 idx = sIdctBatchCount;
+	memcpy(sIdctInputBatch[idx], coeffs, 128);
+	sIdctBatchCount++;
+	flush_idct_batch();
 	for (int i = 0; i < 64; i++)
-		pixels[i] = clamp8((int32)mc_ref[i] + (int32)idct[i]);
+		pixels[i] = clamp8((int32)mc_ref[i] + (int32)sIdctOutputBatch[idx][i]);
 }
 
 static void
