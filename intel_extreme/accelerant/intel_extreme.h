@@ -1545,6 +1545,7 @@ struct intel_brightness_legacy {
 #define MI_NOOP							0x00000000
 #define MI_FLUSH						(0x04 << 23)
 #define MI_BATCH_BUFFER_START			(0x31 << 23)
+#define MI_BATCH_GTT					(2 << 6)	// Gen4/5: GGTT address space
 #define MI_BATCH_BUFFER_END				(0x0A << 23)
 #define MI_STORE_DWORD_INDEX			((0x21 << 23) | (1 << 0))
 	// bit 0 = use DWORD index (not byte offset)

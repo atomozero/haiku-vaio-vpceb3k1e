@@ -168,7 +168,7 @@ static const uint32 kIqOnlyV3Kernel[][4] = {
 #define VFE_STATE_BO_SIZE	64		// struct i965_vfe_state = 24 bytes, pad to 64
 #define IDRT_BO_SIZE		64		// one interface descriptor = 16 bytes, pad
 #define CURBE_BO_SIZE		1024	// up to 30 GRFs (libva MPEG-2 ABI)
-#define OUTPUT_BO_SIZE		65536	// where the kernel writes its result (up to 16K FP32)
+#define OUTPUT_BO_SIZE		262144	// 256KB — supports up to 512x512 pixel output
 #define MARKER_BO_SIZE		256		// 32 DWORDs of marker slots
 #define SURFACE_STATE_BO_SIZE	256	// up to 8 surface states × 32 bytes stride
 #define BINDING_TABLE_BO_SIZE	64	// 1 DWORD per entry, 32-byte aligned

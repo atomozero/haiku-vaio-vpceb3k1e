@@ -799,7 +799,7 @@ render_fill_rect(uint32 color, int16 left, int16 top,
 
 		// MI_BATCH_BUFFER_START
 		queue.MakeSpace(2);
-		queue.Write(MI_BATCH_BUFFER_START);
+		queue.Write(MI_BATCH_BUFFER_START | MI_BATCH_GTT);
 		queue.Write(batchGTT);
 
 		// MI marker AFTER batch return (proves batch completed)
@@ -992,7 +992,7 @@ render_draw_triangle(uint32 color,
 
 		// MI_BATCH_BUFFER_START
 		queue.MakeSpace(2);
-		queue.Write(MI_BATCH_BUFFER_START);
+		queue.Write(MI_BATCH_BUFFER_START | MI_BATCH_GTT);
 		queue.Write(batchGTT);
 
 		// Post-batch marker

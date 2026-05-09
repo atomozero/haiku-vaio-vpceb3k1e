@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-08
+**Ultimo aggiornamento:** 2026-05-09
 
 ---
 
@@ -147,34 +147,32 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
       Fix: busy-wait puro (no snooze), timing solo ring kick→marker.
       Tool standalone: tests/gpu_idct_bench (no reboot, clona accelerant)
 
-### 3.10 GPU Triangle (demo visiva) — IN CORSO
+### 3.10 GPU 3D Cube Demo — FUNZIONANTE
 - [x] Clone accelerant da userspace (device open + shared_info + registers)
-- [x] Ring submission da clone funzionante (MI_STORE_DATA_IMM OK)
-- [x] BWindow + BBitmap display loop a 47 FPS, plasma demo a 95 FPS
-- [x] Framebuffer readback in BWindow funzionante
-- [-] **Ring clone non processa comandi se boot-time test ha hung il CS**
-      - Root cause: il benchmark IDCT al boot (MEDIA_PIPELINE_HELLO_TEST)
-        lascia il Command Streamer hung (IS stall dopo MI_FLUSH).
-        Dopo di che, HEAD non avanza e nessun comando viene processato.
-      - Ring reset da userspace NON basta (HEAD va a 0 ma CS non riparte)
-      - Fix: installare accelerant SENZA boot-time test → ring pulito
-      - Diagnostica creata: ring.base, HEAD/TAIL, RING_START, HWS_PGA,
-        INSTDONE, MI_STORE_DATA_IMM marker test
-- [x] render_init_clone(): alloca state block + kernels senza ring reset.
-      Sync sw_pos a HW TAIL. CLIP state ACCEPT_ALL per TRILIST.
-- [x] render_draw_triangle(): TRILIST via ring diretto (no batch buffer)
-      con CLIP enabled, marker diagnostici
-- [ ] **Test con ring pulito**: reboot senza boot-time test, poi gpu_triangle
-- [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
-- [ ] Demo BWindow con triangolo rotante
-- [ ] Teapot geometry + rotation
+- [x] Compute rasterizer: cubo 3D con 48 EU thread paralleli
+  - Rotazione + proiezione prospettica + backface culling + lighting
+  - Painter's algorithm (Z-sort) per 6 facce colorate
+  - Tile fill kernel via media pipeline
+  - BWindow + BBitmap + Invalidate display loop
+- [x] Benchmark IDCT 400 blocchi — **GPU 4× faster than CPU**
+  - GPU: 100-126 µs, CPU: 351-475 µs → speedup 3.5-4.0×
+  - Tool standalone: tests/gpu_idct_bench (no reboot)
+- [x] Cubo 3D demo: 480×480 raster, 720×720 finestra, 21 FPS
+  - GPU tile fill: ~100 µs/frame (260 tiles)
+  - Bottleneck: app_server Invalidate→Draw round-trip (~47 ms)
+  - BDirectWindow tentato ma VRAM write-combining più lento (11 FPS)
+- [-] Ring clone: ring reset funziona (HEAD/TAIL=0) ma CS non riparte
+      dopo boot-time test con media pipeline. Diagnostica completa.
+- [ ] **Framebuffer blit via BLT engine** — bypass app_server per display
+      diretto, propedeutico a Mesa. XY_SRC_COPY_BLT da staging a screen.
 
 ### 3.11 Prossimi passi
+- [ ] **BLT blit al framebuffer**: XY_SRC_COPY_BLT da output_bo a screen FB
 - [ ] GPU IDCT nel plugin (sostituire compute_idct_reference con GPU dispatch)
 - [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
+- [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
 - [ ] IDCT IEEE 1180 (sostituire cosine table)
 - [ ] B-frame support
-- [ ] Framebuffer blit post-modeset
 
 ---
 
@@ -275,8 +273,9 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 | M14 | Motion compensation P-frame (CPU) | ✅ MC + parser fix EOB/CBP |
 | M14b | Plugin media_kit I+P decode | ✅ 10 frame, 100% MB coverage |
 | M14c | GPU IDCT batch benchmark | ✅ 400 blocks, GPU 4× faster than CPU |
-| M14d | GPU rotating triangle demo (93 FPS) | ✅ compute rasterizer, 400 tiles |
-| M15 | GPU MC+IDCT P-frame decode completo | ⬜ |
-| M16 | Playback MPEG-2 in MediaPlayer | ⬜ |
-| M16 | H.264 decode | ⬜ |
+| M14d | GPU 3D cube demo (compute rasterizer) | ✅ 480×480, 21 FPS, 48 EU threads |
+| M15 | BLT framebuffer blit (bypass app_server) | ⬜ |
+| M16 | GPU MC+IDCT P-frame decode completo | ⬜ |
+| M17 | Playback MPEG-2 in MediaPlayer | ⬜ |
+| M18 | H.264 decode | ⬜ |
 | M17 | LLM inference su GPU | ⬜ |
