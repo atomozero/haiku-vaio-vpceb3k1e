@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-09
+**Ultimo aggiornamento:** 2026-05-10
 
 ---
 
@@ -255,9 +255,41 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 - [ ] **Step 6**: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
 - [ ] **Step 7**: Collegare output crocus al framebuffer LVDS (CPU-copy BO → fb)
 
+### Scoperte sessione 2026-05-10
+
+**IDCT benchmark corretto con busy-wait:**
+- snooze(500) nel wait loop falsava il timing GPU (60ms misurati vs ~100µs reali)
+- Fix: busy-wait puro (spin loop senza snooze) nel benchmark
+- Risultato: **GPU 3.5-4.0× più veloce della CPU** su 400 blocchi IDCT 8×8
+  - GPU: 100-126 µs (400 blocchi in parallelo, 48 EU thread + URB recycling)
+  - CPU: 351-475 µs (400 blocchi sequenziali, compute_idct_reference -O2)
+- Tool standalone: tests/gpu_idct_bench (no reboot, output su terminale)
+
+**Ring clone — analisi completa:**
+- Ring funziona dal clone per media pipeline + BLT (cube demo OK)
+- Ring NON funziona dopo che il cube demo (o qualsiasi media pipeline)
+  ha riempito il ring → CS si blocca su MI_FLUSH post-MEDIA_OBJECT
+  (stesso bug IS stall documentato in sessione precedente)
+- Diagnostica: HEAD=0x5134 fisso con TAIL=0xCA20 (31KB di comandi pending)
+- MMIO register writes funzionano dal clone (TAIL si aggiorna)
+- ring.base == graphics_memory (VA corretto, non serve remap)
+- HWS_PGA=0x1ffff000 (HW Status Page configurato dal kernel)
+- Problema fondamentale: **il CS si blocca dopo N media dispatches** perché
+  MI_FLUSH non completa (IS stall). Una volta bloccato, il ring è morto.
+  Solo un reboot o un ILK_GDSR reset può riportarlo in vita.
+
+**Triangolo 3D TRILIST — stato:**
+- render_draw_triangle implementato con CLIP ACCEPT_ALL + VUE header
+- Non testabile finché il ring è dead (serve boot fresco senza cube demo)
+- Approccio: boot pulito → test TRILIST prima di qualsiasi media pipeline
+
 ### Prossimo passo immediato
-- [ ] MI_BATCH_BUFFER_START dal clone (batch buffer in GPU memory → ring kick)
-      Questo è il prerequisito per EXECBUFFER2 e per TRILIST su hardware 3D
+- [ ] Boot fresco (no test accelerant, no cube demo) → test _tri_test
+      per verificare TRILIST su ring pulito
+- [ ] Se TRILIST funziona: integrare in demo visiva (cubo con 3D pipeline)
+- [ ] MI_BATCH_BUFFER_START dal clone — prerequisito per EXECBUFFER2
+- [ ] Fix CS hang: trovare modo di resettare CS dopo media pipeline
+      senza reboot (ILK_GDSR o kernel ioctl)
 
 ---
 
@@ -285,10 +317,10 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 | 18 | Second ring submission media post-MI_FLUSH | IS stall, thread EU non dispatcha | Tutto in singola ring submission |
 | 19 | 3D pipeline dal clone: 0 pixel output | State block clone ignorato dalla 3D pipeline | Usare media pipeline (compute) per rasterizzazione |
 | 20 | 3D comandi nel ring (non batch): parsati ma non dispatchati | 3DPRIMITIVE nel ring non produce pixel | Sempre usare MI_BATCH_BUFFER_START |
-| 19 | MC kernel EOT non rilascia URB entry | URB recycling rotto per MC kernel | IDCT kernel funziona, MC no (indagare) |
-| 20 | gpu_debug_wait_value snooze(500) | Timing benchmark falsato (60ms vs µs) | Busy-wait puro per benchmark |
-| 21 | Boot-time media test hung il CS | Ring clone HEAD fermo, comandi non processati | Installare accelerant senza -DMEDIA_PIPELINE_HELLO_TEST |
-| 22 | Ring reset userspace non ripristina CS | HEAD=0 ma CS non riparte dopo disable/re-enable | Solo kernel driver può fare GPU reset |
+| 21 | MC kernel EOT non rilascia URB entry | URB recycling rotto per MC kernel | IDCT kernel funziona, MC no |
+| 22 | gpu_debug_wait_value snooze(500) | Timing benchmark falsato (60ms vs µs) | Busy-wait puro per benchmark |
+| 23 | Media pipeline hung → CS morto per tutti | Cube demo riempie ring, HEAD fermo, ring dead | Boot fresco, o ILK_GDSR / kernel ioctl |
+| 24 | Ring reset userspace non ripristina CS | HEAD=0 ma CS non riparte dopo disable/re-enable | Solo kernel driver può fare GPU reset |
 
 ---
 

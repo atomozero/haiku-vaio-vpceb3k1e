@@ -4348,8 +4348,14 @@ submit_tile_fill_batch(media_pipeline_context* ctx,
 	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
 	volatile uint32* slot = (volatile uint32*)(ctx->marker_bo.cpu_addr
 		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
-	uint32 timeout = 500000 + count * 5000;
-	return gpu_debug_wait_value(slot, tag, timeout) ? B_OK : B_TIMED_OUT;
+	// Pure busy-wait — snooze() adds 10-60ms of scheduler overhead
+	// which destroys frame rate in real-time rendering.
+	bigtime_t deadline = system_time() + 2000000;  // 2s safety
+	while (*slot != tag) {
+		if (system_time() > deadline)
+			return B_TIMED_OUT;
+	}
+	return B_OK;
 }
 
 

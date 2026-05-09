@@ -17,6 +17,13 @@
 
 /* Haiku intel_extreme headers */
 #include "intel_extreme.h"
+#include "lock.h"
+
+/* MI commands for ring submission */
+#define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | (2 << 6))  /* Gen4/5 GGTT */
+#define MI_NOOP_CMD               0x00000000
+#define MI_FLUSH_DRM              (0x04 << 23)
+#define MI_STORE_DATA_IMM_GGTT    ((0x20 << 23) | (1 << 22) | 2)
 
 #define MAX_BOS 4096
 
@@ -38,6 +45,10 @@ static struct {
 	gem_bo       bos[MAX_BOS];
 	uint32_t     next_handle;  /* starts at 1, 0 = invalid */
 	uint32_t     next_ctx;
+	/* Marker for batch completion tracking */
+	uint32_t     marker_gtt;   /* GTT offset of marker DWORD */
+	volatile uint32_t* marker_cpu; /* CPU pointer to marker DWORD */
+	uint32_t     marker_seq;   /* monotonic sequence number */
 } sShim;
 
 
@@ -216,18 +227,180 @@ gem_context_destroy(struct drm_i915_gem_context_destroy* args)
 }
 
 
+static inline void
+ring_write32(uint32_t offset, uint32_t value)
+{
+	*(volatile uint32_t*)(sShim.registers + offset) = value;
+}
+
+static inline uint32_t
+ring_read32(uint32_t offset)
+{
+	return *(volatile uint32_t*)(sShim.registers + offset);
+}
+
+
 static int
 gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 {
-	/* TODO: This is the critical path for Mesa.
-	 * 1. Resolve relocations in the batch BO
-	 * 2. Submit via MI_BATCH_BUFFER_START to the ring
-	 * 3. Wait for completion (or return async)
-	 */
-	printf("[drm] EXECBUFFER2: %u buffers, batch_len=%u — NOT YET IMPLEMENTED\n",
-		args->buffer_count, args->batch_len);
-	errno = ENOSYS;
-	return -1;
+	if (args->buffer_count == 0) { errno = EINVAL; return -1; }
+
+	struct drm_i915_gem_exec_object2* objs =
+		(struct drm_i915_gem_exec_object2*)(uintptr_t)args->buffers_ptr;
+
+	/* --- Step 1: Identify the batch BO --- */
+	uint32_t batch_idx = 0;
+	if (args->flags & I915_EXEC_BATCH_FIRST)
+		batch_idx = 0;
+	else
+		batch_idx = args->buffer_count - 1;
+
+	uint32_t batch_handle = objs[batch_idx].handle;
+	if (batch_handle == 0 || batch_handle >= MAX_BOS
+		|| !sShim.bos[batch_handle].used) {
+		printf("[drm] EXECBUF2: invalid batch handle %u\n", batch_handle);
+		errno = ENOENT;
+		return -1;
+	}
+
+	gem_bo& batch_bo = sShim.bos[batch_handle];
+
+	/* Fill in GTT offsets for all BOs in the validation list */
+	for (uint32_t i = 0; i < args->buffer_count; i++) {
+		uint32_t h = objs[i].handle;
+		if (h == 0 || h >= MAX_BOS || !sShim.bos[h].used) {
+			printf("[drm] EXECBUF2: invalid handle %u at index %u\n", h, i);
+			errno = ENOENT;
+			return -1;
+		}
+		objs[i].offset = sShim.bos[h].gtt_offset;
+	}
+
+	/* --- Step 2: Apply relocations --- */
+	if (!(args->flags & I915_EXEC_NO_RELOC)) {
+		for (uint32_t i = 0; i < args->buffer_count; i++) {
+			if (objs[i].relocation_count == 0)
+				continue;
+
+			uint32_t h = objs[i].handle;
+			gem_bo& bo = sShim.bos[h];
+			struct drm_i915_gem_relocation_entry* relocs =
+				(struct drm_i915_gem_relocation_entry*)(uintptr_t)
+				objs[i].relocs_ptr;
+
+			for (uint32_t r = 0; r < objs[i].relocation_count; r++) {
+				/* Target BO (with HANDLE_LUT, target_handle is index) */
+				uint32_t target_idx = (uint32_t)relocs[r].target_handle;
+				if (target_idx >= args->buffer_count) {
+					printf("[drm] EXECBUF2: reloc target %u out of range\n",
+						target_idx);
+					errno = EINVAL;
+					return -1;
+				}
+
+				uint32_t target_h = objs[target_idx].handle;
+				uint32_t target_gtt = sShim.bos[target_h].gtt_offset;
+				uint32_t patched = target_gtt + (uint32_t)relocs[r].delta;
+
+				/* Patch the address into the BO at reloc.offset */
+				uint32_t* patch_addr = (uint32_t*)((uint8_t*)bo.cpu_addr
+					+ relocs[r].offset);
+				*patch_addr = patched;
+
+				/* Update presumed_offset for NO_RELOC optimization */
+				relocs[r].presumed_offset = target_gtt;
+			}
+		}
+	}
+
+	/* Flush CPU writes to all BOs */
+	asm volatile("mfence" ::: "memory");
+
+	/* --- Step 3: Submit batch to ring via MI_BATCH_BUFFER_START --- */
+	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
+
+	/* Prepare completion marker */
+	uint32_t seq = ++sShim.marker_seq;
+	if (sShim.marker_cpu)
+		*sShim.marker_cpu = 0;
+
+	ring_buffer& ring = sShim.shared->primary_ring_buffer;
+
+	/* Acquire ring lock */
+	acquire_lock(&ring.lock);
+
+	/* Check ring space (need 10 DW: marker + BBS + marker + flush + pad) */
+	uint32_t needed = 12;
+	/* Simple space check — wait for HEAD to catch up if needed */
+	for (int retry = 0; retry < 100; retry++) {
+		uint32_t head = ring_read32(ring.register_base + RING_BUFFER_HEAD)
+			& (ring.size - 1);
+		uint32_t space;
+		if (head <= ring.position)
+			space = ring.size - ring.position + head;
+		else
+			space = head - ring.position;
+		if (space >= needed * 4 + 64)
+			break;
+		snooze(100);
+	}
+
+	/* Write commands to ring */
+	uint32_t* rb = (uint32_t*)ring.base;
+	uint32_t pos = ring.position / 4;  /* in DWORDs */
+	uint32_t mask = (ring.size / 4) - 1;
+
+	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
+
+	/* MI_BATCH_BUFFER_START (Gen5 GGTT addressing) */
+	RING_EMIT(MI_BATCH_BUFFER_START_CMD);
+	RING_EMIT(batch_gtt);
+
+	/* MI_FLUSH after batch return */
+	RING_EMIT(MI_FLUSH_DRM);
+
+	/* Completion marker via MI_STORE_DATA_IMM */
+	if (sShim.marker_cpu) {
+		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
+		RING_EMIT(0);
+		RING_EMIT(sShim.marker_gtt);
+		RING_EMIT(seq);
+	}
+
+	/* Align to QWord */
+	if (pos & 1)
+		RING_EMIT(MI_NOOP_CMD);
+
+	#undef RING_EMIT
+
+	/* Update ring position */
+	ring.position = (pos * 4) & (ring.size - 1);
+
+	/* Flush WC writes */
+	asm volatile("mfence" ::: "memory");
+
+	/* Kick ring: write TAIL */
+	ring_write32(ring.register_base + RING_BUFFER_TAIL, ring.position);
+
+	release_lock(&ring.lock);
+
+	/* --- Step 4: Wait for completion (synchronous for now) --- */
+	if (sShim.marker_cpu) {
+		bigtime_t deadline = system_time() + 2000000; /* 2 second timeout */
+		while (*sShim.marker_cpu != seq) {
+			if (system_time() > deadline) {
+				printf("[drm] EXECBUF2: TIMEOUT waiting for seq %u "
+					"(got 0x%x)\n", seq, *sShim.marker_cpu);
+				errno = ETIMEDOUT;
+				return -1;
+			}
+		}
+	} else {
+		/* No marker — just wait a bit */
+		snooze(5000);
+	}
+
+	return 0;
 }
 
 
@@ -265,6 +438,106 @@ haiku_drm_open(void)
 		delete_area(sShim.shared_area);
 		close(sShim.fd);
 		return -1;
+	}
+
+	/* Allocate a small marker BO for batch completion tracking */
+	intel_allocate_graphics_memory marker_alloc;
+	marker_alloc.magic = INTEL_PRIVATE_DATA_MAGIC;
+	marker_alloc.size = 4096;
+	marker_alloc.alignment = 4096;
+	marker_alloc.flags = 0;
+	if (ioctl(sShim.fd, INTEL_ALLOCATE_GRAPHICS_MEMORY, &marker_alloc,
+		sizeof(marker_alloc)) == 0) {
+		sShim.marker_cpu = (volatile uint32_t*)(addr_t)marker_alloc.buffer_base;
+		sShim.marker_gtt = (uint32_t)((addr_t)marker_alloc.buffer_base
+			- (addr_t)sShim.shared->graphics_memory);
+		*sShim.marker_cpu = 0;
+		printf("[drm] Marker BO: gtt=0x%x cpu=%p\n",
+			sShim.marker_gtt, (void*)sShim.marker_cpu);
+	}
+
+	/* Sync ring position with hardware TAIL */
+	{
+		ring_buffer& ring = sShim.shared->primary_ring_buffer;
+		uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
+			& (ring.size - 1);
+		ring.position = hwTail;
+		ring.space_left = ring.size - 64;
+	}
+
+	/* Verify register area permissions */
+	area_info ainfo;
+	if (get_area_info(sShim.regs_area, &ainfo) == B_OK) {
+		printf("[drm] Regs area: addr=%p size=%lu prot=0x%x (%s%s)\n",
+			ainfo.address, (unsigned long)ainfo.size, ainfo.protection,
+			(ainfo.protection & B_READ_AREA) ? "R" : "",
+			(ainfo.protection & B_WRITE_AREA) ? "W" : "");
+	}
+
+	/* Test register write: read TAIL, write same value back, verify */
+	{
+		ring_buffer& ring = sShim.shared->primary_ring_buffer;
+		uint32_t tail_before = ring_read32(ring.register_base);
+		ring_write32(ring.register_base, tail_before);  // write same value
+		uint32_t tail_after = ring_read32(ring.register_base);
+		uint32_t head = ring_read32(ring.register_base + 4);
+		printf("[drm] Ring: HEAD=0x%x TAIL=0x%x (write-back test: %s)\n",
+			head & 0x001FFFFC, tail_before,
+			tail_after == tail_before ? "OK" : "MISMATCH");
+	}
+
+	/* Direct ring test: MI_STORE_DATA_IMM only (no batch buffer) */
+	if (sShim.marker_cpu) {
+		ring_buffer& ring = sShim.shared->primary_ring_buffer;
+		*sShim.marker_cpu = 0;
+		asm volatile("mfence" ::: "memory");
+
+		uint32_t head_pre = ring_read32(ring.register_base + 4) & 0x1FFFFC;
+		uint32_t tail_pre = ring_read32(ring.register_base);
+
+		acquire_lock(&ring.lock);
+
+		uint32_t* rb = (uint32_t*)ring.base;
+		uint32_t pos = ring.position / 4;
+		uint32_t mask = (ring.size / 4) - 1;
+
+		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
+		rb[pos & mask] = 0; pos++;
+		rb[pos & mask] = sShim.marker_gtt; pos++;
+		rb[pos & mask] = 0xBEEF0001; pos++;
+		if (pos & 1) { rb[pos & mask] = 0; pos++; }
+
+		ring.position = (pos * 4) & (ring.size - 1);
+		asm volatile("mfence" ::: "memory");
+		ring_write32(ring.register_base, ring.position);
+
+		release_lock(&ring.lock);
+
+		snooze(10000);
+		uint32_t head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
+		uint32_t tail_post = ring_read32(ring.register_base);
+
+		printf("[drm] Direct ring MI_STORE_DATA_IMM test:\n");
+		printf("[drm]   HEAD: 0x%x → 0x%x (%s)\n", head_pre, head_post,
+			head_post != head_pre ? "ADVANCED" : "STUCK");
+		printf("[drm]   TAIL: 0x%x → 0x%x\n", tail_pre, tail_post);
+		printf("[drm]   marker: 0x%08x (%s)\n", *sShim.marker_cpu,
+			*sShim.marker_cpu == 0xBEEF0001 ? "GPU WORKS!" : "NOT WRITTEN");
+
+		/* Dump ring content at HEAD to see what command the CS is stuck on */
+		uint32_t stuck_pos = head_pre / 4;
+		printf("[drm]   Ring @ HEAD=0x%x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			head_pre,
+			rb[stuck_pos & mask], rb[(stuck_pos+1) & mask],
+			rb[(stuck_pos+2) & mask], rb[(stuck_pos+3) & mask],
+			rb[(stuck_pos+4) & mask], rb[(stuck_pos+5) & mask],
+			rb[(stuck_pos+6) & mask], rb[(stuck_pos+7) & mask]);
+
+		/* Also dump IPEHR (last executed command header) */
+		printf("[drm]   IPEHR=0x%08x INSTDONE=0x%08x ACTHD=0x%08x\n",
+			ring_read32(0x2068),
+			ring_read32(0x206C),
+			ring_read32(0x2074));
 	}
 
 	printf("[drm] Haiku DRM shim opened: chipset=0x%04x\n",

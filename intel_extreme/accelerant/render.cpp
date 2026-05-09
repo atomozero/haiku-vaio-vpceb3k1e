@@ -460,68 +460,18 @@ render_init_clone()
 {
 	memset(&sRenderState, 0, sizeof(sRenderState));
 
+	// Sync ring software position with hardware TAIL.
+	// Do NOT reset the ring — the CS was initialized by app_server's
+	// render_init() and resetting from userspace kills the CS.
+	// This matches the drm_shim approach (proven to work).
 	if (gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)) {
 		ring_buffer &ring = gInfo->shared_info->primary_ring_buffer;
-		uint32 ringReg = ring.register_base;
-
-		// --- Step 1: FORCEWAKE — force GT out of RC6 power saving ---
-		// Without this, MMIO register writes may be silently dropped.
-		write32(0xA18C, 1);  // FORCEWAKE
-		read32(0xA18C);
-		snooze(1000);
-		write32(0x209c, 0);  // WaIssueDummyWriteToWakeupFromRC6:ilk
-		read32(0x209c);
-		snooze(1000);
-
-		// --- Step 2: ILK_GDSR domain reset ---
-		// The boot-time IDCT test leaves the media EU pipeline hung
-		// (IS stall from MEDIA_OBJECT + MI_FLUSH). A ring soft-reset
-		// does NOT clear this. Must reset via ILK_GDSR.
-		#define ILK_GDSR_REG	0x12ca4
-		// Reset media domain (clears IS stall)
-		write32(ILK_GDSR_REG, (3 << 1) | 1);
-		for (int i = 0; i < 500; i++) {
-			if ((read32(ILK_GDSR_REG) & 1) == 0) break;
-			snooze(1000);
-		}
-		// Reset render domain
-		write32(ILK_GDSR_REG, (1 << 1) | 1);
-		for (int i = 0; i < 500; i++) {
-			if ((read32(ILK_GDSR_REG) & 1) == 0) break;
-			snooze(1000);
-		}
-		TRACE("render_init_clone: ILK_GDSR domain reset done\n");
-
-		// --- Step 3: Full ring re-initialization (i915 init_ring_common) ---
-		// After domain reset, the ring must be re-initialized from scratch.
-		write32(ringReg + RING_BUFFER_CONTROL, 0);
-		read32(ringReg + RING_BUFFER_CONTROL);
-		snooze(1000);
-		write32(ringReg + RING_BUFFER_HEAD, 0);
-		read32(ringReg + RING_BUFFER_HEAD);
-		for (int i = 0; i < 100; i++) {
-			if ((read32(ringReg + RING_BUFFER_HEAD)
-				& INTEL_RING_BUFFER_HEAD_MASK) == 0)
-				break;
-			snooze(100);
-		}
-		memset((void*)ring.base, 0, ring.size);
-		write32(ringReg + RING_BUFFER_TAIL, 0);
-		write32(ringReg + RING_BUFFER_START, ring.offset);
-		write32(ringReg + RING_BUFFER_CONTROL,
-			((ring.size - B_PAGE_SIZE) & INTEL_RING_BUFFER_SIZE_MASK)
-			| INTEL_RING_BUFFER_ENABLED);
-		ring.position = 0;
-		ring.space_left = ring.size;
-
-		// Gen5 workarounds (must re-apply after domain reset)
-		write32(0x209c, (1 << 22) | (1 << 6));  // MI_MODE
-		write32(0x208c, (1 << 30) | (1 << 14));  // _3D_CHICKEN2
-		write32(0x2120, (1 << 24) | (1 << 16) | (1 << 8));  // CACHE_MODE_0
-		write32(0x2064, 0);  // clear EIR
-		write32(0x2068, 0);  // clear EMR
-
-		TRACE("render_init_clone: ring re-initialized after domain reset\n");
+		uint32 hwTail = read32(ring.register_base + RING_BUFFER_TAIL)
+			& (ring.size - 1);
+		ring.position = hwTail;
+		ring.space_left = ring.size - 64;
+		TRACE("render_init_clone: synced ring pos=%u (hwTail=0x%x)\n",
+			ring.position, hwTail);
 	}
 
 	// Allocate GPU memory for state structures

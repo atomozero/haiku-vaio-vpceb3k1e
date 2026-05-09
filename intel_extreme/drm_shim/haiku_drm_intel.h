@@ -101,6 +101,19 @@ struct drm_i915_gem_execbuffer2 {
 	uint64_t rsvd2;
 };
 
+struct drm_i915_gem_relocation_entry {
+	uint64_t target_handle;     /* index into exec_object2 array (with LUT) */
+	uint64_t delta;             /* added to target BO GTT offset */
+	uint64_t offset;            /* byte offset in THIS BO to patch */
+	uint64_t presumed_offset;   /* last known GTT offset of target */
+	uint32_t read_domains;
+	uint32_t write_domain;
+};
+
+/* exec_object2 flags */
+#define EXEC_OBJECT_WRITE           (1 << 2)
+#define EXEC_OBJECT_SUPPORTS_48B    (1 << 3)
+
 struct drm_i915_gem_context_create {
 	uint32_t ctx_id;    /* out */
 	uint32_t pad;
