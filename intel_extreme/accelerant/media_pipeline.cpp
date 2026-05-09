@@ -236,6 +236,57 @@ bw_emit_marker(batch_writer* w, const media_pipeline_context* ctx,
 
 
 // ---------------------------------------------------------------------------
+// Ring submit via kernel ioctl.
+// Writes batch_writer DWORDs directly to ring memory, then kicks GPU
+// via INTEL_RING_WRITE_TAIL ioctl. Returns new ring position.
+// Falls back to QueueCommands if ioctl is not available.
+// ---------------------------------------------------------------------------
+
+static uint32 sRingPos = 0;
+
+static status_t
+ring_submit_ioctl(const batch_writer* w)
+{
+	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
+
+	// Check if commands fit before ring end (leave margin for alignment)
+	uint32 bytes_needed = w->count * sizeof(uint32);
+	if (sRingPos + bytes_needed + 64 > ring.size) {
+		// Ring wrap: reset via ioctl
+		intel_get_private_data resetData;
+		resetData.magic = INTEL_PRIVATE_DATA_MAGIC;
+		if (ioctl(gInfo->device, INTEL_RING_RESET, &resetData,
+				sizeof(resetData)) != 0)
+			return B_ERROR;
+		sRingPos = 0;
+	}
+
+	// Write commands to ring memory
+	uint32* dst = (uint32*)(ring.base + sRingPos);
+	memcpy(dst, w->dwords, bytes_needed);
+
+	// Pad to 8-byte alignment
+	uint32 new_pos = sRingPos + bytes_needed;
+	if (new_pos & 0x07) {
+		*(uint32*)(ring.base + new_pos) = 0;  // MI_NOOP
+		new_pos += 4;
+	}
+	asm volatile("mfence" ::: "memory");
+
+	// Kick GPU via ioctl
+	intel_ring_tail tailData;
+	tailData.magic = INTEL_PRIVATE_DATA_MAGIC;
+	tailData.tail_value = new_pos;
+	if (ioctl(gInfo->device, INTEL_RING_WRITE_TAIL, &tailData,
+			sizeof(tailData)) != 0)
+		return B_ERROR;
+
+	sRingPos = new_pos;
+	return B_OK;
+}
+
+
+// ---------------------------------------------------------------------------
 // Per-command emitters — each corresponds to one step in
 // MEDIA_PIPELINE_BRINGUP.md §1.
 // ---------------------------------------------------------------------------
@@ -769,6 +820,18 @@ media_pipeline_init(media_pipeline_context* ctx)
 	gpu_bo_clear(&ctx->input_y_bo);
 
 	ctx->initialized = true;
+
+	// Reset ring via ioctl for clean state (userspace MMIO is read-only,
+	// so QueueCommands TAIL writes don't work without kernel ioctl).
+	if (gInfo->is_clone) {
+		intel_get_private_data resetData;
+		resetData.magic = INTEL_PRIVATE_DATA_MAGIC;
+		if (ioctl(gInfo->device, INTEL_RING_RESET, &resetData,
+				sizeof(resetData)) == 0) {
+			sRingPos = 0;
+			LOG("init: ring reset via ioctl OK\n");
+		}
+	}
 	LOG("init: ok, 11 BOs allocated (%u bytes total)\n",
 		(unsigned)(BATCH_BO_SIZE + KERNEL_BO_SIZE + VFE_STATE_BO_SIZE
 			+ IDRT_BO_SIZE + CURBE_BO_SIZE + OUTPUT_BO_SIZE + MARKER_BO_SIZE
@@ -4037,10 +4100,11 @@ submit_blocks_batch_gpu(media_pipeline_context* ctx,
 		return B_NO_MEMORY;
 	}
 
-	// 5. Submit to ring (direct — MI_BATCH_BUFFER_START doesn't work
-	// from clone context).
+	// 5. Submit to ring via ioctl (kernel writes TAIL register).
 	gpu_bo_flush_cpu_writes();
-	{
+	status_t submit_st = ring_submit_ioctl(&w);
+	if (submit_st != B_OK) {
+		// Fallback: direct QueueCommands (works only if MMIO is writable)
 		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
 		QueueCommands queue(ring);
 		queue.MakeSpace(w.count);
@@ -4337,7 +4401,8 @@ submit_tile_fill_batch(media_pipeline_context* ctx,
 		return B_NO_MEMORY;
 
 	gpu_bo_flush_cpu_writes();
-	{
+	status_t submit_st = ring_submit_ioctl(&w);
+	if (submit_st != B_OK) {
 		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
 		QueueCommands queue(ring);
 		queue.MakeSpace(w.count);
@@ -4348,9 +4413,7 @@ submit_tile_fill_batch(media_pipeline_context* ctx,
 	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
 	volatile uint32* slot = (volatile uint32*)(ctx->marker_bo.cpu_addr
 		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
-	// Pure busy-wait — snooze() adds 10-60ms of scheduler overhead
-	// which destroys frame rate in real-time rendering.
-	bigtime_t deadline = system_time() + 2000000;  // 2s safety
+	bigtime_t deadline = system_time() + 2000000;
 	while (*slot != tag) {
 		if (system_time() > deadline)
 			return B_TIMED_OUT;

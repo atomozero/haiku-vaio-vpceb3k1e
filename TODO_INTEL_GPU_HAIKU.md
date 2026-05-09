@@ -205,6 +205,9 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 ### 3.11 Prossimi passi
 - [x] **Kernel ioctl per TAIL write** — FUNZIONANTE (GPU esegue comandi)
 - [x] **BLT blit al framebuffer** — FUNZIONANTE (60 FPS, cubo 3D visibile)
+- [x] **Media pipeline via ioctl** — FUNZIONANTE (GPU IDCT 3.5x, 400 blocchi)
+      ring_submit_ioctl() in media_pipeline.cpp, fallback a QueueCommands.
+      Ring reset via ioctl in media_pipeline_init per cloni.
 - [ ] GPU IDCT nel plugin (sostituire compute_idct_reference con GPU dispatch)
 - [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
 - [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
