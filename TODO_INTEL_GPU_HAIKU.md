@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-10
+**Ultimo aggiornamento:** 2026-05-11 (cubo 3D diretto a framebuffer, 60 FPS, MMIO R/O scoperta)
 
 ---
 
@@ -177,11 +177,33 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
       write diretto funziona. ILK_GDSR non necessario per media pipeline
       (solo per 3D pipeline ring recovery).
       Tool: tests/gpu_plasma_screen
-- [ ] **Framebuffer blit via BLT engine** — bypass app_server per display
-      diretto, propedeutico a Mesa. XY_SRC_COPY_BLT da staging a screen.
+- [-] **Framebuffer blit via BLT engine** — BLOCCATO
+      XY_SRC_COPY_BLT encoding corretto (0x54F00006 con COMMAND_BLIT_RGBA)
+      ma il BLT engine non esegue: MMIO write silenziosamente ignorate.
+- [x] **Cubo 3D diretto a framebuffer** — 60 FPS stabile
+      CPU raster (per-pixel edge test) → memcpy a graphics_memory.
+      815 FPS raw, 60 FPS con frame limiter. Tool: tests/gpu_triangle
+
+### 3.10.1 Scoperta critica: MMIO read-only da userspace (2026-05-11)
+Le scritture MMIO sono **silenziosamente ignorate** sia via `clone_area` che
+via driver `/dev/misc/poke` (mapping diretto BAR0 0xF0000000). Verificato:
+- Scratch register: write 0xDEADBEEF, read back 0x0
+- RING_BUFFER_HEAD bloccato a 0x5134 — non resettabile
+- RING_BUFFER_CONTROL: write 0, read back 0xF001 — non disabilitabile
+- Syslog conferma: `engine stalled, head 5134` (anche app_server fallisce)
+- Render ring HEAD identico in 5+ esecuzioni successive
+
+**Implicazione:** tutta la pipeline ring→GPU (BLT, media pipeline, 3D
+TRILIST) è inaccessibile da userspace. Il kernel driver DEVE fare le
+scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
+- BLT engine da userspace
+- Media pipeline da userspace (dopo boot)
+- Mesa/crocus (GEM_EXECBUFFER2)
+- Qualsiasi operazione GPU che non sia framebuffer diretto
 
 ### 3.11 Prossimi passi
-- [ ] **BLT blit al framebuffer**: XY_SRC_COPY_BLT da output_bo a screen FB
+- [ ] **Kernel ioctl per TAIL write** (prerequisito per BLT/media/3D da userspace)
+- [ ] BLT blit al framebuffer (richiede TAIL ioctl)
 - [ ] GPU IDCT nel plugin (sostituire compute_idct_reference con GPU dispatch)
 - [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
 - [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
@@ -209,9 +231,12 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 ## Fase 6: OpenGL via Mesa crocus — ROADMAP
 
 ### Fase A: Ring clone funzionante (prerequisito per tutto)
-- [ ] A.1: ILK_GDSR media domain reset (reg 0x12ca4) dopo boot-time test
-- [ ] A.2: FORCEWAKE assert (reg 0xA18C) prima di ring operations
-- [ ] A.3: Triangolo 3D TRILIST visibile da programma userspace
+- [-] A.1: ILK_GDSR media domain reset — non necessario (scoperta 2026-05-10)
+- [-] A.2: FORCEWAKE — non esiste su ILK Gen5 (solo SNB+)
+- [-] A.3: MMIO write da userspace impossibile — HEAD bloccato, TAIL ignorato
+      **Root cause 2026-05-11:** tutte le scritture MMIO (clone_area + poke
+      BAR0 0xF0000000) silenziosamente ignorate. Serve kernel ioctl.
+- [x] A.4: Cubo 3D visibile via framebuffer diretto (CPU raster, 60 FPS)
 
 ### Fase B: Kernel ioctl per batch submission
 - [ ] B.1: INTEL_EXEC_BATCH ioctl nel kernel driver intel_extreme
@@ -233,14 +258,15 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 - [ ] D.3: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
 - [ ] D.4: Output crocus → framebuffer LVDS (CPU-copy o BLT blit)
 
-### Scoperte propedeutiche (sessione 2026-05-08)
-- Ring buffer accessibile da clone userspace: NON resettare il ring (il CS
-  di app_server è vivo). Sincronizzare solo la sw_pos con TAIL hardware.
-  gpu_idct_bench e gpu_triangle funzionano dal clone a 93 FPS.
-- Ring reset dal clone UCCIDE il CS — non farlo mai.
-- render_init_clone(): alloca state GPU, sincronizza ring position, funziona.
-- MI_BATCH_BUFFER_START: necessario per Mesa (crocus invia batch buffer,
-  mai comandi diretti nel ring). Da testare dal clone.
+### Scoperte propedeutiche
+- **(2026-05-08)** Ring buffer accessibile da clone userspace, ma NON resettare.
+  render_init_clone(): alloca state GPU, sincronizza ring position.
+- **(2026-05-11)** **MMIO write broken**: scritture a registri GPU ignorate
+  da userspace — sia clone_area che poke driver (BAR0 mapping diretto).
+  Il ring HEAD è bloccato a 0x5134 in tutte le esecuzioni. Il CS non
+  esegue MAI comandi scritti da userspace. Solo `graphics_memory` (GTT
+  aperture) è scrivibile → framebuffer diretto funziona (815 FPS raw).
+  Per ring/BLT/media/3D serve un ioctl kernel che scriva TAIL.
 
 ### Roadmap Mesa (Option B: winsys shim — percorso più corto)
 - [ ] **Step 1**: Fake device node con GETPARAM + GET_APERTURE (chipset_id=0x0046)

@@ -1,10 +1,9 @@
 /*
- * gpu_triangle — GPU-accelerated rotating 3D cube, BLT direct to screen.
+ * gpu_triangle — Rotating 3D cube, direct framebuffer write.
  *
- * CPU: 3D transform + projection + edge test
- * GPU: RGBA tile fill via EU compute kernel
- * Display: XY_SRC_COPY_BLT from GPU output_bo to screen framebuffer
- * No BWindow, no app_server overhead — pure GPU → screen pipeline.
+ * CPU: 3D transform + projection + per-pixel rasterization (BGRA)
+ * Display: direct memcpy to screen framebuffer (graphics_memory)
+ * No ring, no BLT, no MMIO writes — proven path (gpu_plasma_screen).
  */
 
 #include <stdio.h>
@@ -18,18 +17,11 @@
 #include "intel_extreme.h"
 #include "lock.h"
 #include "accelerant.h"
-#include "media_pipeline.h"
-#include "gpu_bo.h"
-#include "commands.h"
 
 extern accelerant_info* gInfo;
 
 #define IMG_W 480
 #define IMG_H 480
-#define TILE  8
-#define TILES_X (IMG_W / TILE)
-#define TILES_Y (IMG_H / TILE)
-// No window needed — BLT directly to screen!
 
 
 static bool
@@ -80,7 +72,6 @@ struct vec2 { float x, y; };
 
 static vec3 rotate(vec3 v, float ax, float ay)
 {
-	// Rotate around Y then X
 	float cy = cosf(ay), sy = sinf(ay);
 	float x1 = v.x * cy + v.z * sy;
 	float z1 = -v.x * sy + v.z * cy;
@@ -92,7 +83,7 @@ static vec3 rotate(vec3 v, float ax, float ay)
 
 static vec2 project(vec3 v)
 {
-	float d = 4.0f;  // camera distance
+	float d = 4.0f;
 	float scale = 70.0f;
 	float persp = d / (d + v.z + 1.5f);
 	return {IMG_W/2.0f + v.x * scale * persp,
@@ -103,28 +94,17 @@ static vec2 project(vec3 v)
 // ---- Cube geometry ----
 
 static const vec3 cube_verts[8] = {
-	{-1,-1,-1}, { 1,-1,-1}, { 1, 1,-1}, {-1, 1,-1},  // back
-	{-1,-1, 1}, { 1,-1, 1}, { 1, 1, 1}, {-1, 1, 1},  // front
+	{-1,-1,-1}, { 1,-1,-1}, { 1, 1,-1}, {-1, 1,-1},
+	{-1,-1, 1}, { 1,-1, 1}, { 1, 1, 1}, {-1, 1, 1},
 };
 
-// 6 faces, each 4 vertex indices (2 triangles per face)
 static const int faces[6][4] = {
-	{0,1,2,3},  // back
-	{5,4,7,6},  // front
-	{4,0,3,7},  // left
-	{1,5,6,2},  // right
-	{4,5,1,0},  // bottom
-	{3,2,6,7},  // top
+	{0,1,2,3}, {5,4,7,6}, {4,0,3,7}, {1,5,6,2}, {4,5,1,0}, {3,2,6,7},
 };
 
-// Face colors (R, G, B)
 static const uint8 face_colors[6][3] = {
-	{200,  50,  50},  // back - red
-	{ 50, 200,  50},  // front - green
-	{ 50,  50, 200},  // left - blue
-	{200, 200,  50},  // right - yellow
-	{200,  50, 200},  // bottom - magenta
-	{ 50, 200, 200},  // top - cyan
+	{200,  50,  50}, { 50, 200,  50}, { 50,  50, 200},
+	{200, 200,  50}, {200,  50, 200}, { 50, 200, 200},
 };
 
 
@@ -146,7 +126,6 @@ point_in_tri(vec2 a, vec2 b, vec2 c, float px, float py)
 		|| (e0 <= 0 && e1 <= 0 && e2 <= 0);
 }
 
-// Back-face cull: positive cross product = front-facing
 static inline float
 face_area(vec2 a, vec2 b, vec2 c)
 {
@@ -157,50 +136,53 @@ face_area(vec2 a, vec2 b, vec2 c)
 int
 main(int, char**)
 {
-	printf("=== GPU 3D Cube — RGBA + BLT to Screen ===\n");
-	printf("  %dx%d, 6 faces, RGBA tile fill + XY_SRC_COPY_BLT\n\n",
-		IMG_W, IMG_H);
+	printf("=== GPU 3D Cube — Direct Framebuffer ===\n");
+	printf("  %dx%d, 6 faces, per-pixel rasterizer\n\n", IMG_W, IMG_H);
 
 	if (!init_gpu()) { printf("GPU init failed\n"); return 1; }
-	printf("GPU OK, Gen %u\n",
-		gInfo->shared_info->device_type.Generation());
-	printf("Screen: %ux%u, fb_offset=0x%x, bpr=%u\n",
-		gInfo->shared_info->current_mode.timing.h_display,
-		gInfo->shared_info->current_mode.timing.v_display,
-		(unsigned)gInfo->shared_info->frame_buffer_offset,
-		(unsigned)gInfo->shared_info->bytes_per_row);
 
-	media_pipeline_context ctx;
-	if (media_pipeline_init(&ctx) != B_OK) {
-		printf("pipeline init failed\n");
+	intel_shared_info& si = *gInfo->shared_info;
+	uint32 scr_w = si.current_mode.timing.h_display;
+	uint32 scr_h = si.current_mode.timing.v_display;
+	uint32 bpr = si.bytes_per_row;
+	printf("Screen: %ux%u, bpr=%u, fb_offset=0x%x\n",
+		scr_w, scr_h, bpr, (unsigned)si.frame_buffer_offset);
+	printf("graphics_memory: %p\n", si.graphics_memory);
+
+	// Direct framebuffer pointer
+	uint8* fb_base = (uint8*)si.graphics_memory + si.frame_buffer_offset;
+	printf("Framebuffer at: %p\n", fb_base);
+
+	// Offscreen render buffer (CPU-local, avoid slow WC writes per-pixel)
+	uint32* render_buf = (uint32*)malloc(IMG_W * IMG_H * 4);
+	if (!render_buf) {
+		printf("malloc failed\n");
 		cleanup_gpu(); return 1;
 	}
-	if (media_pipeline_setup_tile_fill(&ctx, IMG_W, IMG_H) != B_OK) {
-		printf("tile fill setup failed\n");
-		media_pipeline_uninit(&ctx);
-		cleanup_gpu(); return 1;
-	}
-	printf("RGBA tile fill ready, output_bo GTT=0x%x\n",
-		ctx.output_bo.gtt_offset);
 
-	gpu_tile_entry* tiles = (gpu_tile_entry*)malloc(
-		TILES_X * TILES_Y * sizeof(gpu_tile_entry));
-
-	// Center cube on screen
-	uint32 scr_w = gInfo->shared_info->current_mode.timing.h_display;
-	uint32 scr_h = gInfo->shared_info->current_mode.timing.v_display;
 	uint32 dst_x = (scr_w - IMG_W) / 2;
 	uint32 dst_y = (scr_h - IMG_H) / 2;
+
+	// Quick test: red rectangle
+	for (uint32 i = 0; i < IMG_W * IMG_H; i++)
+		render_buf[i] = 0x00FF0000;  // BGRX: red
+	for (uint32 y = 0; y < IMG_H; y++) {
+		memcpy(fb_base + (dst_y + y) * bpr + dst_x * 4,
+			render_buf + y * IMG_W, IMG_W * 4);
+	}
+	printf("Red test square at (%u,%u) — check screen!\n", dst_x, dst_y);
+	snooze(1000000);
 
 	uint32 frame = 0;
 	uint32 fps_cnt = 0;
 	bigtime_t fps_t0 = system_time();
-	bool running = true;
 
-	printf("Rendering to screen at (%u,%u)...\n", dst_x, dst_y);
-	printf("Press Ctrl+C to stop.\n\n");
+	printf("Rendering... Press Ctrl+C to stop.\n\n");
 
-	while (running) {
+	const bigtime_t frame_time = 16667;  // ~60 FPS target
+
+	while (frame < 1200) {
+		bigtime_t frame_start = system_time();
 		float ax = (float)frame * 0.015f;
 		float ay = (float)frame * 0.023f;
 
@@ -212,15 +194,12 @@ main(int, char**)
 			proj[i] = project(rot[i]);
 		}
 
-		// Clear output to dark background (ARGB)
-		{
-			uint32* px = (uint32*)ctx.output_bo.cpu_addr;
-			uint32 bg = 0xFF1A1A2E;
-			for (uint32 i = 0; i < IMG_W * IMG_H; i++)
-				px[i] = bg;
-		}
+		// Clear to dark background
+		uint32 bg = 0x002E1A1A;  // BGRX dark
+		for (uint32 i = 0; i < IMG_W * IMG_H; i++)
+			render_buf[i] = bg;
 
-		// Sort faces (painter's algorithm)
+		// Sort faces back-to-front
 		float face_z[6];
 		int face_order[6];
 		for (int f = 0; f < 6; f++) {
@@ -238,8 +217,7 @@ main(int, char**)
 					face_order[j+1] = tmp;
 				}
 
-		// Collect tiles with ARGB colors
-		uint32 total_tiles = 0;
+		// Rasterize each visible face
 		for (int fi = 0; fi < 6; fi++) {
 			int f = face_order[fi];
 			vec2 a = proj[faces[f][0]];
@@ -266,13 +244,13 @@ main(int, char**)
 			if (light < 0.15f) light = 0.15f;
 			if (light > 1.0f) light = 1.0f;
 
-			// Compute ARGB color directly
+			// BGRX color for Intel framebuffer (B at byte 0, R at byte 2)
 			uint32 r = (uint32)(face_colors[f][0] * light);
 			uint32 g = (uint32)(face_colors[f][1] * light);
 			uint32 bl = (uint32)(face_colors[f][2] * light);
-			uint32 argb = 0xFF000000 | (r << 16) | (g << 8) | bl;
+			uint32 bgrx = (r << 16) | (g << 8) | bl;
 
-			// Bounding box scan
+			// Bounding box
 			float minx = a.x, maxx = a.x, miny = a.y, maxy = a.y;
 			float pts[] = {b.x,b.y, c.x,c.y, d.x,d.y};
 			for (int p = 0; p < 6; p += 2) {
@@ -281,86 +259,28 @@ main(int, char**)
 				if (pts[p+1] < miny) miny = pts[p+1];
 				if (pts[p+1] > maxy) maxy = pts[p+1];
 			}
-			int tx0 = (int)(minx / TILE) - 1;
-			int ty0 = (int)(miny / TILE) - 1;
-			int tx1 = (int)(maxx / TILE) + 1;
-			int ty1 = (int)(maxy / TILE) + 1;
-			if (tx0 < 0) tx0 = 0;
-			if (ty0 < 0) ty0 = 0;
-			if (tx1 >= (int)TILES_X) tx1 = TILES_X - 1;
-			if (ty1 >= (int)TILES_Y) ty1 = TILES_Y - 1;
+			int x0 = (int)minx; if (x0 < 0) x0 = 0;
+			int y0 = (int)miny; if (y0 < 0) y0 = 0;
+			int x1 = (int)maxx + 1; if (x1 > IMG_W) x1 = IMG_W;
+			int y1 = (int)maxy + 1; if (y1 > IMG_H) y1 = IMG_H;
 
-			for (int ty = ty0; ty <= ty1; ty++) {
-				for (int tx = tx0; tx <= tx1; tx++) {
-					float px = tx * TILE + 4.0f;
-					float py = ty * TILE + 4.0f;
-					if (point_in_tri(a,b,c,px,py)
-						|| point_in_tri(a,c,d,px,py)) {
-						tiles[total_tiles].x = tx * TILE;
-						tiles[total_tiles].y = ty * TILE;
-						tiles[total_tiles].color = argb;
-						total_tiles++;
+			for (int py = y0; py < y1; py++) {
+				uint32* row = render_buf + py * IMG_W;
+				for (int px = x0; px < x1; px++) {
+					float fpx = px + 0.5f;
+					float fpy = py + 0.5f;
+					if (point_in_tri(a,b,c,fpx,fpy)
+						|| point_in_tri(a,c,d,fpx,fpy)) {
+						row[px] = bgrx;
 					}
 				}
 			}
 		}
 
-		// GPU: U8 tile fill (proven working)
-		bigtime_t t_gpu = system_time();
-		for (uint32 off = 0; off < total_tiles; off += 400) {
-			uint32 chunk = total_tiles - off;
-			if (chunk > 400) chunk = 400;
-			submit_tile_fill_batch(&ctx, tiles + off, chunk);
-		}
-		bigtime_t gpu_us = system_time() - t_gpu;
-
-		// CPU: colorize U8 → RGBA in output_bo (reuse same BO)
-		// Write RGBA at offset IMG_W*IMG_H (after U8 data)
-		const uint8* u8src = (const uint8*)ctx.output_bo.cpu_addr;
-		uint32* rgba_dst = (uint32*)(ctx.output_bo.cpu_addr + IMG_W * IMG_H);
-		static uint32 lut[256];
-		static bool lut_init = false;
-		if (!lut_init) {
-			lut[0] = 0xFF1A1A2E;
-			for (int fc = 0; fc < 6; fc++) {
-				for (int b = 0; b < 16; b++) {
-					uint32 idx = ((fc + 1) << 4) | b;
-					uint32 bright = b * 17;
-					uint32 r = (face_colors[fc][0] * bright) >> 8;
-					uint32 g = (face_colors[fc][1] * bright) >> 8;
-					uint32 bl2 = (face_colors[fc][2] * bright) >> 8;
-					lut[idx] = 0xFF000000 | (bl2 << 16) | (g << 8) | r;  // BGRA
-				}
-			}
-			lut_init = true;
-		}
+		// Copy render buffer to screen framebuffer (row by row for pitch)
 		for (uint32 y = 0; y < IMG_H; y++) {
-			const uint8* row = u8src + y * IMG_W;
-			uint32* dst = rgba_dst + y * IMG_W;
-			for (uint32 x = 0; x < IMG_W; x++)
-				dst[x] = lut[row[x]];
-		}
-		asm volatile("mfence" ::: "memory");
-
-		// GPU: BLT RGBA region of output_bo → screen framebuffer
-		{
-			intel_shared_info& info = *gInfo->shared_info;
-			uint32 src_base = ctx.output_bo.gtt_offset + IMG_W * IMG_H;
-			uint32 src_pitch = IMG_W * 4;
-			uint32 dst_base = info.frame_buffer_offset;
-			uint32 dst_pitch = info.bytes_per_row;
-
-			ring_buffer& ring = info.primary_ring_buffer;
-			QueueCommands queue(ring);
-			queue.MakeSpace(8);
-			queue.Write((0x53 << 22) | (1 << 21) | (1 << 20) | 6);
-			queue.Write(dst_pitch | (0xCC << 16) | (3 << 24));
-			queue.Write((dst_y << 16) | dst_x);
-			queue.Write(((dst_y + IMG_H) << 16) | (dst_x + IMG_W));
-			queue.Write(dst_base);
-			queue.Write(0);
-			queue.Write(src_pitch);
-			queue.Write(src_base);
+			memcpy(fb_base + (dst_y + y) * bpr + dst_x * 4,
+				render_buf + y * IMG_W, IMG_W * 4);
 		}
 
 		frame++;
@@ -368,20 +288,19 @@ main(int, char**)
 		bigtime_t now = system_time();
 		if (now - fps_t0 >= 1000000) {
 			float fps = (float)fps_cnt * 1e6f / (float)(now - fps_t0);
-			printf("  frame %u: %.1f FPS, %u tiles, gpu=%ld us\n",
-				frame, fps, total_tiles, (long)gpu_us);
+			printf("  frame %u: %.1f FPS\n", frame, fps);
 			fps_cnt = 0;
 			fps_t0 = now;
 		}
 
-		// Stop after 600 frames (~20 seconds)
-		if (frame >= 600)
-			running = false;
+		// Frame limiter: wait for vsync-ish timing (~60 FPS)
+		bigtime_t elapsed = system_time() - frame_start;
+		if (elapsed < frame_time)
+			snooze(frame_time - elapsed);
 	}
 
 	printf("Done, %u frames.\n", frame);
-	free(tiles);
-	media_pipeline_uninit(&ctx);
+	free(render_buf);
 	cleanup_gpu();
 	return 0;
 }
