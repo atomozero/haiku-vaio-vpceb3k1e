@@ -546,7 +546,8 @@ enum {
 
 	// Ring buffer control (kernel-mediated MMIO writes)
 	INTEL_RING_RESET,			// re-init ring: disable, reset HEAD, re-enable
-	INTEL_RING_WRITE_TAIL		// write TAIL register to kick GPU
+	INTEL_RING_WRITE_TAIL,		// write TAIL register to kick GPU
+	INTEL_EXEC_BATCH			// emit MI_BATCH_BUFFER_START + kick (like i915)
 };
 
 // retrieve the area_id of the kernel/accelerant shared info
@@ -574,6 +575,13 @@ struct intel_free_graphics_memory {
 struct intel_ring_tail {
 	uint32	magic;
 	uint32	tail_value;		// ring position to write to TAIL register
+};
+
+// batch buffer execution (kernel emits MI_BATCH_BUFFER_START + TAIL write)
+struct intel_exec_batch {
+	uint32	magic;
+	uint32	batch_gtt;		// GTT offset of batch buffer start
+	uint32	batch_len;		// batch length in bytes (unused, for future)
 };
 
 // brightness legacy

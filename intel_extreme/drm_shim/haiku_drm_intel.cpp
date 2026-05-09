@@ -20,7 +20,9 @@
 #include "lock.h"
 
 /* MI commands for ring submission */
-#define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | (2 << 6))  /* Gen4/5 GGTT */
+#define MI_BATCH_GTT              (2 << 6)
+#define MI_BATCH_NON_SECURE_I965  (1 << 8)
+#define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | MI_BATCH_GTT)
 #define MI_NOOP_CMD               0x00000000
 #define MI_FLUSH_DRM              (0x04 << 23)
 #define MI_STORE_DATA_IMM_GGTT    ((0x20 << 23) | (1 << 22) | 2)
@@ -239,6 +241,25 @@ ring_read32(uint32_t offset)
 	return *(volatile uint32_t*)(sShim.registers + offset);
 }
 
+/* Write TAIL register via kernel ioctl (userspace MMIO is read-only) */
+static void
+ring_kick_tail(uint32_t tail_value)
+{
+	intel_ring_tail data;
+	data.magic = INTEL_PRIVATE_DATA_MAGIC;
+	data.tail_value = tail_value;
+	ioctl(sShim.fd, INTEL_RING_WRITE_TAIL, &data, sizeof(data));
+}
+
+/* Reset ring via kernel ioctl */
+static void
+ring_reset_ioctl(void)
+{
+	intel_get_private_data data;
+	data.magic = INTEL_PRIVATE_DATA_MAGIC;
+	ioctl(sShim.fd, INTEL_RING_RESET, &data, sizeof(data));
+}
+
 
 static int
 gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
@@ -316,7 +337,9 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	/* Flush CPU writes to all BOs */
 	asm volatile("mfence" ::: "memory");
 
-	/* --- Step 3: Submit batch to ring via MI_BATCH_BUFFER_START --- */
+	/* --- Step 3: Submit batch via kernel INTEL_EXEC_BATCH ioctl --- */
+	/* The kernel emits MI_BATCH_BUFFER_START + MI_FLUSH to the ring
+	 * and writes the TAIL register. Same pattern as i915 execbuffer. */
 	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
 
 	/* Prepare completion marker */
@@ -324,73 +347,58 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	if (sShim.marker_cpu)
 		*sShim.marker_cpu = 0;
 
+	/* Flush CPU cache for batch BO (WC aperture writes are not coherent
+	 * with GPU instruction fetch — discovered on this ILK hardware).
+	 * Same purpose as i915_gem_clflush_object() in Linux. */
+	{
+		uint8_t* p = (uint8_t*)batch_bo.cpu_addr;
+		for (uint32_t i = 0; i < batch_bo.size; i += 64)
+			asm volatile("clflush (%0)" :: "r"(p + i) : "memory");
+		asm volatile("mfence" ::: "memory");
+	}
+
+	/* Execute batch via kernel ioctl */
+	intel_exec_batch execData;
+	execData.magic = INTEL_PRIVATE_DATA_MAGIC;
+	execData.batch_gtt = batch_gtt;
+	execData.batch_len = args->batch_len;
+	if (ioctl(sShim.fd, INTEL_EXEC_BATCH, &execData, sizeof(execData)) != 0) {
+		printf("[drm] EXECBUF2: INTEL_EXEC_BATCH ioctl failed\n");
+		errno = EIO;
+		return -1;
+	}
+
+	/* Write completion marker to ring via TAIL kick */
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-
-	/* Acquire ring lock */
-	acquire_lock(&ring.lock);
-
-	/* Check ring space (need 10 DW: marker + BBS + marker + flush + pad) */
-	uint32_t needed = 12;
-	/* Simple space check — wait for HEAD to catch up if needed */
-	for (int retry = 0; retry < 100; retry++) {
-		uint32_t head = ring_read32(ring.register_base + RING_BUFFER_HEAD)
-			& (ring.size - 1);
-		uint32_t space;
-		if (head <= ring.position)
-			space = ring.size - ring.position + head;
-		else
-			space = head - ring.position;
-		if (space >= needed * 4 + 64)
-			break;
-		snooze(100);
-	}
-
-	/* Write commands to ring */
-	uint32_t* rb = (uint32_t*)ring.base;
-	uint32_t pos = ring.position / 4;  /* in DWORDs */
-	uint32_t mask = (ring.size / 4) - 1;
-
-	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
-
-	/* MI_BATCH_BUFFER_START (Gen5 GGTT addressing) */
-	RING_EMIT(MI_BATCH_BUFFER_START_CMD);
-	RING_EMIT(batch_gtt);
-
-	/* MI_FLUSH after batch return */
-	RING_EMIT(MI_FLUSH_DRM);
-
-	/* Completion marker via MI_STORE_DATA_IMM */
 	if (sShim.marker_cpu) {
-		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
-		RING_EMIT(0);
-		RING_EMIT(sShim.marker_gtt);
-		RING_EMIT(seq);
+		uint32_t* rb = (uint32_t*)ring.base;
+		uint32_t pos = ring.position / 4;
+		uint32_t mask = (ring.size / 4) - 1;
+
+		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
+		rb[pos & mask] = 0; pos++;
+		rb[pos & mask] = sShim.marker_gtt; pos++;
+		rb[pos & mask] = seq; pos++;
+		if (pos & 1) { rb[pos & mask] = 0; pos++; }
+
+		ring.position = (pos * 4) & (ring.size - 1);
+		asm volatile("mfence" ::: "memory");
+		ring_kick_tail(ring.position);
 	}
-
-	/* Align to QWord */
-	if (pos & 1)
-		RING_EMIT(MI_NOOP_CMD);
-
-	#undef RING_EMIT
-
-	/* Update ring position */
-	ring.position = (pos * 4) & (ring.size - 1);
-
-	/* Flush WC writes */
-	asm volatile("mfence" ::: "memory");
-
-	/* Kick ring: write TAIL */
-	ring_write32(ring.register_base + RING_BUFFER_TAIL, ring.position);
-
-	release_lock(&ring.lock);
 
 	/* --- Step 4: Wait for completion (synchronous for now) --- */
 	if (sShim.marker_cpu) {
 		bigtime_t deadline = system_time() + 2000000; /* 2 second timeout */
 		while (*sShim.marker_cpu != seq) {
 			if (system_time() > deadline) {
-				printf("[drm] EXECBUF2: TIMEOUT waiting for seq %u "
-					"(got 0x%x)\n", seq, *sShim.marker_cpu);
+				uint32_t head = ring_read32(ring.register_base
+					+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
+				uint32_t tail = ring_read32(ring.register_base
+					+ RING_BUFFER_TAIL) & (ring.size - 1);
+				printf("[drm] EXECBUF2: TIMEOUT seq %u (got 0x%x) "
+					"HEAD=0x%x TAIL=0x%x ringpos=0x%x batch_gtt=0x%x\n",
+					seq, *sShim.marker_cpu, head, tail,
+					ring.position, batch_gtt);
 				errno = ETIMEDOUT;
 				return -1;
 			}
@@ -456,46 +464,25 @@ haiku_drm_open(void)
 			sShim.marker_gtt, (void*)sShim.marker_cpu);
 	}
 
-	/* Sync ring position with hardware TAIL */
+	/* Sync ring position with hardware TAIL (don't reset — kills CS).
+	 * Same approach as render_init_clone: read HW TAIL, set sw pos. */
 	{
 		ring_buffer& ring = sShim.shared->primary_ring_buffer;
 		uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
 			& (ring.size - 1);
+		uint32_t hwHead = ring_read32(ring.register_base + RING_BUFFER_HEAD)
+			& INTEL_RING_BUFFER_HEAD_MASK;
 		ring.position = hwTail;
 		ring.space_left = ring.size - 64;
+		printf("[drm] Ring sync: HEAD=0x%x TAIL=0x%x pos=%u size=%u\n",
+			hwHead, hwTail, ring.position, ring.size);
 	}
 
-	/* Verify register area permissions */
-	area_info ainfo;
-	if (get_area_info(sShim.regs_area, &ainfo) == B_OK) {
-		printf("[drm] Regs area: addr=%p size=%lu prot=0x%x (%s%s)\n",
-			ainfo.address, (unsigned long)ainfo.size, ainfo.protection,
-			(ainfo.protection & B_READ_AREA) ? "R" : "",
-			(ainfo.protection & B_WRITE_AREA) ? "W" : "");
-	}
-
-	/* Test register write: read TAIL, write same value back, verify */
-	{
-		ring_buffer& ring = sShim.shared->primary_ring_buffer;
-		uint32_t tail_before = ring_read32(ring.register_base);
-		ring_write32(ring.register_base, tail_before);  // write same value
-		uint32_t tail_after = ring_read32(ring.register_base);
-		uint32_t head = ring_read32(ring.register_base + 4);
-		printf("[drm] Ring: HEAD=0x%x TAIL=0x%x (write-back test: %s)\n",
-			head & 0x001FFFFC, tail_before,
-			tail_after == tail_before ? "OK" : "MISMATCH");
-	}
-
-	/* Direct ring test: MI_STORE_DATA_IMM only (no batch buffer) */
+	/* Ring test: MI_STORE_DATA_IMM via ioctl TAIL kick */
 	if (sShim.marker_cpu) {
 		ring_buffer& ring = sShim.shared->primary_ring_buffer;
 		*sShim.marker_cpu = 0;
 		asm volatile("mfence" ::: "memory");
-
-		uint32_t head_pre = ring_read32(ring.register_base + 4) & 0x1FFFFC;
-		uint32_t tail_pre = ring_read32(ring.register_base);
-
-		acquire_lock(&ring.lock);
 
 		uint32_t* rb = (uint32_t*)ring.base;
 		uint32_t pos = ring.position / 4;
@@ -509,35 +496,14 @@ haiku_drm_open(void)
 
 		ring.position = (pos * 4) & (ring.size - 1);
 		asm volatile("mfence" ::: "memory");
-		ring_write32(ring.register_base, ring.position);
-
-		release_lock(&ring.lock);
+		ring_kick_tail(ring.position);
 
 		snooze(10000);
 		uint32_t head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
-		uint32_t tail_post = ring_read32(ring.register_base);
 
-		printf("[drm] Direct ring MI_STORE_DATA_IMM test:\n");
-		printf("[drm]   HEAD: 0x%x → 0x%x (%s)\n", head_pre, head_post,
-			head_post != head_pre ? "ADVANCED" : "STUCK");
-		printf("[drm]   TAIL: 0x%x → 0x%x\n", tail_pre, tail_post);
-		printf("[drm]   marker: 0x%08x (%s)\n", *sShim.marker_cpu,
-			*sShim.marker_cpu == 0xBEEF0001 ? "GPU WORKS!" : "NOT WRITTEN");
-
-		/* Dump ring content at HEAD to see what command the CS is stuck on */
-		uint32_t stuck_pos = head_pre / 4;
-		printf("[drm]   Ring @ HEAD=0x%x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-			head_pre,
-			rb[stuck_pos & mask], rb[(stuck_pos+1) & mask],
-			rb[(stuck_pos+2) & mask], rb[(stuck_pos+3) & mask],
-			rb[(stuck_pos+4) & mask], rb[(stuck_pos+5) & mask],
-			rb[(stuck_pos+6) & mask], rb[(stuck_pos+7) & mask]);
-
-		/* Also dump IPEHR (last executed command header) */
-		printf("[drm]   IPEHR=0x%08x INSTDONE=0x%08x ACTHD=0x%08x\n",
-			ring_read32(0x2068),
-			ring_read32(0x206C),
-			ring_read32(0x2074));
+		printf("[drm] Ring test: marker=0x%08x HEAD=0x%x → %s\n",
+			*sShim.marker_cpu, head_post,
+			*sShim.marker_cpu == 0xBEEF0001 ? "GPU WORKS!" : "FAILED");
 	}
 
 	printf("[drm] Haiku DRM shim opened: chipset=0x%04x\n",

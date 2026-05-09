@@ -249,15 +249,19 @@ ring_submit_ioctl(const batch_writer* w)
 {
 	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
 
-	// Check if commands fit before ring end (leave margin for alignment)
+	// Check if commands fit before ring end (leave margin for alignment).
+	// On wrap, sync with hardware HEAD to find free space.
 	uint32 bytes_needed = w->count * sizeof(uint32);
 	if (sRingPos + bytes_needed + 64 > ring.size) {
-		// Ring wrap: reset via ioctl
-		intel_get_private_data resetData;
-		resetData.magic = INTEL_PRIVATE_DATA_MAGIC;
-		if (ioctl(gInfo->device, INTEL_RING_RESET, &resetData,
-				sizeof(resetData)) != 0)
-			return B_ERROR;
+		// Wait for GPU to drain, then wrap to position 0
+		bigtime_t deadline = system_time() + 500000;
+		while (system_time() < deadline) {
+			uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
+				& INTEL_RING_BUFFER_HEAD_MASK;
+			if (head >= sRingPos || head == 0)
+				break;
+			snooze(100);
+		}
 		sRingPos = 0;
 	}
 
@@ -821,16 +825,17 @@ media_pipeline_init(media_pipeline_context* ctx)
 
 	ctx->initialized = true;
 
-	// Reset ring via ioctl for clean state (userspace MMIO is read-only,
-	// so QueueCommands TAIL writes don't work without kernel ioctl).
+	// Sync ring position with hardware TAIL for clone contexts.
+	// Don't reset the ring — disable+re-enable kills the CS.
 	if (gInfo->is_clone) {
-		intel_get_private_data resetData;
-		resetData.magic = INTEL_PRIVATE_DATA_MAGIC;
-		if (ioctl(gInfo->device, INTEL_RING_RESET, &resetData,
-				sizeof(resetData)) == 0) {
-			sRingPos = 0;
-			LOG("init: ring reset via ioctl OK\n");
-		}
+		ring_buffer &ring = gInfo->shared_info->primary_ring_buffer;
+		uint32 hwTail = read32(ring.register_base + RING_BUFFER_TAIL)
+			& (ring.size - 1);
+		ring.position = hwTail;
+		ring.space_left = ring.size - 64;
+		sRingPos = hwTail;
+		LOG("init: ring synced pos=%u (hwTail=0x%x)\n",
+			ring.position, hwTail);
 	}
 	LOG("init: ok, 11 BOs allocated (%u bytes total)\n",
 		(unsigned)(BATCH_BO_SIZE + KERNEL_BO_SIZE + VFE_STATE_BO_SIZE
