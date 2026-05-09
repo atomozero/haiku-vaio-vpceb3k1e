@@ -288,8 +288,10 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] **Step 2**: GEM_CREATE/CLOSE/MMAP ✅
 - [x] **Step 3**: GEM_CONTEXT_CREATE/DESTROY (stub) ✅
 - [x] **Step 4**: **GEM_EXECBUFFER2** ✅ (clflush + INTEL_EXEC_BATCH ioctl)
-- [ ] **Step 5**: SET_TILING, GET_TILING, SET_CACHING, GEM_WAIT stubs
-- [ ] **Step 6**: Shim libdrm per Haiku (header drm-uapi + thin ioctl wrapper)
+- [x] **Step 5**: SET_TILING, GET_TILING, GEM_WAIT, CONTEXT_PARAM, RESET_STATS ✅
+- [ ] **Step 6**: Shim libdrm per Haiku (xf86drm.h + drm-uapi/i915_drm.h)
+      Crocus usa intel_ioctl() (wrapper di drmIoctl con EINTR retry).
+      Serve: xf86drm.h che ridireziona a haiku_drm_ioctl().
 - [ ] **Step 7**: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
 - [ ] **Step 8**: Collegare output crocus al framebuffer LVDS (CPU-copy BO → fb)
 
