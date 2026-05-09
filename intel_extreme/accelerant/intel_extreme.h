@@ -542,7 +542,11 @@ enum {
 	INTEL_ALLOCATE_GRAPHICS_MEMORY,
 	INTEL_FREE_GRAPHICS_MEMORY,
 	INTEL_GET_BRIGHTNESS_LEGACY,
-	INTEL_SET_BRIGHTNESS_LEGACY
+	INTEL_SET_BRIGHTNESS_LEGACY,
+
+	// Ring buffer control (kernel-mediated MMIO writes)
+	INTEL_RING_RESET,			// re-init ring: disable, reset HEAD, re-enable
+	INTEL_RING_WRITE_TAIL		// write TAIL register to kick GPU
 };
 
 // retrieve the area_id of the kernel/accelerant shared info
@@ -564,6 +568,12 @@ struct intel_allocate_graphics_memory {
 struct intel_free_graphics_memory {
 	uint32 	magic;
 	addr_t	buffer_base;
+};
+
+// ring buffer write tail (kernel writes TAIL register on behalf of userspace)
+struct intel_ring_tail {
+	uint32	magic;
+	uint32	tail_value;		// ring position to write to TAIL register
 };
 
 // brightness legacy

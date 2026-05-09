@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-11 (cubo 3D diretto a framebuffer, 60 FPS, MMIO R/O scoperta)
+**Ultimo aggiornamento:** 2026-05-11 (kernel ioctl TAIL write funzionante, GPU esegue comandi dal ring)
 
 ---
 
@@ -202,8 +202,8 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - Qualsiasi operazione GPU che non sia framebuffer diretto
 
 ### 3.11 Prossimi passi
-- [ ] **Kernel ioctl per TAIL write** (prerequisito per BLT/media/3D da userspace)
-- [ ] BLT blit al framebuffer (richiede TAIL ioctl)
+- [x] **Kernel ioctl per TAIL write** — FUNZIONANTE (GPU esegue comandi)
+- [ ] BLT blit al framebuffer via ioctl (XY_SRC_COPY_BLT + TAIL kick)
 - [ ] GPU IDCT nel plugin (sostituire compute_idct_reference con GPU dispatch)
 - [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
 - [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
@@ -238,10 +238,13 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       BAR0 0xF0000000) silenziosamente ignorate. Serve kernel ioctl.
 - [x] A.4: Cubo 3D visibile via framebuffer diretto (CPU raster, 60 FPS)
 
-### Fase B: Kernel ioctl per batch submission
-- [ ] B.1: INTEL_EXEC_BATCH ioctl nel kernel driver intel_extreme
-      (GTT offset + length → kernel fa MI_BATCH_BUFFER_START + TAIL + FORCEWAKE)
-- [ ] B.2: Test: gpu_triangle usa ioctl invece di ring diretto
+### Fase B: Kernel ioctl per ring submission — COMPLETATA (base)
+- [x] B.1: INTEL_RING_RESET + INTEL_RING_WRITE_TAIL ioctl nel kernel driver
+      Kernel scrive TAIL/HEAD/CTL via MMIO (userspace è R/O).
+      Build manuale con -fPIC + mutex ABI shim (_mutex→mutex) per hrev59669.
+      Blacklist driver di sistema via /boot/system/settings/packages.
+      **TEST PASS**: HEAD avanza dopo TAIL write → GPU esegue MI_NOOP!
+- [ ] B.2: BLT via ioctl (XY_SRC_COPY_BLT nel ring + TAIL kick)
 - [ ] B.3: GPU hang detection + ILK_GDSR recovery nel kernel
 
 ### Fase C: Interfaccia DRM minimale per Mesa crocus
