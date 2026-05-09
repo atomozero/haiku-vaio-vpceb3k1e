@@ -161,8 +161,22 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
   - GPU tile fill: ~100 µs/frame (260 tiles)
   - Bottleneck: app_server Invalidate→Draw round-trip (~47 ms)
   - BDirectWindow tentato ma VRAM write-combining più lento (11 FPS)
-- [-] Ring clone: ring reset funziona (HEAD/TAIL=0) ma CS non riparte
-      dopo boot-time test con media pipeline. Diagnostica completa.
+- [-] Ring clone da userspace: ring reset funziona (HEAD/TAIL=0) ma CS
+      non riparte dopo boot-time media pipeline test.
+      **Root cause trovata** (sessione 2026-05-09, analisi i915):
+      1. ILK_GDSR media domain reset necessario (reg 0x12ca4) — ring
+         soft-reset non basta per IS stall da MEDIA_OBJECT+MI_FLUSH
+      2. FORCEWAKE (reg 0xA18C) non asserted — GPU in RC6, TAIL drops
+      3. i915 Linux non permette MAI write RING_TAIL da userspace —
+         solo kernel via execbuffer ioctl
+- [x] **Fase A.1**: ILK_GDSR media domain reset in render_init_clone
+- [x] **Fase A.2**: FORCEWAKE assert prima di ring operations
+- [x] **Fase A.3**: GPU plasma demo visibile sullo schermo (177 FPS)
+      GPU IDCT 0.1ms/frame, CPU blit 4.3ms/frame, 300 blocchi/frame
+      Scoperta: graphics_memory accessibile dal clone, framebuffer
+      write diretto funziona. ILK_GDSR non necessario per media pipeline
+      (solo per 3D pipeline ring recovery).
+      Tool: tests/gpu_plasma_screen
 - [ ] **Framebuffer blit via BLT engine** — bypass app_server per display
       diretto, propedeutico a Mesa. XY_SRC_COPY_BLT da staging a screen.
 
@@ -193,6 +207,31 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 ---
 
 ## Fase 6: OpenGL via Mesa crocus — ROADMAP
+
+### Fase A: Ring clone funzionante (prerequisito per tutto)
+- [ ] A.1: ILK_GDSR media domain reset (reg 0x12ca4) dopo boot-time test
+- [ ] A.2: FORCEWAKE assert (reg 0xA18C) prima di ring operations
+- [ ] A.3: Triangolo 3D TRILIST visibile da programma userspace
+
+### Fase B: Kernel ioctl per batch submission
+- [ ] B.1: INTEL_EXEC_BATCH ioctl nel kernel driver intel_extreme
+      (GTT offset + length → kernel fa MI_BATCH_BUFFER_START + TAIL + FORCEWAKE)
+- [ ] B.2: Test: gpu_triangle usa ioctl invece di ring diretto
+- [ ] B.3: GPU hang detection + ILK_GDSR recovery nel kernel
+
+### Fase C: Interfaccia DRM minimale per Mesa crocus
+- [x] C.1: GEM_CREATE / GEM_CLOSE — wrapper su INTEL_ALLOCATE_GRAPHICS_MEMORY ✅
+- [x] C.2: GEM_MMAP — already mapped by allocator, just return addr ✅
+- [x] C.2b: GETPARAM + GET_APERTURE + GEM_BUSY + SET_DOMAIN ✅
+- [x] C.2c: GEM_CONTEXT_CREATE/DESTROY (stub) ✅
+- [ ] C.3: **GEM_EXECBUFFER2** (il cuore — relocation + batch submit via ring)
+- [ ] C.4: GET_RESET_STATS, SET_TILING, SET_CACHING
+
+### Fase D: Mesa crocus winsys per Haiku
+- [ ] D.1: libdrm shim (header drm-uapi + thin ioctl wrapper)
+- [ ] D.2: crocus_bufmgr → Haiku GEM shim
+- [ ] D.3: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
+- [ ] D.4: Output crocus → framebuffer LVDS (CPU-copy o BLT blit)
 
 ### Scoperte propedeutiche (sessione 2026-05-08)
 - Ring buffer accessibile da clone userspace: NON resettare il ring (il CS
