@@ -124,6 +124,50 @@ struct drm_i915_gem_context_destroy {
 	uint32_t pad;
 };
 
+struct drm_i915_gem_set_tiling {
+	uint32_t handle;
+	uint32_t tiling_mode;    /* I915_TILING_NONE/X/Y */
+	uint32_t stride;         /* row pitch in bytes */
+	uint32_t swizzle_mode;   /* out: swizzle applied */
+};
+
+struct drm_i915_gem_get_tiling {
+	uint32_t handle;
+	uint32_t tiling_mode;    /* out */
+	uint32_t swizzle_mode;   /* out */
+	uint32_t phys_swizzle_mode; /* out */
+};
+
+struct drm_i915_gem_wait {
+	uint32_t bo_handle;
+	uint32_t flags;
+	int64_t  timeout_ns;     /* in/out */
+};
+
+struct drm_i915_gem_context_param {
+	uint32_t ctx_id;
+	uint32_t size;
+	uint64_t param;
+	uint64_t value;
+};
+
+struct drm_i915_reset_stats {
+	uint32_t ctx_id;
+	uint32_t flags;
+	uint32_t reset_count;
+	uint32_t batch_active;
+	uint32_t batch_pending;
+	uint32_t pad;
+};
+
+/* Tiling modes */
+#define I915_TILING_NONE    0
+#define I915_TILING_X       1
+#define I915_TILING_Y       2
+
+/* Context params */
+#define I915_CONTEXT_PARAM_GTT_SIZE   0x3
+
 /* I915_PARAM values used by crocus */
 #define I915_PARAM_CHIPSET_ID           4
 #define I915_PARAM_HAS_EXECBUF2         9

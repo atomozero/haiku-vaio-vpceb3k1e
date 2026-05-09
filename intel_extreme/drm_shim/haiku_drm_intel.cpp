@@ -229,6 +229,79 @@ gem_context_destroy(struct drm_i915_gem_context_destroy* args)
 }
 
 
+static int
+gem_set_tiling(struct drm_i915_gem_set_tiling* args)
+{
+	/* Store tiling mode in the BO's flags for future use.
+	 * For now, accept any tiling mode but don't program HW fences. */
+	uint32_t h = args->handle;
+	if (h == 0 || h >= MAX_BOS || !sShim.bos[h].used) {
+		errno = ENOENT;
+		return -1;
+	}
+	/* Accept the tiling but report no swizzle */
+	args->swizzle_mode = 0;  /* I915_BIT_6_SWIZZLE_NONE */
+	return 0;
+}
+
+
+static int
+gem_get_tiling(struct drm_i915_gem_get_tiling* args)
+{
+	uint32_t h = args->handle;
+	if (h == 0 || h >= MAX_BOS || !sShim.bos[h].used) {
+		errno = ENOENT;
+		return -1;
+	}
+	/* Report untiled for now */
+	args->tiling_mode = I915_TILING_NONE;
+	args->swizzle_mode = 0;
+	args->phys_swizzle_mode = 0;
+	return 0;
+}
+
+
+static int
+gem_wait(struct drm_i915_gem_wait* args)
+{
+	/* Synchronous execution — batch is already done when EXECBUFFER2 returns */
+	(void)args;
+	return 0;
+}
+
+
+static int
+gem_context_getparam(struct drm_i915_gem_context_param* args)
+{
+	switch (args->param) {
+	case I915_CONTEXT_PARAM_GTT_SIZE:
+		args->value = 256 * 1024 * 1024;  /* 256 MB */
+		return 0;
+	default:
+		errno = EINVAL;
+		return -1;
+	}
+}
+
+
+static int
+gem_context_setparam(struct drm_i915_gem_context_param* args)
+{
+	/* Accept but ignore */
+	(void)args;
+	return 0;
+}
+
+
+static int
+get_reset_stats(struct drm_i915_reset_stats* args)
+{
+	/* No resets ever */
+	memset(args, 0, sizeof(*args));
+	return 0;
+}
+
+
 static inline void
 ring_write32(uint32_t offset, uint32_t value)
 {
@@ -557,6 +630,18 @@ haiku_drm_ioctl(int fd, unsigned long request, void* arg)
 		return gem_context_create((struct drm_i915_gem_context_create*)arg);
 	case DRM_IOCTL_I915_GEM_CONTEXT_DESTROY:
 		return gem_context_destroy((struct drm_i915_gem_context_destroy*)arg);
+	case DRM_IOCTL_I915_GEM_SET_TILING:
+		return gem_set_tiling((struct drm_i915_gem_set_tiling*)arg);
+	case DRM_IOCTL_I915_GEM_GET_TILING:
+		return gem_get_tiling((struct drm_i915_gem_get_tiling*)arg);
+	case DRM_IOCTL_I915_GEM_WAIT:
+		return gem_wait((struct drm_i915_gem_wait*)arg);
+	case DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM:
+		return gem_context_getparam((struct drm_i915_gem_context_param*)arg);
+	case DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM:
+		return gem_context_setparam((struct drm_i915_gem_context_param*)arg);
+	case DRM_IOCTL_I915_GET_RESET_STATS:
+		return get_reset_stats((struct drm_i915_reset_stats*)arg);
 	default:
 		printf("[drm] Unknown ioctl 0x%lx\n", request);
 		errno = EINVAL;
