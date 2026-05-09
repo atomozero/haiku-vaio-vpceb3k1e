@@ -1,9 +1,9 @@
 /*
- * gpu_triangle — Rotating 3D cube, direct framebuffer write.
+ * gpu_triangle — Rotating 3D cube, BLT to screen via kernel ioctl.
  *
  * CPU: 3D transform + projection + per-pixel rasterization (BGRA)
- * Display: direct memcpy to screen framebuffer (graphics_memory)
- * No ring, no BLT, no MMIO writes — proven path (gpu_plasma_screen).
+ * GPU: XY_SRC_COPY_BLT from GTT buffer to screen framebuffer
+ * Ring commands written to ring memory, kicked via INTEL_RING_WRITE_TAIL ioctl.
  */
 
 #include <stdio.h>
@@ -17,32 +17,36 @@
 #include "intel_extreme.h"
 #include "lock.h"
 #include "accelerant.h"
+#include "gpu_bo.h"
 
 extern accelerant_info* gInfo;
 
 #define IMG_W 480
 #define IMG_H 480
+#define IMG_BYTES (IMG_W * IMG_H * 4)
+
+static int sDeviceFd = -1;
 
 
 static bool
 init_gpu(void)
 {
-	int fd = open("/dev/graphics/intel_extreme_000200", B_READ_WRITE);
-	if (fd < 0) return false;
+	sDeviceFd = open("/dev/graphics/intel_extreme_000200", B_READ_WRITE);
+	if (sDeviceFd < 0) return false;
 	intel_get_private_data data;
 	data.magic = INTEL_PRIVATE_DATA_MAGIC;
-	if (ioctl(fd, INTEL_GET_PRIVATE_DATA, &data, sizeof(data)) != 0) {
-		close(fd); return false;
+	if (ioctl(sDeviceFd, INTEL_GET_PRIVATE_DATA, &data, sizeof(data)) != 0) {
+		close(sDeviceFd); return false;
 	}
 	gInfo = (accelerant_info*)malloc(sizeof(accelerant_info));
 	memset(gInfo, 0, sizeof(accelerant_info));
 	gInfo->is_clone = true;
-	gInfo->device = fd;
+	gInfo->device = sDeviceFd;
 	gInfo->shared_info_area = clone_area("cube shared",
 		(void**)&gInfo->shared_info, B_ANY_ADDRESS,
 		B_READ_AREA | B_WRITE_AREA, data.shared_info_area);
 	if (gInfo->shared_info_area < B_OK) {
-		free(gInfo); close(fd); return false;
+		free(gInfo); close(sDeviceFd); return false;
 	}
 	gInfo->regs_area = clone_area("cube regs",
 		(void**)&gInfo->registers, B_ANY_ADDRESS,
@@ -50,18 +54,82 @@ init_gpu(void)
 		gInfo->shared_info->registers_area);
 	if (gInfo->regs_area < B_OK) {
 		delete_area(gInfo->shared_info_area);
-		free(gInfo); close(fd); return false;
+		free(gInfo); close(sDeviceFd); return false;
 	}
 	return true;
 }
 
 static void cleanup_gpu(void) {
 	if (!gInfo) return;
-	int fd = gInfo->device;
 	delete_area(gInfo->regs_area);
 	delete_area(gInfo->shared_info_area);
 	free(gInfo); gInfo = NULL;
-	close(fd);
+	close(sDeviceFd); sDeviceFd = -1;
+}
+
+
+// ---- Ring helpers via ioctl ----
+
+static status_t
+ring_reset(void)
+{
+	intel_get_private_data data;
+	data.magic = INTEL_PRIVATE_DATA_MAGIC;
+	return ioctl(sDeviceFd, INTEL_RING_RESET, &data, sizeof(data));
+}
+
+static status_t
+ring_kick(uint32 tail)
+{
+	intel_ring_tail data;
+	data.magic = INTEL_PRIVATE_DATA_MAGIC;
+	data.tail_value = tail;
+	return ioctl(sDeviceFd, INTEL_RING_WRITE_TAIL, &data, sizeof(data));
+}
+
+static bool
+ring_wait_idle(uint32 timeout_us)
+{
+	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
+	bigtime_t deadline = system_time() + timeout_us;
+	while (system_time() < deadline) {
+		uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
+			& INTEL_RING_BUFFER_HEAD_MASK;
+		uint32 tail = read32(ring.register_base + RING_BUFFER_TAIL)
+			& (ring.size - 1);
+		if (head == tail)
+			return true;
+	}
+	return false;
+}
+
+
+// Write XY_SRC_COPY_BLT to ring memory and kick.
+// src_gtt: GTT offset of source RGBA buffer
+// Returns new ring position after the command.
+static uint32
+blt_to_screen(uint32 ring_pos, uint32 src_gtt,
+	uint32 dst_x, uint32 dst_y)
+{
+	intel_shared_info& si = *gInfo->shared_info;
+	ring_buffer& ring = si.primary_ring_buffer;
+	uint32* cmd = (uint32*)(ring.base + ring_pos);
+
+	// XY_SRC_COPY_BLT: 8 DWORDs
+	cmd[0] = XY_COMMAND_SOURCE_BLIT | COMMAND_BLIT_RGBA;
+	cmd[1] = si.bytes_per_row | (0xCC << 16)
+		| ((uint32)COMMAND_MODE_RGB32 << 24);
+	cmd[2] = (dst_y << 16) | dst_x;
+	cmd[3] = ((dst_y + IMG_H) << 16) | (dst_x + IMG_W);
+	cmd[4] = si.frame_buffer_offset;
+	cmd[5] = 0;				// src y/x = 0,0
+	cmd[6] = IMG_W * 4;		// src pitch
+	cmd[7] = src_gtt;			// src base GTT offset
+	asm volatile("mfence" ::: "memory");
+
+	uint32 new_pos = (ring_pos + 32) & (ring.size - 1);
+	ring_kick(new_pos);
+	return new_pos;
 }
 
 
@@ -136,50 +204,67 @@ face_area(vec2 a, vec2 b, vec2 c)
 int
 main(int, char**)
 {
-	printf("=== GPU 3D Cube — Direct Framebuffer ===\n");
-	printf("  %dx%d, 6 faces, per-pixel rasterizer\n\n", IMG_W, IMG_H);
+	printf("=== GPU 3D Cube — BLT via Kernel Ioctl ===\n");
+	printf("  %dx%d, CPU raster + XY_SRC_COPY_BLT\n\n", IMG_W, IMG_H);
 
 	if (!init_gpu()) { printf("GPU init failed\n"); return 1; }
 
 	intel_shared_info& si = *gInfo->shared_info;
 	uint32 scr_w = si.current_mode.timing.h_display;
 	uint32 scr_h = si.current_mode.timing.v_display;
-	uint32 bpr = si.bytes_per_row;
 	printf("Screen: %ux%u, bpr=%u, fb_offset=0x%x\n",
-		scr_w, scr_h, bpr, (unsigned)si.frame_buffer_offset);
-	printf("graphics_memory: %p\n", si.graphics_memory);
+		scr_w, scr_h, si.bytes_per_row, (unsigned)si.frame_buffer_offset);
 
-	// Direct framebuffer pointer
-	uint8* fb_base = (uint8*)si.graphics_memory + si.frame_buffer_offset;
-	printf("Framebuffer at: %p\n", fb_base);
-
-	// Offscreen render buffer (CPU-local, avoid slow WC writes per-pixel)
-	uint32* render_buf = (uint32*)malloc(IMG_W * IMG_H * 4);
-	if (!render_buf) {
-		printf("malloc failed\n");
+	// Allocate GTT-mapped buffer for RGBA render output
+	gpu_bo render_bo;
+	if (gpu_bo_alloc(&render_bo, "cube:render", IMG_BYTES, 4096) != B_OK) {
+		printf("render BO alloc failed\n");
 		cleanup_gpu(); return 1;
 	}
+	printf("render_bo: GTT=0x%x, %u bytes\n", render_bo.gtt_offset, IMG_BYTES);
+
+	// Reset ring via ioctl
+	if (ring_reset() != 0) {
+		printf("RING_RESET ioctl failed\n");
+		gpu_bo_free(&render_bo);
+		cleanup_gpu(); return 1;
+	}
+	printf("Ring reset OK\n");
 
 	uint32 dst_x = (scr_w - IMG_W) / 2;
 	uint32 dst_y = (scr_h - IMG_H) / 2;
 
-	// Quick test: red rectangle
-	for (uint32 i = 0; i < IMG_W * IMG_H; i++)
-		render_buf[i] = 0x00FF0000;  // BGRX: red
-	for (uint32 y = 0; y < IMG_H; y++) {
-		memcpy(fb_base + (dst_y + y) * bpr + dst_x * 4,
-			render_buf + y * IMG_W, IMG_W * 4);
+	// BLT test: red rectangle
+	{
+		uint32* px = (uint32*)render_bo.cpu_addr;
+		for (uint32 i = 0; i < IMG_W * IMG_H; i++)
+			px[i] = 0x00FF0000;  // BGRX red
+		asm volatile("mfence" ::: "memory");
+
+		uint32 pos = blt_to_screen(0, render_bo.gtt_offset, dst_x, dst_y);
+		bool ok = ring_wait_idle(100000);
+		printf("BLT test: red square at (%u,%u), %s\n",
+			dst_x, dst_y, ok ? "GPU completed!" : "TIMEOUT");
+		if (!ok) {
+			ring_buffer& ring = si.primary_ring_buffer;
+			uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
+				& INTEL_RING_BUFFER_HEAD_MASK;
+			printf("  HEAD=0x%x (expected 0x%x)\n", head, pos);
+		}
+		printf("Check screen! Waiting 2 seconds...\n");
+		snooze(2000000);
 	}
-	printf("Red test square at (%u,%u) — check screen!\n", dst_x, dst_y);
-	snooze(1000000);
+
+	// Main render loop with BLT display
+	uint32 ring_pos = 0;
+	ring_reset();
 
 	uint32 frame = 0;
 	uint32 fps_cnt = 0;
 	bigtime_t fps_t0 = system_time();
+	const bigtime_t frame_time = 16667;  // ~60 FPS
 
-	printf("Rendering... Press Ctrl+C to stop.\n\n");
-
-	const bigtime_t frame_time = 16667;  // ~60 FPS target
+	printf("Rendering at (%u,%u)... Press Ctrl+C to stop.\n\n", dst_x, dst_y);
 
 	while (frame < 1200) {
 		bigtime_t frame_start = system_time();
@@ -195,9 +280,10 @@ main(int, char**)
 		}
 
 		// Clear to dark background
-		uint32 bg = 0x002E1A1A;  // BGRX dark
+		uint32* fb = (uint32*)render_bo.cpu_addr;
+		uint32 bg = 0x002E1A1A;
 		for (uint32 i = 0; i < IMG_W * IMG_H; i++)
-			render_buf[i] = bg;
+			fb[i] = bg;
 
 		// Sort faces back-to-front
 		float face_z[6];
@@ -228,7 +314,6 @@ main(int, char**)
 			if (face_area(a, b, c) <= 0)
 				continue;
 
-			// Lighting
 			vec3 e1 = {rot[faces[f][1]].x - rot[faces[f][0]].x,
 			           rot[faces[f][1]].y - rot[faces[f][0]].y,
 			           rot[faces[f][1]].z - rot[faces[f][0]].z};
@@ -244,13 +329,11 @@ main(int, char**)
 			if (light < 0.15f) light = 0.15f;
 			if (light > 1.0f) light = 1.0f;
 
-			// BGRX color for Intel framebuffer (B at byte 0, R at byte 2)
 			uint32 r = (uint32)(face_colors[f][0] * light);
 			uint32 g = (uint32)(face_colors[f][1] * light);
 			uint32 bl = (uint32)(face_colors[f][2] * light);
 			uint32 bgrx = (r << 16) | (g << 8) | bl;
 
-			// Bounding box
 			float minx = a.x, maxx = a.x, miny = a.y, maxy = a.y;
 			float pts[] = {b.x,b.y, c.x,c.y, d.x,d.y};
 			for (int p = 0; p < 6; p += 2) {
@@ -265,7 +348,7 @@ main(int, char**)
 			int y1 = (int)maxy + 1; if (y1 > IMG_H) y1 = IMG_H;
 
 			for (int py = y0; py < y1; py++) {
-				uint32* row = render_buf + py * IMG_W;
+				uint32* row = fb + py * IMG_W;
 				for (int px = x0; px < x1; px++) {
 					float fpx = px + 0.5f;
 					float fpy = py + 0.5f;
@@ -277,10 +360,17 @@ main(int, char**)
 			}
 		}
 
-		// Copy render buffer to screen framebuffer (row by row for pitch)
-		for (uint32 y = 0; y < IMG_H; y++) {
-			memcpy(fb_base + (dst_y + y) * bpr + dst_x * 4,
-				render_buf + y * IMG_W, IMG_W * 4);
+		// BLT render buffer to screen
+		asm volatile("mfence" ::: "memory");
+		ring_pos = blt_to_screen(ring_pos, render_bo.gtt_offset,
+			dst_x, dst_y);
+		ring_wait_idle(50000);
+
+		// Reset ring when it gets near the end (leave 4KB margin)
+		if (ring_pos > gInfo->shared_info->primary_ring_buffer.size - 4096) {
+			ring_wait_idle(100000);
+			ring_reset();
+			ring_pos = 0;
 		}
 
 		frame++;
@@ -293,14 +383,14 @@ main(int, char**)
 			fps_t0 = now;
 		}
 
-		// Frame limiter: wait for vsync-ish timing (~60 FPS)
 		bigtime_t elapsed = system_time() - frame_start;
 		if (elapsed < frame_time)
 			snooze(frame_time - elapsed);
 	}
 
+	ring_wait_idle(100000);
 	printf("Done, %u frames.\n", frame);
-	free(render_buf);
+	gpu_bo_free(&render_bo);
 	cleanup_gpu();
 	return 0;
 }
