@@ -177,12 +177,13 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
       write diretto funziona. ILK_GDSR non necessario per media pipeline
       (solo per 3D pipeline ring recovery).
       Tool: tests/gpu_plasma_screen
-- [-] **Framebuffer blit via BLT engine** — BLOCCATO
-      XY_SRC_COPY_BLT encoding corretto (0x54F00006 con COMMAND_BLIT_RGBA)
-      ma il BLT engine non esegue: MMIO write silenziosamente ignorate.
 - [x] **Cubo 3D diretto a framebuffer** — 60 FPS stabile
       CPU raster (per-pixel edge test) → memcpy a graphics_memory.
-      815 FPS raw, 60 FPS con frame limiter. Tool: tests/gpu_triangle
+      815 FPS raw, 60 FPS con frame limiter.
+- [x] **BLT engine via kernel ioctl** — 60 FPS stabile
+      XY_SRC_COPY_BLT (0x54F00006) scritto nella ring memory,
+      TAIL kick via INTEL_RING_WRITE_TAIL ioctl. GPU esegue il BLT,
+      copia da buffer GTT a screen framebuffer. Tool: tests/gpu_triangle
 
 ### 3.10.1 Scoperta critica: MMIO read-only da userspace (2026-05-11)
 Le scritture MMIO sono **silenziosamente ignorate** sia via `clone_area` che
@@ -203,7 +204,7 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 
 ### 3.11 Prossimi passi
 - [x] **Kernel ioctl per TAIL write** — FUNZIONANTE (GPU esegue comandi)
-- [ ] BLT blit al framebuffer via ioctl (XY_SRC_COPY_BLT + TAIL kick)
+- [x] **BLT blit al framebuffer** — FUNZIONANTE (60 FPS, cubo 3D visibile)
 - [ ] GPU IDCT nel plugin (sostituire compute_idct_reference con GPU dispatch)
 - [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
 - [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
@@ -244,7 +245,7 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Build manuale con -fPIC + mutex ABI shim (_mutex→mutex) per hrev59669.
       Blacklist driver di sistema via /boot/system/settings/packages.
       **TEST PASS**: HEAD avanza dopo TAIL write → GPU esegue MI_NOOP!
-- [ ] B.2: BLT via ioctl (XY_SRC_COPY_BLT nel ring + TAIL kick)
+- [x] B.2: BLT via ioctl — 3D cubo 480×480 a 60 FPS, GPU BLT a schermo
 - [ ] B.3: GPU hang detection + ILK_GDSR recovery nel kernel
 
 ### Fase C: Interfaccia DRM minimale per Mesa crocus
