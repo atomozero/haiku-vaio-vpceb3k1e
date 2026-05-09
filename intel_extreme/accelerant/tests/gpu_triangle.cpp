@@ -1,16 +1,12 @@
 /*
- * gpu_triangle — GPU-accelerated rotating 3D cube in a BWindow.
+ * gpu_triangle — GPU-accelerated rotating 3D cube, BLT direct to screen.
  *
- * CPU: 3D transform + projection + edge test (which tiles inside each face)
- * GPU: parallel tile fill via EU compute kernel
- * Display: colorize + BWindow
+ * CPU: 3D transform + projection + edge test
+ * GPU: RGBA tile fill via EU compute kernel
+ * Display: XY_SRC_COPY_BLT from GPU output_bo to screen framebuffer
+ * No BWindow, no app_server overhead — pure GPU → screen pipeline.
  */
 
-#include <Application.h>
-#include <Bitmap.h>
-#include <String.h>
-#include <Window.h>
-#include <View.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +20,7 @@
 #include "accelerant.h"
 #include "media_pipeline.h"
 #include "gpu_bo.h"
+#include "commands.h"
 
 extern accelerant_info* gInfo;
 
@@ -32,8 +29,8 @@ extern accelerant_info* gInfo;
 #define TILE  8
 #define TILES_X (IMG_W / TILE)
 #define TILES_Y (IMG_H / TILE)
-#define WIN_W 720
-#define WIN_H 720
+// No window needed — BLT directly to screen!
+
 
 static bool
 init_gpu(void)
@@ -157,52 +154,21 @@ face_area(vec2 a, vec2 b, vec2 c)
 }
 
 
-// ---- BWindow with BBitmap (DrawBitmap uses HW BLT) ----
-
-class CubeView : public BView {
-public:
-	CubeView(BRect r) : BView(r, "cv", B_FOLLOW_ALL, B_WILL_DRAW) {
-		fBmp = new BBitmap(BRect(0, 0, IMG_W-1, IMG_H-1), B_RGB32);
-	}
-	~CubeView() { delete fBmp; }
-	void Draw(BRect) override { DrawBitmap(fBmp, Bounds()); }
-	BBitmap* Bmp() { return fBmp; }
-private:
-	BBitmap* fBmp;
-};
-
-class CubeWin : public BWindow {
-public:
-	CubeWin() : BWindow(BRect(50, 50, 50+WIN_W-1, 50+WIN_H-1),
-		"GPU 3D Cube — Intel Gen5", B_TITLED_WINDOW,
-		B_NOT_RESIZABLE | B_QUIT_ON_WINDOW_CLOSE) {
-		fView = new CubeView(Bounds());
-		AddChild(fView);
-		fAlive = true;
-	}
-	bool QuitRequested() override {
-		fAlive = false;
-		be_app->PostMessage(B_QUIT_REQUESTED);
-		return true;
-	}
-	CubeView* View() { return fView; }
-	bool Alive() { return fAlive; }
-private:
-	CubeView* fView;
-	volatile bool fAlive;
-};
-
-
 int
 main(int, char**)
 {
-	printf("=== GPU 3D Cube — Compute Rasterizer ===\n");
-	printf("  %dx%d raster (%dx%d window), 6 faces, tile fill via Gen5 EU\n\n",
-		IMG_W, IMG_H, WIN_W, WIN_H);
+	printf("=== GPU 3D Cube — RGBA + BLT to Screen ===\n");
+	printf("  %dx%d, 6 faces, RGBA tile fill + XY_SRC_COPY_BLT\n\n",
+		IMG_W, IMG_H);
 
 	if (!init_gpu()) { printf("GPU init failed\n"); return 1; }
 	printf("GPU OK, Gen %u\n",
 		gInfo->shared_info->device_type.Generation());
+	printf("Screen: %ux%u, fb_offset=0x%x, bpr=%u\n",
+		gInfo->shared_info->current_mode.timing.h_display,
+		gInfo->shared_info->current_mode.timing.v_display,
+		(unsigned)gInfo->shared_info->frame_buffer_offset,
+		(unsigned)gInfo->shared_info->bytes_per_row);
 
 	media_pipeline_context ctx;
 	if (media_pipeline_init(&ctx) != B_OK) {
@@ -214,27 +180,31 @@ main(int, char**)
 		media_pipeline_uninit(&ctx);
 		cleanup_gpu(); return 1;
 	}
-
-	BApplication app("application/x-gpu-cube");
-	CubeWin* win = new CubeWin();
-	win->Show();
-
-	printf("Window ready\n");
+	printf("RGBA tile fill ready, output_bo GTT=0x%x\n",
+		ctx.output_bo.gtt_offset);
 
 	gpu_tile_entry* tiles = (gpu_tile_entry*)malloc(
 		TILES_X * TILES_Y * sizeof(gpu_tile_entry));
 
+	// Center cube on screen
+	uint32 scr_w = gInfo->shared_info->current_mode.timing.h_display;
+	uint32 scr_h = gInfo->shared_info->current_mode.timing.v_display;
+	uint32 dst_x = (scr_w - IMG_W) / 2;
+	uint32 dst_y = (scr_h - IMG_H) / 2;
+
 	uint32 frame = 0;
 	uint32 fps_cnt = 0;
 	bigtime_t fps_t0 = system_time();
-	const bigtime_t frame_budget = 33333;  // 30 FPS target
+	bool running = true;
 
-	while (win->Alive()) {
-		bigtime_t frame_start = system_time();
+	printf("Rendering to screen at (%u,%u)...\n", dst_x, dst_y);
+	printf("Press Ctrl+C to stop.\n\n");
+
+	while (running) {
 		float ax = (float)frame * 0.015f;
 		float ay = (float)frame * 0.023f;
 
-		// Transform all vertices
+		// Transform vertices
 		vec2 proj[8];
 		vec3 rot[8];
 		for (int i = 0; i < 8; i++) {
@@ -242,10 +212,15 @@ main(int, char**)
 			proj[i] = project(rot[i]);
 		}
 
-		// Clear framebuffer
-		memset((void*)ctx.output_bo.cpu_addr, 0, IMG_W * IMG_H);
+		// Clear output to dark background (ARGB)
+		{
+			uint32* px = (uint32*)ctx.output_bo.cpu_addr;
+			uint32 bg = 0xFF1A1A2E;
+			for (uint32 i = 0; i < IMG_W * IMG_H; i++)
+				px[i] = bg;
+		}
 
-		// Sort faces by average Z (painter's algorithm — back to front)
+		// Sort faces (painter's algorithm)
 		float face_z[6];
 		int face_order[6];
 		for (int f = 0; f < 6; f++) {
@@ -263,7 +238,7 @@ main(int, char**)
 					face_order[j+1] = tmp;
 				}
 
-		// Collect ALL tiles from all visible faces into one batch
+		// Collect tiles with ARGB colors
 		uint32 total_tiles = 0;
 		for (int fi = 0; fi < 6; fi++) {
 			int f = face_order[fi];
@@ -290,9 +265,14 @@ main(int, char**)
 			float light = nx*0.3f + ny*-0.5f + nz*0.8f;
 			if (light < 0.15f) light = 0.15f;
 			if (light > 1.0f) light = 1.0f;
-			uint32 fill = ((f+1) << 4) | (uint32)(light * 15.0f);
 
-			// Bounding box of the quad (a,b,c,d) in tile coords
+			// Compute ARGB color directly
+			uint32 r = (uint32)(face_colors[f][0] * light);
+			uint32 g = (uint32)(face_colors[f][1] * light);
+			uint32 bl = (uint32)(face_colors[f][2] * light);
+			uint32 argb = 0xFF000000 | (r << 16) | (g << 8) | bl;
+
+			// Bounding box scan
 			float minx = a.x, maxx = a.x, miny = a.y, maxy = a.y;
 			float pts[] = {b.x,b.y, c.x,c.y, d.x,d.y};
 			for (int p = 0; p < 6; p += 2) {
@@ -318,15 +298,15 @@ main(int, char**)
 						|| point_in_tri(a,c,d,px,py)) {
 						tiles[total_tiles].x = tx * TILE;
 						tiles[total_tiles].y = ty * TILE;
-						tiles[total_tiles].color = fill;
+						tiles[total_tiles].color = argb;
 						total_tiles++;
 					}
 				}
 			}
 		}
 
+		// GPU: U8 tile fill (proven working)
 		bigtime_t t_gpu = system_time();
-		// Submit tiles in batches of 400 (BATCH_MAX_BLOCKS limit)
 		for (uint32 off = 0; off < total_tiles; off += 400) {
 			uint32 chunk = total_tiles - off;
 			if (chunk > 400) chunk = 400;
@@ -334,38 +314,53 @@ main(int, char**)
 		}
 		bigtime_t gpu_us = system_time() - t_gpu;
 
-		// Colorize to BBitmap, DrawBitmap scales via HW BLT
-		if (win->Lock()) {
-			BBitmap* bmp = win->View()->Bmp();
-			uint32 stride = bmp->BytesPerRow() / 4;
-			uint32* out = (uint32*)bmp->Bits();
-			const uint8* src = (const uint8*)ctx.output_bo.cpu_addr;
-
-			static uint32 lut[256];
-			static bool lut_init = false;
-			if (!lut_init) {
-				lut[0] = 0xFF1A1A2E;
-				for (int f = 0; f < 6; f++) {
-					for (int b = 0; b < 16; b++) {
-						uint32 idx = ((f + 1) << 4) | b;
-						uint32 bright = b * 17;
-						uint32 r = (face_colors[f][0] * bright) >> 8;
-						uint32 g = (face_colors[f][1] * bright) >> 8;
-						uint32 bl = (face_colors[f][2] * bright) >> 8;
-						lut[idx] = 0xFF000000 | (r << 16) | (g << 8) | bl;
-					}
+		// CPU: colorize U8 → RGBA in output_bo (reuse same BO)
+		// Write RGBA at offset IMG_W*IMG_H (after U8 data)
+		const uint8* u8src = (const uint8*)ctx.output_bo.cpu_addr;
+		uint32* rgba_dst = (uint32*)(ctx.output_bo.cpu_addr + IMG_W * IMG_H);
+		static uint32 lut[256];
+		static bool lut_init = false;
+		if (!lut_init) {
+			lut[0] = 0xFF1A1A2E;
+			for (int fc = 0; fc < 6; fc++) {
+				for (int b = 0; b < 16; b++) {
+					uint32 idx = ((fc + 1) << 4) | b;
+					uint32 bright = b * 17;
+					uint32 r = (face_colors[fc][0] * bright) >> 8;
+					uint32 g = (face_colors[fc][1] * bright) >> 8;
+					uint32 bl2 = (face_colors[fc][2] * bright) >> 8;
+					lut[idx] = 0xFF000000 | (bl2 << 16) | (g << 8) | r;  // BGRA
 				}
-				lut_init = true;
 			}
+			lut_init = true;
+		}
+		for (uint32 y = 0; y < IMG_H; y++) {
+			const uint8* row = u8src + y * IMG_W;
+			uint32* dst = rgba_dst + y * IMG_W;
+			for (uint32 x = 0; x < IMG_W; x++)
+				dst[x] = lut[row[x]];
+		}
+		asm volatile("mfence" ::: "memory");
 
-			for (uint32 y = 0; y < IMG_H; y++) {
-				const uint8* row = src + y * IMG_W;
-				uint32* dst = out + y * stride;
-				for (uint32 x = 0; x < IMG_W; x++)
-					dst[x] = lut[row[x]];
-			}
-			win->View()->Invalidate();
-			win->Unlock();
+		// GPU: BLT RGBA region of output_bo → screen framebuffer
+		{
+			intel_shared_info& info = *gInfo->shared_info;
+			uint32 src_base = ctx.output_bo.gtt_offset + IMG_W * IMG_H;
+			uint32 src_pitch = IMG_W * 4;
+			uint32 dst_base = info.frame_buffer_offset;
+			uint32 dst_pitch = info.bytes_per_row;
+
+			ring_buffer& ring = info.primary_ring_buffer;
+			QueueCommands queue(ring);
+			queue.MakeSpace(8);
+			queue.Write((0x53 << 22) | (1 << 21) | (1 << 20) | 6);
+			queue.Write(dst_pitch | (0xCC << 16) | (3 << 24));
+			queue.Write((dst_y << 16) | dst_x);
+			queue.Write(((dst_y + IMG_H) << 16) | (dst_x + IMG_W));
+			queue.Write(dst_base);
+			queue.Write(0);
+			queue.Write(src_pitch);
+			queue.Write(src_base);
 		}
 
 		frame++;
@@ -373,24 +368,15 @@ main(int, char**)
 		bigtime_t now = system_time();
 		if (now - fps_t0 >= 1000000) {
 			float fps = (float)fps_cnt * 1e6f / (float)(now - fps_t0);
-			BString title;
-			title.SetToFormat("GPU 3D Cube — %.0f FPS — %u tiles — "
-				"%dx%d — Intel Gen5 EU",
-				fps, total_tiles, IMG_W, IMG_H);
-			if (win->Lock()) {
-				win->SetTitle(title.String());
-				win->Unlock();
-			}
-			printf("  frame %u: %.1f FPS, %u tiles, gpu=%lld us\n",
-				frame, fps, total_tiles, gpu_us);
+			printf("  frame %u: %.1f FPS, %u tiles, gpu=%ld us\n",
+				frame, fps, total_tiles, (long)gpu_us);
 			fps_cnt = 0;
 			fps_t0 = now;
 		}
 
-		// Frame limiter: sleep remaining time to hit 60 FPS
-		bigtime_t elapsed = system_time() - frame_start;
-		if (elapsed < frame_budget)
-			snooze(frame_budget - elapsed);
+		// Stop after 600 frames (~20 seconds)
+		if (frame >= 600)
+			running = false;
 	}
 
 	printf("Done, %u frames.\n", frame);

@@ -124,6 +124,10 @@ static const uint32 kTileFillKernel[][4] = {
 #include "kernels/rasterize_tri.g4b.gen5"
 };
 
+static const uint32 kTileFillRGBAKernel[][4] = {
+#include "kernels/tile_fill_rgba.g4b.gen5"
+};
+
 static const uint32 kIqOnlyDebugKernel[][4] = {
 #include "kernels/iq_only_debug.g4b.gen5"
 };
@@ -168,7 +172,7 @@ static const uint32 kIqOnlyV3Kernel[][4] = {
 #define VFE_STATE_BO_SIZE	64		// struct i965_vfe_state = 24 bytes, pad to 64
 #define IDRT_BO_SIZE		64		// one interface descriptor = 16 bytes, pad
 #define CURBE_BO_SIZE		1024	// up to 30 GRFs (libva MPEG-2 ABI)
-#define OUTPUT_BO_SIZE		262144	// 256KB — supports up to 512x512 pixel output
+#define OUTPUT_BO_SIZE		2097152	// 2MB — U8 raster + RGBA staging for BLT
 #define MARKER_BO_SIZE		256		// 32 DWORDs of marker slots
 #define SURFACE_STATE_BO_SIZE	256	// up to 8 surface states × 32 bytes stride
 #define BINDING_TABLE_BO_SIZE	64	// 1 DWORD per entry, 32-byte aligned
@@ -4101,6 +4105,179 @@ emit_media_object_tile_fill(batch_writer* w, uint32 x, uint32 y,
 	// Pad remaining 13 DWs
 	for (uint32 i = 3; i < 16; i++)
 		bw_emit(w, 0);
+}
+
+
+// ---------------------------------------------------------------------------
+// RGBA tile fill — writes 8×8 tiles as 32-bit ARGB directly.
+// Output surface is SURFTYPE_2D B8G8R8A8, pitch = width * 4.
+// This enables direct BLT to the screen framebuffer without color conversion.
+// ---------------------------------------------------------------------------
+
+status_t
+media_pipeline_setup_tile_fill_rgba(media_pipeline_context* ctx,
+	uint32 width, uint32 height)
+{
+	if (ctx == NULL || !ctx->initialized)
+		return B_NOT_INITIALIZED;
+
+	// DEBUG: use working U8 kernel to isolate surface vs kernel issue
+	status_t st = media_pipeline_upload_kernel(ctx,
+		(const uint32*)kTileFillKernel, sizeof(kTileFillKernel));
+	if (st != B_OK)
+		return st;
+
+	// Surface state: BTI 0 = output 2D as R8_UINT (raw bytes).
+	gpu_bo_clear(&ctx->surface_state_bo);
+	write_2d_surface_state_at(ctx, 0,
+		ctx->output_bo.gtt_offset, width * 4, height, width * 4);
+
+	// Binding table: entry 0 → surface state at offset 0
+	gpu_bo_clear(&ctx->binding_table_bo);
+	gpu_bo_write32(&ctx->binding_table_bo, 0,
+		ctx->surface_state_bo.gtt_offset);
+
+	return B_OK;
+}
+
+
+static void
+emit_media_object_tile_fill_rgba(batch_writer* w, uint32 x, uint32 y,
+	uint32 argb_color)
+{
+	bw_emit(w, CMD_MEDIA_OBJECT | 18);
+	bw_emit(w, 0);			// interface descriptor 0
+	bw_emit(w, 0);			// indirect data length
+	bw_emit(w, 0);			// indirect data pointer
+	bw_emit(w, x * 4);		// g1.0 = tile_x in BYTES (R8_UINT surface)
+	bw_emit(w, y);			// g1.4 = tile_y (rows)
+	bw_emit(w, argb_color);	// g1.8 = ARGB color
+	for (uint32 i = 3; i < 16; i++)
+		bw_emit(w, 0);
+}
+
+
+status_t
+submit_tile_fill_rgba_batch(media_pipeline_context* ctx,
+	const gpu_tile_entry* tiles, uint32 count)
+{
+	if (ctx == NULL || !ctx->initialized)
+		return B_NOT_INITIALIZED;
+	if (count == 0)
+		return B_OK;
+	if (count > BATCH_MAX_BLOCKS)
+		count = BATCH_MAX_BLOCKS;
+
+	uint32 max_threads = count < MEDIA_MAX_PARALLEL_THREADS
+		? count : MEDIA_MAX_PARALLEL_THREADS;
+	write_vfe_state(ctx, max_threads);
+	write_interface_descriptor_ex(ctx, 1,
+		ctx->binding_table_bo.gtt_offset, 0);
+
+	gpu_bo_clear(&ctx->marker_bo);
+	for (uint32 i = 0; i < MEDIA_MARKER_COUNT; i++)
+		gpu_bo_write32(&ctx->marker_bo, i * 4, MEDIA_MARKER_SENTINEL);
+
+	batch_writer w;
+	bw_init(&w);
+
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_START);
+	emit_mi_flush(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MI_FLUSH_1);
+	emit_3dstate_depth_buffer_null(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_DEPTH_BUFFER);
+	emit_pipeline_select_media(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_PIPELINE_SELECT);
+	emit_urb_fence(&w, max_threads);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_URB_FENCE);
+	emit_state_base_address_ironlake(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_STATE_BASE);
+	emit_media_state_pointers(&w, ctx);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MEDIA_STATE_POINTERS);
+	emit_cs_urb_state(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_CS_URB);
+	emit_constant_buffer(&w, ctx, 1);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_CONSTANT_BUFFER);
+
+	for (uint32 i = 0; i < count; i++)
+		emit_media_object_tile_fill_rgba(&w, tiles[i].x, tiles[i].y,
+			tiles[i].color);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MEDIA_OBJECT);
+	emit_mi_flush(&w);
+	bw_emit_marker(&w, ctx, MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	if ((w.count & 1) != 0)
+		bw_emit(&w, MI_NOOP);
+
+	if (w.overflow)
+		return B_NO_MEMORY;
+
+	gpu_bo_flush_cpu_writes();
+	{
+		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
+		QueueCommands queue(ring);
+		queue.MakeSpace(w.count);
+		for (uint32 i = 0; i < w.count; i++)
+			queue.Write(w.dwords[i]);
+	}
+
+	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	volatile uint32* slot = (volatile uint32*)(ctx->marker_bo.cpu_addr
+		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
+	uint32 timeout = 500000 + count * 5000;
+	return gpu_debug_wait_value(slot, tag, timeout) ? B_OK : B_TIMED_OUT;
+}
+
+
+// Now add the XY_SRC_COPY_BLT to blit output_bo to screen framebuffer.
+status_t
+media_pipeline_blt_to_screen(media_pipeline_context* ctx,
+	uint32 src_width, uint32 src_height,
+	uint32 dst_x, uint32 dst_y)
+{
+	if (ctx == NULL || !ctx->initialized || gInfo == NULL)
+		return B_NOT_INITIALIZED;
+
+	intel_shared_info& info = *gInfo->shared_info;
+	uint32 src_pitch = src_width * 4;
+	uint32 dst_pitch = info.bytes_per_row;
+	uint32 dst_base = info.frame_buffer_offset;
+	uint32 src_base = ctx->output_bo.gtt_offset;
+
+	// XY_SRC_COPY_BLT: copy from output_bo to screen framebuffer
+	// Command format (8 DWORDs for 32bpp):
+	// DW0: opcode + length + write_alpha + write_rgb + 32bpp
+	// DW1: dest_pitch | ROP(0xCC=src) | 32bpp_mode
+	// DW2: dest_y1 << 16 | dest_x1
+	// DW3: dest_y2 << 16 | dest_x2
+	// DW4: dest_base (GTT offset)
+	// DW5: src_y1 << 16 | src_x1
+	// DW6: src_pitch
+	// DW7: src_base (GTT offset)
+
+	uint32 cmd = (0x53 << 22)	// XY_SRC_COPY_BLT
+		| (1 << 21)			// write alpha
+		| (1 << 20)			// write RGB
+		| 6;				// DW length - 2
+
+	uint32 br13 = dst_pitch
+		| (0xCC << 16)		// ROP = src copy
+		| (3 << 24);		// 32bpp color depth
+
+	{
+		ring_buffer& ring = info.primary_ring_buffer;
+		QueueCommands queue(ring);
+		queue.MakeSpace(8);
+		queue.Write(cmd);
+		queue.Write(br13);
+		queue.Write((dst_y << 16) | dst_x);
+		queue.Write(((dst_y + src_height) << 16) | (dst_x + src_width));
+		queue.Write(dst_base);
+		queue.Write(0);  // src_y1=0, src_x1=0
+		queue.Write(src_pitch);
+		queue.Write(src_base);
+	}
+
+	return B_OK;
 }
 
 

@@ -303,21 +303,29 @@ struct gpu_block_entry {
 status_t submit_blocks_batch_gpu(media_pipeline_context* ctx,
 	const gpu_block_entry* blocks, uint32 count);
 
-// Tile fill entry: coordinates + fill color byte.
+// Tile fill entry: coordinates + fill color.
 struct gpu_tile_entry {
 	uint32	x;		// pixel X of tile top-left
 	uint32	y;		// pixel Y of tile top-left
-	uint8	color;	// fill value (0-255)
+	uint32	color;	// fill value: U8 for grayscale, ARGB for RGBA
 };
 
-// Set up the tile fill pipeline: upload fill kernel, configure
-// output surface (width × height), no CURBE needed.
+// Set up the tile fill pipeline (U8 grayscale output).
 status_t media_pipeline_setup_tile_fill(media_pipeline_context* ctx,
 	uint32 width, uint32 height);
-
-// Submit up to 400 tile fills in a single batch.
 status_t submit_tile_fill_batch(media_pipeline_context* ctx,
 	const gpu_tile_entry* tiles, uint32 count);
+
+// RGBA tile fill: writes 8×8 tiles as 32-bit ARGB directly to output_bo.
+status_t media_pipeline_setup_tile_fill_rgba(media_pipeline_context* ctx,
+	uint32 width, uint32 height);
+status_t submit_tile_fill_rgba_batch(media_pipeline_context* ctx,
+	const gpu_tile_entry* tiles, uint32 count);
+
+// BLT output_bo to screen framebuffer via XY_SRC_COPY_BLT.
+status_t media_pipeline_blt_to_screen(media_pipeline_context* ctx,
+	uint32 src_width, uint32 src_height,
+	uint32 dst_x, uint32 dst_y);
 
 
 #endif // MEDIA_PIPELINE_H
