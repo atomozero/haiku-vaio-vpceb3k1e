@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-11 (kernel ioctl TAIL write funzionante, GPU esegue comandi dal ring)
+**Ultimo aggiornamento:** 2026-05-11 (GEM_EXECBUFFER2 funzionante, batch buffer via kernel ioctl)
 
 ---
 
@@ -274,24 +274,24 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - **(2026-05-08)** Ring buffer accessibile da clone userspace, ma NON resettare.
   render_init_clone(): alloca state GPU, sincronizza ring position.
 - **(2026-05-11)** **MMIO write broken**: scritture a registri GPU ignorate
-  da userspace — sia clone_area che poke driver (BAR0 mapping diretto).
-  Il ring HEAD è bloccato a 0x5134 in tutte le esecuzioni. Il CS non
-  esegue MAI comandi scritti da userspace. Solo `graphics_memory` (GTT
-  aperture) è scrivibile → framebuffer diretto funziona (815 FPS raw).
-  Per ring/BLT/media/3D serve un ioctl kernel che scriva TAIL.
+  da userspace (clone_area + poke). Risolto con kernel ioctl per TAIL/EXEC.
+- **(2026-05-11)** **clflush per batch**: CPU writes via WC aperture non
+  coerenti con GPU instruction fetch. clflush obbligatorio prima di
+  MI_BATCH_BUFFER_START. Senza clflush la GPU legge dati stale e hang.
+- **(2026-05-11)** **Ring reset kills CS**: disable+re-enable del ring
+  uccide il Command Streamer. Usare sync-only (leggere HW TAIL).
+- **(2026-05-11)** **MI_BATCH_BUFFER_END**: encoding corretto è
+  (0x0A << 23) = 0x05000000, NON 0x0A000000.
 
-### Roadmap Mesa (Option B: winsys shim — percorso più corto)
-- [ ] **Step 1**: Fake device node con GETPARAM + GET_APERTURE (chipset_id=0x0046)
-- [ ] **Step 2**: GEM_CREATE/CLOSE/MMAP → wrapper su INTEL_ALLOCATE_GRAPHICS_MEMORY
-      GEM handle = indice in tabella {cpu_addr, gtt_offset, size}
-- [ ] **Step 3**: GEM_CONTEXT_CREATE + GEM_WAIT → stub (ctx_id=1, HWS polling)
-- [ ] **Step 4**: **GEM_EXECBUFFER2** — il cuore:
-      riceve batch BO + exec_objects[] con relocations → patcha indirizzi GTT
-      nel batch BO → MI_BATCH_BUFFER_START nel ring → kick TAIL → wait HWS
-      (~150 righe di relocation patching, nostro GTT è flat: offset = addr - base)
-- [ ] **Step 5**: Shim libdrm per Haiku (header drm-uapi + thin ioctl wrapper)
-- [ ] **Step 6**: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
-- [ ] **Step 7**: Collegare output crocus al framebuffer LVDS (CPU-copy BO → fb)
+### Roadmap Mesa (stato attuale)
+- [x] **Step 1**: GETPARAM + GET_APERTURE (chipset_id=0x0046) ✅
+- [x] **Step 2**: GEM_CREATE/CLOSE/MMAP ✅
+- [x] **Step 3**: GEM_CONTEXT_CREATE/DESTROY (stub) ✅
+- [x] **Step 4**: **GEM_EXECBUFFER2** ✅ (clflush + INTEL_EXEC_BATCH ioctl)
+- [ ] **Step 5**: SET_TILING, GET_TILING, SET_CACHING, GEM_WAIT stubs
+- [ ] **Step 6**: Shim libdrm per Haiku (header drm-uapi + thin ioctl wrapper)
+- [ ] **Step 7**: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
+- [ ] **Step 8**: Collegare output crocus al framebuffer LVDS (CPU-copy BO → fb)
 
 ### Scoperte sessione 2026-05-10
 
