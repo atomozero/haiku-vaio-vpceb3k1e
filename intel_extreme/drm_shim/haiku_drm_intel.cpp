@@ -35,6 +35,7 @@ struct gem_bo {
 	uint64_t size;
 	uint32_t gtt_offset;
 	void*    cpu_addr;     /* mapped CPU address */
+	uint32_t tiling_mode;  /* I915_TILING_NONE/X/Y */
 };
 
 /* Global shim state */
@@ -239,7 +240,7 @@ gem_set_tiling(struct drm_i915_gem_set_tiling* args)
 		errno = ENOENT;
 		return -1;
 	}
-	/* Accept the tiling but report no swizzle */
+	sShim.bos[h].tiling_mode = args->tiling_mode;
 	args->swizzle_mode = 0;  /* I915_BIT_6_SWIZZLE_NONE */
 	return 0;
 }
@@ -253,9 +254,8 @@ gem_get_tiling(struct drm_i915_gem_get_tiling* args)
 		errno = ENOENT;
 		return -1;
 	}
-	/* Report untiled for now */
-	args->tiling_mode = I915_TILING_NONE;
-	args->swizzle_mode = 0;
+	args->tiling_mode = sShim.bos[h].tiling_mode;
+	args->swizzle_mode = 0;  /* I915_BIT_6_SWIZZLE_NONE */
 	args->phys_swizzle_mode = 0;
 	return 0;
 }
