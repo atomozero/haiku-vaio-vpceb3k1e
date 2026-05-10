@@ -410,68 +410,81 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	/* Flush CPU writes to all BOs */
 	asm volatile("mfence" ::: "memory");
 
-	/* --- Step 3: Submit batch via kernel INTEL_EXEC_BATCH ioctl --- */
-	/* The kernel emits MI_BATCH_BUFFER_START + MI_FLUSH to the ring
-	 * and writes the TAIL register. Same pattern as i915 execbuffer. */
-	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
+	/* --- Step 3: Inline batch commands into ring --- */
+	/* MI_BATCH_BUFFER_START hangs from clone context on Gen5.
+	 * Copy batch commands directly into the ring instead. */
+	uint32_t batch_len = args->batch_len;
+	if (batch_len == 0)
+		batch_len = 4096;
+	uint32_t batch_dwords = batch_len / 4;
+	uint32_t* batch_src = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
+		+ args->batch_start_offset);
+
+	/* Strip MI_BATCH_BUFFER_END and trailing NOOPs */
+	while (batch_dwords > 0
+		&& (batch_src[batch_dwords - 1] == 0
+			|| batch_src[batch_dwords - 1] == (0x0A << 23)))
+		batch_dwords--;
 
 	/* Prepare completion marker */
 	uint32_t seq = ++sShim.marker_seq;
 	if (sShim.marker_cpu)
 		*sShim.marker_cpu = 0;
 
-	/* Flush CPU cache for batch BO (WC aperture writes are not coherent
-	 * with GPU instruction fetch — discovered on this ILK hardware).
-	 * Same purpose as i915_gem_clflush_object() in Linux. */
-	{
-		uint8_t* p = (uint8_t*)batch_bo.cpu_addr;
-		for (uint32_t i = 0; i < batch_bo.size; i += 64)
-			asm volatile("clflush (%0)" :: "r"(p + i) : "memory");
-		asm volatile("mfence" ::: "memory");
-	}
-
-	/* Execute batch via kernel ioctl */
-	intel_exec_batch execData;
-	execData.magic = INTEL_PRIVATE_DATA_MAGIC;
-	execData.batch_gtt = batch_gtt;
-	execData.batch_len = args->batch_len;
-	if (ioctl(sShim.fd, INTEL_EXEC_BATCH, &execData, sizeof(execData)) != 0) {
-		printf("[drm] EXECBUF2: INTEL_EXEC_BATCH ioctl failed\n");
-		errno = EIO;
-		return -1;
-	}
-
-	/* Write completion marker to ring via TAIL kick */
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	if (sShim.marker_cpu) {
-		uint32_t* rb = (uint32_t*)ring.base;
-		uint32_t pos = ring.position / 4;
-		uint32_t mask = (ring.size / 4) - 1;
+	uint32_t needed = batch_dwords + 8;
 
-		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
-		rb[pos & mask] = 0; pos++;
-		rb[pos & mask] = sShim.marker_gtt; pos++;
-		rb[pos & mask] = seq; pos++;
-		if (pos & 1) { rb[pos & mask] = 0; pos++; }
-
-		ring.position = (pos * 4) & (ring.size - 1);
-		asm volatile("mfence" ::: "memory");
-		ring_kick_tail(ring.position);
+	/* Check ring space — wrap if near end */
+	if (ring.position + needed * 4 + 64 > ring.size) {
+		bigtime_t deadline = system_time() + 500000;
+		while (system_time() < deadline) {
+			uint32_t head = ring_read32(ring.register_base + RING_BUFFER_HEAD)
+				& INTEL_RING_BUFFER_HEAD_MASK;
+			if (head >= ring.position || head == 0)
+				break;
+			snooze(100);
+		}
+		ring.position = 0;
 	}
 
-	/* --- Step 4: Wait for completion (synchronous for now) --- */
+	/* Write inline batch + trailer to ring */
+	uint32_t* rb = (uint32_t*)ring.base;
+	uint32_t pos = ring.position / 4;
+	uint32_t mask = (ring.size / 4) - 1;
+
+	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
+
+	for (uint32_t i = 0; i < batch_dwords; i++)
+		RING_EMIT(batch_src[i]);
+
+	RING_EMIT(MI_FLUSH_DRM);
+
 	if (sShim.marker_cpu) {
-		bigtime_t deadline = system_time() + 2000000; /* 2 second timeout */
+		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
+		RING_EMIT(0);
+		RING_EMIT(sShim.marker_gtt);
+		RING_EMIT(seq);
+	}
+
+	if (pos & 1)
+		RING_EMIT(MI_NOOP_CMD);
+
+	#undef RING_EMIT
+
+	ring.position = (pos * 4) & (ring.size - 1);
+	asm volatile("mfence" ::: "memory");
+	ring_kick_tail(ring.position);
+
+	/* --- Step 4: Wait for completion --- */
+	if (sShim.marker_cpu) {
+		bigtime_t deadline = system_time() + 2000000;
 		while (*sShim.marker_cpu != seq) {
 			if (system_time() > deadline) {
 				uint32_t head = ring_read32(ring.register_base
 					+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
-				uint32_t tail = ring_read32(ring.register_base
-					+ RING_BUFFER_TAIL) & (ring.size - 1);
 				printf("[drm] EXECBUF2: TIMEOUT seq %u (got 0x%x) "
-					"HEAD=0x%x TAIL=0x%x ringpos=0x%x batch_gtt=0x%x\n",
-					seq, *sShim.marker_cpu, head, tail,
-					ring.position, batch_gtt);
+					"HEAD=0x%x TAIL=0x%x\n",
+					seq, *sShim.marker_cpu, head, ring.position);
 				errno = ETIMEDOUT;
 				return -1;
 			}

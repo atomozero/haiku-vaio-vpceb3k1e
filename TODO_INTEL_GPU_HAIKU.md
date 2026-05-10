@@ -256,12 +256,12 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] C.2: GEM_MMAP — already mapped by allocator, just return addr ✅
 - [x] C.2b: GETPARAM + GET_APERTURE + GEM_BUSY + SET_DOMAIN ✅
 - [x] C.2c: GEM_CONTEXT_CREATE/DESTROY (stub) ✅
-- [x] C.3: **GEM_EXECBUFFER2** — FUNZIONANTE!
-      INTEL_EXEC_BATCH ioctl (kernel emette MI_BATCH_BUFFER_START + TAIL).
-      clflush batch BO prima di submit (WC aperture non coerente per ifetch).
+- [x] C.3: **GEM_EXECBUFFER2** — FUNZIONANTE! (2026-05-11)
+      DRM shim: MI_BATCH_BUFFER_START nel ring + TAIL kick via ioctl.
+      Ring sync (non reset!) con TAIL hardware — RING_RESET uccide il CS.
       Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST supportati.
-      Scoperte: MI_BATCH_BUFFER_END=0x05000000, non 0x0A000000.
-      CPU cache non coerente con GPU instruction fetch su ILK.
+      Completion marker via MI_STORE_DATA_IMM nel ring (non nel batch).
+      Batch test: GPU esegue e ritorna correttamente.
 - [ ] C.4: GET_RESET_STATS, SET_TILING, SET_CACHING
 
 ### Fase D: Mesa crocus winsys per Haiku
