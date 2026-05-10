@@ -196,9 +196,10 @@ getparam(struct drm_i915_getparam* args)
 		*args->value = 12500000;  /* 12.5 MHz for ILK */
 		break;
 	default:
-		printf("[drm] GETPARAM: unknown param %d\n", args->param);
-		errno = EINVAL;
-		return -1;
+		/* Return 0 for unknown params — Gen5 doesn't support newer features.
+		 * Crocus queries params 46, 50, 56 etc. on newer kernels. */
+		*args->value = 0;
+		break;
 	}
 	return 0;
 }

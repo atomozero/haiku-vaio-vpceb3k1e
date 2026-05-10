@@ -265,11 +265,17 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] C.4: GET_RESET_STATS, SET_TILING, GET_TILING, SET_CACHING, GEM_WAIT,
       CONTEXT_GETPARAM/SETPARAM, MADVISE — tutti implementati nel dispatcher
 
-### Fase D: Mesa crocus winsys per Haiku — QUASI COMPLETATA
+### Fase D: Mesa crocus winsys per Haiku — IN CORSO
 - [x] D.1: libdrm shim (xf86drm.h, _IOC compat, drmDevice, libdrm_shim.so)
 - [x] D.2: crocus_bufmgr → Haiku GEM shim via haiku_drm_intel
 - [x] D.3: Mesa 25.3.3 compilata con crocus (libcrocus.a OK)
-- [ ] D.4: Output crocus → framebuffer (test crocus_screen_create + glClear)
+- [-] D.4: Target meson `haiku-crocus` — CrocusRenderer + GalliumContext
+      compila OK, link quasi funzionante. Errori rimanenti:
+      - `crocus_driconf[]` non esportato (serve driconf init alternativo)
+      - `debug_screen_wrap` inline (rimuovere o stubbare)
+      - `crocus_drm_screen_create` è C, serve extern "C" wrapper
+      GLInfo caricava il vecchio Crocus Pipe ma crashava su driQueryOptioni
+      (opzioni driconf non inizializzate). GETPARAM sconosciuti ora return 0.
 
 ### Scoperte propedeutiche
 - **(2026-05-08)** Ring buffer accessibile da clone userspace, ma NON resettare.
