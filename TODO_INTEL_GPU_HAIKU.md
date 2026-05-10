@@ -262,13 +262,14 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST supportati.
       Completion marker via MI_STORE_DATA_IMM nel ring (non nel batch).
       Batch test: GPU esegue e ritorna correttamente.
-- [ ] C.4: GET_RESET_STATS, SET_TILING, SET_CACHING
+- [x] C.4: GET_RESET_STATS, SET_TILING, GET_TILING, SET_CACHING, GEM_WAIT,
+      CONTEXT_GETPARAM/SETPARAM, MADVISE — tutti implementati nel dispatcher
 
-### Fase D: Mesa crocus winsys per Haiku
-- [ ] D.1: libdrm shim (header drm-uapi + thin ioctl wrapper)
-- [ ] D.2: crocus_bufmgr → Haiku GEM shim
-- [ ] D.3: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
-- [ ] D.4: Output crocus → framebuffer LVDS (CPU-copy o BLT blit)
+### Fase D: Mesa crocus winsys per Haiku — QUASI COMPLETATA
+- [x] D.1: libdrm shim (xf86drm.h, _IOC compat, drmDevice, libdrm_shim.so)
+- [x] D.2: crocus_bufmgr → Haiku GEM shim via haiku_drm_intel
+- [x] D.3: Mesa 25.3.3 compilata con crocus (libcrocus.a OK)
+- [ ] D.4: Output crocus → framebuffer (test crocus_screen_create + glClear)
 
 ### Scoperte propedeutiche
 - **(2026-05-08)** Ring buffer accessibile da clone userspace, ma NON resettare.
