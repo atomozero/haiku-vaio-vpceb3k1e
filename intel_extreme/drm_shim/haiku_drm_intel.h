@@ -190,14 +190,16 @@ struct drm_i915_reset_stats {
 
 /* ---- Haiku DRM shim API ---- */
 
-/* Initialize the shim. Opens the intel_extreme device.
- * Returns fd >= 0 on success. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int haiku_drm_open(void);
-
-/* Close the shim and free all resources. */
 void haiku_drm_close(int fd);
-
-/* Main ioctl dispatcher — call this instead of ioctl() for DRM ops. */
 int haiku_drm_ioctl(int fd, unsigned long request, void* arg);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* HAIKU_DRM_INTEL_H */

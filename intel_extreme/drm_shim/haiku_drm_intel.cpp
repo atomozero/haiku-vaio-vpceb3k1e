@@ -487,7 +487,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 /* ---- Public API ---- */
 
-int
+extern "C" int
 haiku_drm_open(void)
 {
 	memset(&sShim, 0, sizeof(sShim));
@@ -585,7 +585,7 @@ haiku_drm_open(void)
 }
 
 
-void
+extern "C" void
 haiku_drm_close(int fd)
 {
 	/* Free any remaining BOs */
@@ -603,7 +603,7 @@ haiku_drm_close(int fd)
 }
 
 
-int
+extern "C" int
 haiku_drm_ioctl(int fd, unsigned long request, void* arg)
 {
 	(void)fd;
@@ -647,4 +647,27 @@ haiku_drm_ioctl(int fd, unsigned long request, void* arg)
 		errno = EINVAL;
 		return -1;
 	}
+}
+
+
+/* Exported functions for Mesa (extern "C", not inline) */
+extern "C" int
+drmIoctl(int fd, unsigned long request, void *arg)
+{
+	unsigned long nr = (request >> 0) & 0xFF;  /* _IOC_NR */
+	return haiku_drm_ioctl(fd, nr, arg);
+}
+
+extern "C" int
+drmOpen(const char *name, const char *busid)
+{
+	(void)name; (void)busid;
+	return haiku_drm_open();
+}
+
+extern "C" int
+drmClose(int fd)
+{
+	haiku_drm_close(fd);
+	return 0;
 }

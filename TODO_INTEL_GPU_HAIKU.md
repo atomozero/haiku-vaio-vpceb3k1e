@@ -289,11 +289,16 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] **Step 3**: GEM_CONTEXT_CREATE/DESTROY (stub) ✅
 - [x] **Step 4**: **GEM_EXECBUFFER2** ✅ (clflush + INTEL_EXEC_BATCH ioctl)
 - [x] **Step 5**: SET_TILING, GET_TILING, GEM_WAIT, CONTEXT_PARAM, RESET_STATS ✅
-- [ ] **Step 6**: Shim libdrm per Haiku (xf86drm.h + drm-uapi/i915_drm.h)
-      Crocus usa intel_ioctl() (wrapper di drmIoctl con EINTR retry).
-      Serve: xf86drm.h che ridireziona a haiku_drm_ioctl().
-- [ ] **Step 7**: Build Mesa con crocus (meson -Dgallium-drivers=crocus)
-- [ ] **Step 8**: Collegare output crocus al framebuffer LVDS (CPU-copy BO → fb)
+- [x] **Step 6**: Shim libdrm per Haiku — xf86drm.h con _IOC compat, drmDevice,
+      syncobj stubs, drmPrime, drmAuth. libdrm_shim.so con extern "C" exports.
+- [x] **Step 7**: **Mesa 25.3.3 compilata con crocus!**
+      `meson -Dgallium-drivers=softpipe,crocus -Dplatforms=haiku -Dwerror=false`
+      Patch: system_has_kms_drm += haiku, intel_perf MIN/MAX guard,
+      build_id stub, libsync _IOC compat. 1339 file compilati.
+      Output: libgallium-25.3.3.so (134MB) con softpipe + crocus.
+- [ ] **Step 8**: Integrare crocus nel Haiku GL stack
+      Creare renderer add-on "Crocus Pipe" per /boot/system/add-ons/opengl/
+      o usare il percorso DRI/EGL di Mesa 25.3.3.
 
 ### Scoperte sessione 2026-05-10
 
