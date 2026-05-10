@@ -608,7 +608,23 @@ haiku_drm_ioctl(int fd, unsigned long request, void* arg)
 {
 	(void)fd;
 
-	switch (request) {
+	/* Extract base ioctl number: Mesa uses BSD _IOWR encoding (0xC0xx6479)
+	 * but our constants are simple numbers (0x79). Mask to get the low byte
+	 * which contains (group << 8 | num), then just take the low 8 bits. */
+	unsigned long req = request & 0xFF;
+
+	/* Debug: log first few unique ioctl requests */
+	static unsigned long seen[32];
+	static int nseen = 0;
+	bool is_new = true;
+	for (int i = 0; i < nseen; i++)
+		if (seen[i] == request) { is_new = false; break; }
+	if (is_new && nseen < 32) {
+		seen[nseen++] = request;
+		printf("[drm] ioctl: request=0x%lx → masked=0x%lx\n", request, req);
+	}
+
+	switch (req) {
 	case DRM_IOCTL_I915_GEM_CREATE:
 		return gem_create((struct drm_i915_gem_create*)arg);
 	case DRM_IOCTL_GEM_CLOSE:
@@ -642,6 +658,20 @@ haiku_drm_ioctl(int fd, unsigned long request, void* arg)
 		return gem_context_setparam((struct drm_i915_gem_context_param*)arg);
 	case DRM_IOCTL_I915_GET_RESET_STATS:
 		return get_reset_stats((struct drm_i915_reset_stats*)arg);
+	case DRM_IOCTL_I915_QUERY:
+		/* Not supported on Gen5 — Mesa falls back to getparam for ver < 10 */
+		errno = EINVAL;
+		return -1;
+	case DRM_IOCTL_I915_GEM_SET_CACHING:
+	case DRM_IOCTL_I915_GEM_MADVISE:
+		return 0;  /* silently accept */
+	case DRM_IOCTL_I915_GEM_USERPTR:
+	case DRM_IOCTL_GEM_OPEN:
+	case DRM_IOCTL_SYNCOBJ_CREATE:
+	case DRM_IOCTL_SYNCOBJ_WAIT:
+	case DRM_IOCTL_SYNCOBJ_DESTROY:
+		errno = ENOTSUP;
+		return -1;
 	default:
 		printf("[drm] Unknown ioctl 0x%lx\n", request);
 		errno = EINVAL;

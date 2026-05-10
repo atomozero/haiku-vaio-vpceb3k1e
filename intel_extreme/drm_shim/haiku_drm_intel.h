@@ -33,6 +33,14 @@
 #define DRM_IOCTL_I915_GEM_CONTEXT_GETPARAM 0x73
 #define DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM 0x74
 #define DRM_IOCTL_I915_GET_RESET_STATS 0x72
+#define DRM_IOCTL_I915_QUERY           0x79
+#define DRM_IOCTL_I915_GEM_SET_CACHING 0x6f
+#define DRM_IOCTL_I915_GEM_MADVISE    0x70
+#define DRM_IOCTL_I915_GEM_USERPTR    0x75
+#define DRM_IOCTL_GEM_OPEN            0x0b
+#define DRM_IOCTL_SYNCOBJ_CREATE      0xbf
+#define DRM_IOCTL_SYNCOBJ_WAIT        0xc3
+#define DRM_IOCTL_SYNCOBJ_DESTROY     0xc0
 
 /* ---- DRM structs (matching Linux drm_i915_drm.h) ---- */
 
