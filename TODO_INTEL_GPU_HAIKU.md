@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-11 (GEM_EXECBUFFER2 funzionante, batch buffer via kernel ioctl)
+**Ultimo aggiornamento:** 2026-05-11 (ISL fix, gl_test no crash, SwapBuffers blit prossimo passo)
 
 ---
 
@@ -294,6 +294,13 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] `hgl_buffer->newWidth/Height` inizializzati da BGLView bounds
 - [x] GLInfo mostra: **Mesa Intel(R) HD Graphics (ILK), OpenGL 2.1 Mesa 25.3.3**
       Texture 2D max: 8192, tutte le capacità popolate
+
+#### E.1.1: ISL format table fix (2026-05-11)
+- [x] **ISL format table corrotta nel binario linkato** — 170 entry valide su 918.
+      Entry 233 (B8G8R8X8_UNORM) aveva bpb=0 → crash `bs > 0` in isl_tiling_get_info.
+      Root cause: linker non ha scritto correttamente la sparse array C99.
+      Fix: binary patch del Crocus Pipe con tabella corretta dal .o (36720 bytes).
+- [x] **gl_test non crasha più** — finestra nera (glClear non visibile, serve SwapBuffers)
 
 #### E.2: SwapBuffers GPU→Screen (rendering visibile)
 - [ ] Opzione A (rapida): readback GPU surface → memcpy a BBitmap (CPU, lento)
