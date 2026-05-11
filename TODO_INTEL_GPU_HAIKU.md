@@ -287,12 +287,13 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 
 ### Fase E: GLInfo e rendering visibile — PIANIFICAZIONE
 
-#### E.1: Fix GLInfo (query GL strings — no rendering necessario)
-- [ ] Fix dichiarazione `st_api_make_current`: bool non int (CrocusRenderer.cpp:135)
-- [ ] Verificare che `glGetString(GL_VENDOR/RENDERER/VERSION)` ritorna valori
-- [ ] Se GL data è 0: debuggare con printf in `hgl_create_context` path
-- [ ] Verificare GETPARAM: aggiungere return 0 (non EINVAL) per params booleani
-      che crocus interroga (HAS_BSD, HAS_VEBOX, SUBSLICE_TOTAL, EU_TOTAL)
+#### E.1: GLInfo mostra dati GL corretti — COMPLETATA (2026-05-11)
+- [x] Fix `st_api_make_current`: dichiarata bool (era int, ABI mismatch)
+- [x] glapi dispatch bridge: Mesa 25 `_mesa_glapi` → system `_glapi`
+      Trovare libglapi.so GIÀ caricata (get_next_image_info, non load_add_on)
+- [x] `hgl_buffer->newWidth/Height` inizializzati da BGLView bounds
+- [x] GLInfo mostra: **Mesa Intel(R) HD Graphics (ILK), OpenGL 2.1 Mesa 25.3.3**
+      Texture 2D max: 8192, tutte le capacità popolate
 
 #### E.2: SwapBuffers GPU→Screen (rendering visibile)
 - [ ] Opzione A (rapida): readback GPU surface → memcpy a BBitmap (CPU, lento)
