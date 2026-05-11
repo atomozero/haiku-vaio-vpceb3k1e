@@ -43,7 +43,19 @@ void driParseConfigFiles(driOptionCache *cache, const driOptionCache *info,
 }
 
 struct pipe_frontend_screen;
-struct pipe_frontend_drawable;
+
+struct pipe_frontend_drawable {
+	int32_t stamp;
+	uint32_t ID;
+	struct pipe_frontend_screen *fscreen;
+	const struct st_visual *visual;
+	/* validate callback — filled by hgl_create_st_framebuffer */
+	void (*validate)(struct st_context*, struct pipe_frontend_drawable*,
+		const void*, unsigned, void**);
+	bool (*flush_front)(struct st_context*, struct pipe_frontend_drawable*,
+		unsigned);
+	bool (*get_param)(struct pipe_frontend_drawable*, unsigned);
+};
 struct pp_queue_t;
 
 /* pipe_format enum — only need NONE and the formats used by hgl_get_st_visual */
@@ -70,7 +82,25 @@ struct hgl_context {
 };
 
 struct hgl_display;
-struct hgl_buffer;
+
+/* Enough of pipe_resource/pipe_texture_target for hgl_buffer layout */
+enum pipe_texture_target { PIPE_TEXTURE_2D = 2 };
+struct pipe_resource;
+#define ST_ATTACHMENT_COUNT 5
+
+struct hgl_buffer {
+	struct pipe_frontend_drawable base;
+	struct st_visual visual;
+	unsigned width;
+	unsigned height;
+	unsigned newWidth;
+	unsigned newHeight;
+	unsigned mask;
+	struct pipe_screen* screen;
+	void* winsysContext;
+	enum pipe_texture_target target;
+	struct pipe_resource* textures[ST_ATTACHMENT_COUNT];
+};
 
 /* Types matching Mesa's hgl_context.h */
 extern "C" {
@@ -102,11 +132,15 @@ extern const struct drm_driver_descriptor crocus_driver_descriptor;
 /* From state_tracker/st_context.h */
 struct st_context* st_api_create_context(struct pipe_frontend_screen* fscreen,
 	void* attribs, int* error, struct st_context* shared);
-int st_api_make_current(struct st_context* st,
+bool st_api_make_current(struct st_context* st,
 	struct pipe_frontend_drawable* draw,
 	struct pipe_frontend_drawable* read);
 void st_context_flush(struct st_context* st, unsigned flags,
 	void* fence, void* notify_before, void* notify_after);
+
+/* Internal Mesa 25 dispatch (compiled into this addon) */
+void* _mesa_glapi_get_dispatch(void);
+void* _mesa_glapi_get_context(void);
 
 /* From DRM shim */
 int haiku_drm_open(void);
@@ -120,6 +154,8 @@ public:
 					CrocusRenderer(BGLView *view, ulong options);
 	virtual			~CrocusRenderer();
 
+	virtual void	LockGL();
+	virtual void	UnlockGL();
 	virtual void	SwapBuffers(bool VSync = false);
 	virtual void	Draw(BRect updateRect);
 	virtual void	FrameResized(float width, float height);
@@ -202,6 +238,80 @@ CrocusRenderer::~CrocusRenderer()
 	/* fScreen destroyed by display */
 	if (fDrmFd >= 0)
 		haiku_drm_close(fDrmFd);
+}
+
+
+/* Resolve libglapi.so dispatch bridge at first use.
+ * System libGL.so (Mesa 22) reads _glapi_tls_Dispatch from libglapi.so.
+ * Our addon (Mesa 25) uses _mesa_glapi_tls_Dispatch internally.
+ * We must sync the two after every st_api_make_current. */
+typedef void (*glapi_set_dispatch_fn)(void*);
+typedef void (*glapi_set_context_fn)(void*);
+static glapi_set_dispatch_fn sGlapiSetDispatch = NULL;
+static glapi_set_context_fn sGlapiSetContext = NULL;
+static bool sGlapiBridgeInit = false;
+
+static void
+init_glapi_bridge()
+{
+	if (sGlapiBridgeInit) return;
+	sGlapiBridgeInit = true;
+
+	/* Find the ALREADY LOADED libglapi.so (loaded as libGL.so dependency).
+	 * Do NOT use load_add_on which loads a separate copy with different TLS. */
+	image_info info;
+	int32 cookie = 0;
+	while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
+		if (strstr(info.name, "libglapi") != NULL) {
+			printf("CrocusRenderer: found loaded %s (id=%d)\n",
+				info.name, (int)info.id);
+			get_image_symbol(info.id, "_glapi_set_dispatch",
+				B_SYMBOL_TYPE_TEXT, (void**)&sGlapiSetDispatch);
+			get_image_symbol(info.id, "_glapi_set_context",
+				B_SYMBOL_TYPE_TEXT, (void**)&sGlapiSetContext);
+			break;
+		}
+	}
+	printf("CrocusRenderer: glapi bridge: set_dispatch=%p set_context=%p\n",
+		sGlapiSetDispatch, sGlapiSetContext);
+}
+
+void
+CrocusRenderer::LockGL()
+{
+	BGLRenderer::LockGL();
+	if (fContext && fContext->st && fBuffer) {
+		st_api_make_current(fContext->st,
+			&fBuffer->base, &fBuffer->base);
+
+		/* Sync Mesa 25 dispatch → libglapi.so (Mesa 22) dispatch */
+		init_glapi_bridge();
+		void* dispatch = _mesa_glapi_get_dispatch();
+		void* ctx = _mesa_glapi_get_context();
+		if (sGlapiSetDispatch && dispatch) {
+			sGlapiSetDispatch(dispatch);
+		}
+		if (sGlapiSetContext && ctx) {
+			sGlapiSetContext(ctx);
+		}
+		printf("CrocusRenderer::LockGL: dispatch=%p ctx=%p\n",
+			dispatch, ctx);
+	}
+}
+
+
+void
+CrocusRenderer::UnlockGL()
+{
+	if (fContext && fContext->st) {
+		st_api_make_current(NULL, NULL, NULL);
+		/* Clear system dispatch too */
+		if (sGlapiSetDispatch)
+			sGlapiSetDispatch(NULL);
+		if (sGlapiSetContext)
+			sGlapiSetContext(NULL);
+	}
+	BGLRenderer::UnlockGL();
 }
 
 
