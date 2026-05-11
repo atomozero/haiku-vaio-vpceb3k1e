@@ -496,6 +496,11 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		snooze(5000);
 	}
 
+	static int execCount = 0;
+	execCount++;
+	if (execCount <= 5)
+		printf("[drm] EXECBUF2 #%d: OK (%u DW inlined, seq=%u)\n",
+			execCount, batch_dwords, seq);
 	return 0;
 }
 
@@ -692,6 +697,17 @@ haiku_drm_ioctl(int fd, unsigned long request, void* arg)
 	case DRM_IOCTL_SYNCOBJ_WAIT:
 	case DRM_IOCTL_SYNCOBJ_DESTROY:
 		return 0;  /* stub — always signaled, no-op destroy */
+	case DRM_IOCTL_I915_REG_READ:
+	{
+		/* struct drm_i915_reg_read { uint64_t offset; uint64_t val; } */
+		struct { uint64_t offset; uint64_t val; }* rr =
+			(decltype(rr))arg;
+		uint32_t reg = (uint32_t)(rr->offset & 0xFFFFFF);
+		rr->val = ring_read32(reg);
+		return 0;
+	}
+	case DRM_IOCTL_I915_GEM_THROTTLE:
+		return 0;  /* no throttling needed */
 	case DRM_IOCTL_I915_GEM_USERPTR:
 	case DRM_IOCTL_GEM_OPEN:
 		errno = ENOTSUP;

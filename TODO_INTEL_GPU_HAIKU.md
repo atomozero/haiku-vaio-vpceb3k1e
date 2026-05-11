@@ -269,29 +269,66 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] D.1: libdrm shim (xf86drm.h, _IOC compat, drmDevice, libdrm_shim.so)
 - [x] D.2: crocus_bufmgr → Haiku GEM shim via haiku_drm_intel
 - [x] D.3: Mesa 25.3.3 compilata con crocus (libcrocus.a OK)
-- [-] D.4: CrocusRenderer + "Crocus Pipe" addon (140MB, statically linked)
-      **Stato 2026-05-11:**
-      - GLInfo carica il Crocus Pipe addon (runtime_loader OK)
-      - `softpipe_create_screen` stub in libdrm_shim.so (fix link error)
-      - GETPARAM sconosciuti → EINVAL (fix crash intel_device_info)
-      - SYNCOBJ_CREATE/DESTROY/WAIT → stub con handle monotono
-      - `crocus_screen_create` invocato → alloca GPU BOs via GEM (AGP logs OK)
-      - GLInfo parte, mostra finestra, ma **tutti i dati GL a 0**
-      - Crocus Pipe non si registra come renderer → fallback a Software Pipe
-      - Da investigare: `crocus_create_context` path, syncobj, batch submit
+- [-] D.4: CrocusRenderer + "Crocus Pipe" addon (128MB, statically linked)
+      **Stato 2026-05-11 (sessione sera):**
+      - GLInfo carica il Crocus Pipe OK, crocus_screen_create OK
+      - Ring test: GPU WORKS (MI_STORE_DATA_IMM marker OK)
+      - GEM_EXECBUFFER2: **1 batch submitted and completed!** (8 DW, seq=1)
+      - TUTTI i 18 ioctl di GLInfo sono handled nel dispatcher
+      - `st_api_make_current` ritorna OK (low byte = 01 = true)
+      **Problemi identificati:**
+      1. `st_api_make_current` dichiarata come int (linea 135), è bool → ABI garbage
+      2. `SwapBuffers` fa solo flush, nessun readback da GPU surface a BBitmap
+      3. `hgl_create_st_framebuffer(display, &visual, NULL)` → winsysContext=NULL
+      4. `Draw()` è no-op → nessun blit a schermo
+      5. RING_RESET uccide il CS → risolto con sync-only
+      **Analisi 2026-05-11:** il rendering GL avviene su GPU surface, ma
+      manca il bridge GPU→BBitmap→BGLView. Serve readback o BLT diretto.
+
+### Fase E: GLInfo e rendering visibile — PIANIFICAZIONE
+
+#### E.1: Fix GLInfo (query GL strings — no rendering necessario)
+- [ ] Fix dichiarazione `st_api_make_current`: bool non int (CrocusRenderer.cpp:135)
+- [ ] Verificare che `glGetString(GL_VENDOR/RENDERER/VERSION)` ritorna valori
+- [ ] Se GL data è 0: debuggare con printf in `hgl_create_context` path
+- [ ] Verificare GETPARAM: aggiungere return 0 (non EINVAL) per params booleani
+      che crocus interroga (HAS_BSD, HAS_VEBOX, SUBSLICE_TOTAL, EU_TOTAL)
+
+#### E.2: SwapBuffers GPU→Screen (rendering visibile)
+- [ ] Opzione A (rapida): readback GPU surface → memcpy a BBitmap (CPU, lento)
+      `pipe_context->get_resource` → map → memcpy → unmap
+- [ ] Opzione B (veloce): BLT da GPU surface a framebuffer diretto
+      Come gpu_triangle: BLT via ring + TAIL ioctl
+- [ ] Opzione C (corretta): DRI-style direct rendering con flip/present
+      Richiede integrazione profonda con app_server — fase futura
+
+#### E.3: Robustezza DRM shim
+- [ ] Ring wrap: gestire wrap-around senza RING_RESET (sync HEAD, wait drain)
+- [ ] GEM_BUSY: controllare se BO ha comandi pendenti nel ring
+- [ ] SYNCOBJ: implementare wait reale (poll su completion marker)
+- [ ] Multiple EXECBUFFER2 in sequenza senza ring overflow
+
+#### E.4: Mesa crocus completeness
+- [ ] Verificare crocus batch submit path (crocus_batch.c) end-to-end
+- [ ] Test con programma GL semplice (glClear + glFinish)
+- [ ] Test con glxgears o equivalente Haiku
+- [ ] Profile performance: GPU batch throughput
 
 ### Scoperte propedeutiche
 - **(2026-05-08)** Ring buffer accessibile da clone userspace, ma NON resettare.
   render_init_clone(): alloca state GPU, sincronizza ring position.
 - **(2026-05-11)** **MMIO write broken**: scritture a registri GPU ignorate
-  da userspace (clone_area + poke). Risolto con kernel ioctl per TAIL/EXEC.
-- **(2026-05-11)** **clflush per batch**: CPU writes via WC aperture non
-  coerenti con GPU instruction fetch. clflush obbligatorio prima di
-  MI_BATCH_BUFFER_START. Senza clflush la GPU legge dati stale e hang.
+  da userspace (clone_area + poke). Root cause: kernel mappa con
+  B_KERNEL_WRITE_AREA senza B_WRITE_AREA. Risolto con kernel ioctl.
 - **(2026-05-11)** **Ring reset kills CS**: disable+re-enable del ring
-  uccide il Command Streamer. Usare sync-only (leggere HW TAIL).
-- **(2026-05-11)** **MI_BATCH_BUFFER_END**: encoding corretto è
-  (0x0A << 23) = 0x05000000, NON 0x0A000000.
+  uccide il Command Streamer dopo il primo uso. Funziona solo 1 volta
+  dal boot, poi il CS non riparte. Usare sync-only (leggere HW TAIL).
+- **(2026-05-11)** **GEM_EXECBUFFER2 funzionante**: DRM shim invia batch
+  via MI_BATCH_BUFFER_START nel ring + TAIL kick ioctl. Mesa crocus
+  sottomette batch e GPU li esegue. Ring sync senza reset.
+- **(2026-05-11)** **GLInfo analysis**: tutti i 18 ioctl sono gestiti.
+  `st_api_make_current` ritorna true (ABI: dichiarata int, è bool).
+  Manca bridge GPU surface → BBitmap per rendering visibile.
 
 ### Roadmap Mesa (stato attuale)
 - [x] **Step 1**: GETPARAM + GET_APERTURE (chipset_id=0x0046) ✅
@@ -306,9 +343,10 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Patch: system_has_kms_drm += haiku, intel_perf MIN/MAX guard,
       build_id stub, libsync _IOC compat. 1339 file compilati.
       Output: libgallium-25.3.3.so (134MB) con softpipe + crocus.
-- [ ] **Step 8**: Integrare crocus nel Haiku GL stack
-      Creare renderer add-on "Crocus Pipe" per /boot/system/add-ons/opengl/
-      o usare il percorso DRI/EGL di Mesa 25.3.3.
+- [-] **Step 8**: CrocusRenderer addon per Haiku GL stack
+      Addon installato e funzionante (GLInfo carica, crocus screen + EXECBUF OK).
+      Manca bridge GPU surface → BBitmap per display visibile.
+      Vedi Fase E per la pianificazione dettagliata.
 
 ### Scoperte sessione 2026-05-10
 
