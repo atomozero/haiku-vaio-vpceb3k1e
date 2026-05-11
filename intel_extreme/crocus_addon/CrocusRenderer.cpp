@@ -223,6 +223,17 @@ CrocusRenderer::CrocusRenderer(BGLView *view, ulong options)
 
 	fBuffer = hgl_create_st_framebuffer(fDisplay, &visual, NULL);
 
+	/* Set initial framebuffer size from the GLView.
+	 * Without this, width=height=0 and validate_textures never
+	 * creates the color/depth attachments → glReadPixels fails. */
+	if (fBuffer && view) {
+		BRect bounds = view->Bounds();
+		fBuffer->newWidth = (unsigned)(bounds.Width() + 1);
+		fBuffer->newHeight = (unsigned)(bounds.Height() + 1);
+		printf("CrocusRenderer: buffer size %ux%u\n",
+			fBuffer->newWidth, fBuffer->newHeight);
+	}
+
 	printf("CrocusRenderer: ready\n");
 }
 
@@ -315,22 +326,64 @@ CrocusRenderer::UnlockGL()
 }
 
 
+/* Direct pipe readback — bypasses GL API entirely */
+extern "C" {
+bool hgl_buffer_read_back(struct hgl_buffer *buffer, struct hgl_context *context,
+	void *data, unsigned width, unsigned height, unsigned stride);
+void _mesa_Finish(void);
+}
+
+
 void
 CrocusRenderer::SwapBuffers(bool VSync)
 {
-	if (!fContext)
+	if (!fContext || !fBuffer)
 		return;
+
 	if (VSync && GLView()->Window()) {
 		BScreen screen(GLView()->Window());
 		screen.WaitForRetrace();
 	}
+
+	/* Flush GPU work */
 	st_context_flush(fContext->st, 0, NULL, NULL, NULL);
+
+	/* Read back GPU framebuffer via pipe_transfer_map and display. */
+	{
+		_mesa_Finish();
+
+		unsigned w = fBuffer->width;
+		unsigned h = fBuffer->height;
+		printf("CrocusRenderer::SwapBuffers: buf %ux%u (new %ux%u)\n",
+			w, h, fBuffer->newWidth, fBuffer->newHeight);
+		if (w == 0 || h == 0) {
+			w = fBuffer->newWidth;
+			h = fBuffer->newHeight;
+		}
+
+		if (w > 0 && h > 0) {
+			BBitmap* bitmap = new BBitmap(
+				BRect(0, 0, w - 1, h - 1), B_RGB32);
+			if (bitmap && bitmap->IsValid()) {
+				bool ok = hgl_buffer_read_back(fBuffer, fContext,
+					bitmap->Bits(), w, h, bitmap->BytesPerRow());
+				if (ok) {
+					if (GLView()->LockLooper()) {
+						GLView()->DrawBitmap(bitmap, BPoint(0, 0));
+						GLView()->UnlockLooper();
+					}
+				}
+			}
+			delete bitmap;
+		}
+	}
 }
 
 
 void
 CrocusRenderer::Draw(BRect updateRect)
 {
+	/* Repaint: trigger a new SwapBuffers on next frame */
 	(void)updateRect;
 }
 
@@ -338,7 +391,10 @@ CrocusRenderer::Draw(BRect updateRect)
 void
 CrocusRenderer::FrameResized(float width, float height)
 {
-	(void)width; (void)height;
+	if (fBuffer) {
+		fBuffer->newWidth = (unsigned)width;
+		fBuffer->newHeight = (unsigned)height;
+	}
 }
 
 
