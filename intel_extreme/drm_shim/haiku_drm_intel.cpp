@@ -196,10 +196,11 @@ getparam(struct drm_i915_getparam* args)
 		*args->value = 12500000;  /* 12.5 MHz for ILK */
 		break;
 	default:
-		/* Return 0 for unknown params — Gen5 doesn't support newer features.
-		 * Crocus queries params 46, 50, 56 etc. on newer kernels. */
-		*args->value = 0;
-		break;
+		/* Return error for unknown params — Gen5 doesn't support topology
+		 * masks, slices, etc. Returning 0 causes Mesa to crash processing
+		 * empty masks. Returning EINVAL makes Mesa use hardcoded fallbacks. */
+		errno = EINVAL;
+		return -1;
 	}
 	return 0;
 }
@@ -679,11 +680,20 @@ haiku_drm_ioctl(int fd, unsigned long request, void* arg)
 	case DRM_IOCTL_I915_GEM_SET_CACHING:
 	case DRM_IOCTL_I915_GEM_MADVISE:
 		return 0;  /* silently accept */
-	case DRM_IOCTL_I915_GEM_USERPTR:
-	case DRM_IOCTL_GEM_OPEN:
 	case DRM_IOCTL_SYNCOBJ_CREATE:
+	{
+		struct { uint32_t handle; uint32_t flags; }* so =
+			(decltype(so))arg;
+		static uint32_t sNextSyncobj = 100;
+		so->handle = ++sNextSyncobj;
+		printf("[drm] SYNCOBJ_CREATE: handle=%u\n", so->handle);
+		return 0;
+	}
 	case DRM_IOCTL_SYNCOBJ_WAIT:
 	case DRM_IOCTL_SYNCOBJ_DESTROY:
+		return 0;  /* stub — always signaled, no-op destroy */
+	case DRM_IOCTL_I915_GEM_USERPTR:
+	case DRM_IOCTL_GEM_OPEN:
 		errno = ENOTSUP;
 		return -1;
 	default:
@@ -714,4 +724,13 @@ drmClose(int fd)
 {
 	haiku_drm_close(fd);
 	return 0;
+}
+
+/* Stub for softpipe_create_screen — pulled in by ddebug_screen_create
+ * via sw_helper.h. We never use the software fallback. */
+extern "C" void*
+softpipe_create_screen(void* winsys)
+{
+	(void)winsys;
+	return NULL;
 }

@@ -269,13 +269,16 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] D.1: libdrm shim (xf86drm.h, _IOC compat, drmDevice, libdrm_shim.so)
 - [x] D.2: crocus_bufmgr → Haiku GEM shim via haiku_drm_intel
 - [x] D.3: Mesa 25.3.3 compilata con crocus (libcrocus.a OK)
-- [-] D.4: Target meson `haiku-crocus` — CrocusRenderer + GalliumContext
-      compila OK, link quasi funzionante. Errori rimanenti:
-      - `crocus_driconf[]` non esportato (serve driconf init alternativo)
-      - `debug_screen_wrap` inline (rimuovere o stubbare)
-      - `crocus_drm_screen_create` è C, serve extern "C" wrapper
-      GLInfo caricava il vecchio Crocus Pipe ma crashava su driQueryOptioni
-      (opzioni driconf non inizializzate). GETPARAM sconosciuti ora return 0.
+- [-] D.4: CrocusRenderer + "Crocus Pipe" addon (140MB, statically linked)
+      **Stato 2026-05-11:**
+      - GLInfo carica il Crocus Pipe addon (runtime_loader OK)
+      - `softpipe_create_screen` stub in libdrm_shim.so (fix link error)
+      - GETPARAM sconosciuti → EINVAL (fix crash intel_device_info)
+      - SYNCOBJ_CREATE/DESTROY/WAIT → stub con handle monotono
+      - `crocus_screen_create` invocato → alloca GPU BOs via GEM (AGP logs OK)
+      - GLInfo parte, mostra finestra, ma **tutti i dati GL a 0**
+      - Crocus Pipe non si registra come renderer → fallback a Software Pipe
+      - Da investigare: `crocus_create_context` path, syncobj, batch submit
 
 ### Scoperte propedeutiche
 - **(2026-05-08)** Ring buffer accessibile da clone userspace, ma NON resettare.
