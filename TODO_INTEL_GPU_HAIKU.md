@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-12 (GEM_EXECBUFFER2 funzionante, batch submit via DRM shim)
+**Ultimo aggiornamento:** 2026-05-12 (SET_TILING fix, SwapBuffers readback OK, still black window)
 
 ---
 
