@@ -484,6 +484,23 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	asm volatile("mfence" ::: "memory");
 	ring_kick_tail(ring.position);
 
+	/* Debug: dump first 16 DWORDs of batch for failed submissions */
+	static uint32_t sExecCount = 0;
+	sExecCount++;
+	if (sExecCount <= 5) {
+		printf("[drm] EXECBUF2 #%u: %u cmds inlined at ring 0x%x-0x%x\n",
+			sExecCount, cmd_count,
+			ring.position - (pos - ring.position/4)*4,
+			ring.position);
+		printf("[drm]   batch[0..7]: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			batch_cmd[0], batch_cmd[1], batch_cmd[2], batch_cmd[3],
+			batch_cmd[4], batch_cmd[5], batch_cmd[6], batch_cmd[7]);
+		if (cmd_count > 8)
+			printf("[drm]   batch[8..15]: %08x %08x %08x %08x %08x %08x %08x %08x\n",
+				batch_cmd[8], batch_cmd[9], batch_cmd[10], batch_cmd[11],
+				batch_cmd[12], batch_cmd[13], batch_cmd[14], batch_cmd[15]);
+	}
+
 	/* --- Step 4: Wait for completion --- */
 	if (sShim.marker_cpu) {
 		bigtime_t deadline = system_time() + 100000; /* 100ms */

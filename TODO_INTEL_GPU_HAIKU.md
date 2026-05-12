@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-12 (GEM_EXECBUFFER2 verified working, BLT engine 60 FPS, media pipeline via ioctl)
+**Ultimo aggiornamento:** 2026-05-12 (Mesa crocus OpenGL 2.1, EXECBUF2 batch submit verified, 3D hang debug next)
 
 ---
 
@@ -302,13 +302,19 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Fix: binary patch del Crocus Pipe con tabella corretta dal .o (36720 bytes).
 - [x] **gl_test non crasha più** — finestra nera (glClear non visibile, serve SwapBuffers)
 
-#### E.2: SwapBuffers GPU→Screen (rendering visibile)
+#### E.2: SwapBuffers GPU→Screen (rendering visibile) + 3D pipeline debug
+- [-] **gl_test sessione 2026-05-12:**
+      OpenGL 2.1 Mesa 25.3.3 Intel(R) HD Graphics (ILK) — init OK
+      EXECBUF2 #1: 9 cmds state setup → **GPU completed!** (seq=1)
+      EXECBUF2 #2: 65 cmds 3D render → **GPU HANG** HEAD=0x160, TAIL=0x170
+      I comandi 3D (78xxx/79xxx prefixes) causano hang del CS.
+      3DSTATE commands: 790a (CC_STATE), 7808 (BINDING_TABLE), 61010006
+      (STATE_BASE_ADDRESS). La GPU avanza fino a 0x160 poi si blocca.
+      **Root cause probabile:** stato 3D non inizializzato (VF, SF, WM,
+      CLIP, VS unit state) oppure ISL surface state encoding errato.
 - [ ] Opzione A (rapida): readback GPU surface → memcpy a BBitmap (CPU, lento)
-      `pipe_context->get_resource` → map → memcpy → unmap
 - [ ] Opzione B (veloce): BLT da GPU surface a framebuffer diretto
-      Come gpu_triangle: BLT via ring + TAIL ioctl
-- [ ] Opzione C (corretta): DRI-style direct rendering con flip/present
-      Richiede integrazione profonda con app_server — fase futura
+- [ ] Opzione C (corretta): DRI-style direct rendering
 
 #### E.3: Robustezza DRM shim
 - [ ] Ring wrap: gestire wrap-around senza RING_RESET (sync HEAD, wait drain)
