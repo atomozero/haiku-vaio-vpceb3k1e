@@ -411,29 +411,35 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	/* Flush CPU writes to all BOs */
 	asm volatile("mfence" ::: "memory");
 
-	/* --- Step 3: Inline batch commands into ring --- */
-	/* MI_BATCH_BUFFER_START hangs from clone context on Gen5.
-	 * Copy batch commands directly into the ring instead. */
-	uint32_t batch_len = args->batch_len;
-	if (batch_len == 0)
-		batch_len = 4096;
-	uint32_t batch_dwords = batch_len / 4;
-	uint32_t* batch_src = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
-		+ args->batch_start_offset);
+	/* --- Step 3: Inline batch commands into the ring --- */
+	/* MI_BATCH_BUFFER_START hangs on Gen5 (CS never returns from batch).
+	 * Instead, copy batch commands directly into the ring, followed by
+	 * MI_FLUSH + MI_STORE_DATA_IMM for completion tracking.
+	 * This matches the proven approach from media_pipeline.cpp. */
 
-	/* Strip MI_BATCH_BUFFER_END and trailing NOOPs */
-	while (batch_dwords > 0
-		&& (batch_src[batch_dwords - 1] == 0
-			|| batch_src[batch_dwords - 1] == (0x0A << 23)))
-		batch_dwords--;
+	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
 
 	/* Prepare completion marker */
 	uint32_t seq = ++sShim.marker_seq;
 	if (sShim.marker_cpu)
 		*sShim.marker_cpu = 0;
 
+	/* Scan batch for MI_BATCH_BUFFER_END to determine command count */
+	uint32_t* batch_cmd = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
+		+ args->batch_start_offset);
+	uint32_t batch_dwords = args->batch_len / 4;
+	if (batch_dwords == 0)
+		batch_dwords = 4096 / 4;  /* safety limit */
+	/* Find end marker */
+	uint32_t cmd_count = 0;
+	for (uint32_t i = 0; i < batch_dwords; i++) {
+		if (batch_cmd[i] == (0x0Au << 23))  /* MI_BATCH_BUFFER_END */
+			break;
+		cmd_count++;
+	}
+
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	uint32_t needed = batch_dwords + 8;
+	uint32_t needed = cmd_count + 8; /* batch + flush + marker + pad */
 
 	/* Check ring space — wrap if near end */
 	if (ring.position + needed * 4 + 64 > ring.size) {
@@ -448,45 +454,20 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		ring.position = 0;
 	}
 
-	/* Dump batch before submission for debugging */
-	static int sDumpCount = 0;
-	if (sDumpCount < 3) {
-		uint32_t dump = batch_dwords < 24 ? batch_dwords : 24;
-		printf("[drm] EXECBUF pre-submit: %u DW, objs=%u\n",
-			batch_dwords, args->buffer_count);
-		printf("[drm]   batch:");
-		for (uint32_t d = 0; d < dump; d++) {
-			if (d > 0 && (d % 8) == 0)
-				printf("\n[drm]         ");
-			printf(" %08x", batch_src[d]);
-		}
-		printf("\n");
-		for (uint32_t i = 0; i < args->buffer_count; i++) {
-			uint32_t h = objs[i].handle;
-			if (h > 0 && h < MAX_BOS && sShim.bos[h].used)
-				printf("[drm]   obj[%u]: handle=%u gtt=0x%x size=%u%s\n",
-					i, h, sShim.bos[h].gtt_offset, sShim.bos[h].size,
-					h == batch_handle ? " (BATCH)" : "");
-		}
-		sDumpCount++;
-	}
-
-	/* Write inline batch + trailer to ring */
+	/* Copy batch commands into ring (skip MI_BATCH_BUFFER_END) */
 	uint32_t* rb = (uint32_t*)ring.base;
 	uint32_t pos = ring.position / 4;
 	uint32_t mask = (ring.size / 4) - 1;
 
 	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
 
-	for (uint32_t i = 0; i < batch_dwords; i++)
-		RING_EMIT(batch_src[i]);
+	for (uint32_t i = 0; i < cmd_count; i++)
+		RING_EMIT(batch_cmd[i]);
 
-	/* MI_FLUSH + MI_STORE_DATA_IMM for completion marker.
-	 * Note: marker may not be written after 3D batches (MI_FLUSH
-	 * doesn't fully drain 3D pipeline on Gen5). The fallback in
-	 * step 4 treats HEAD==TAIL as success. */
+	/* MI_FLUSH after batch commands */
 	RING_EMIT(MI_FLUSH_DRM);
 
+	/* Completion marker */
 	if (sShim.marker_cpu) {
 		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
 		RING_EMIT(0);
@@ -533,16 +514,8 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	static int execCount = 0;
 	execCount++;
 	if (execCount <= 5) {
-		printf("[drm] EXECBUF2 #%d: OK (%u DW inlined, seq=%u)\n",
-			execCount, batch_dwords, seq);
-		/* Dump first 20 DWORDs of the batch for debugging */
-		if (batch_dwords > 0) {
-			uint32_t dump = batch_dwords < 20 ? batch_dwords : 20;
-			printf("[drm]   batch:");
-			for (uint32_t i = 0; i < dump; i++)
-				printf(" %08x", batch_src[i]);
-			printf("\n");
-		}
+		printf("[drm] EXECBUF2 #%d: OK (batch submit, seq=%u)\n",
+			execCount, seq);
 		/* Check render target BO content (first object that isn't batch) */
 		for (uint32_t i = 0; i < args->buffer_count; i++) {
 			uint32_t h = objs[i].handle;
