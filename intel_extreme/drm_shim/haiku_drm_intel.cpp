@@ -448,6 +448,29 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		ring.position = 0;
 	}
 
+	/* Dump batch before submission for debugging */
+	static int sDumpCount = 0;
+	if (sDumpCount < 3) {
+		uint32_t dump = batch_dwords < 24 ? batch_dwords : 24;
+		printf("[drm] EXECBUF pre-submit: %u DW, objs=%u\n",
+			batch_dwords, args->buffer_count);
+		printf("[drm]   batch:");
+		for (uint32_t d = 0; d < dump; d++) {
+			if (d > 0 && (d % 8) == 0)
+				printf("\n[drm]         ");
+			printf(" %08x", batch_src[d]);
+		}
+		printf("\n");
+		for (uint32_t i = 0; i < args->buffer_count; i++) {
+			uint32_t h = objs[i].handle;
+			if (h > 0 && h < MAX_BOS && sShim.bos[h].used)
+				printf("[drm]   obj[%u]: handle=%u gtt=0x%x size=%u%s\n",
+					i, h, sShim.bos[h].gtt_offset, sShim.bos[h].size,
+					h == batch_handle ? " (BATCH)" : "");
+		}
+		sDumpCount++;
+	}
+
 	/* Write inline batch + trailer to ring */
 	uint32_t* rb = (uint32_t*)ring.base;
 	uint32_t pos = ring.position / 4;
@@ -509,9 +532,30 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	static int execCount = 0;
 	execCount++;
-	if (execCount <= 5)
+	if (execCount <= 5) {
 		printf("[drm] EXECBUF2 #%d: OK (%u DW inlined, seq=%u)\n",
 			execCount, batch_dwords, seq);
+		/* Dump first 20 DWORDs of the batch for debugging */
+		if (batch_dwords > 0) {
+			uint32_t dump = batch_dwords < 20 ? batch_dwords : 20;
+			printf("[drm]   batch:");
+			for (uint32_t i = 0; i < dump; i++)
+				printf(" %08x", batch_src[i]);
+			printf("\n");
+		}
+		/* Check render target BO content (first object that isn't batch) */
+		for (uint32_t i = 0; i < args->buffer_count; i++) {
+			uint32_t h = objs[i].handle;
+			if (h != batch_handle && h > 0 && h < MAX_BOS
+				&& sShim.bos[h].used && sShim.bos[h].size >= 16) {
+				uint32_t* p = (uint32_t*)sShim.bos[h].cpu_addr;
+				printf("[drm]   BO#%u gtt=0x%x: %08x %08x %08x %08x\n",
+					h, sShim.bos[h].gtt_offset,
+					p[0], p[1], p[2], p[3]);
+				break;
+			}
+		}
+	}
 	return 0;
 }
 
@@ -566,6 +610,17 @@ haiku_drm_open(void)
 		*sShim.marker_cpu = 0;
 		printf("[drm] Marker BO: gtt=0x%x cpu=%p\n",
 			sShim.marker_gtt, (void*)sShim.marker_cpu);
+	}
+
+	/* Apply Gen5 3D workarounds via kernel ioctl (MI_MODE, etc).
+	 * Without this, 3D commands in the ring cause CS hang. */
+	{
+		intel_get_private_data init3d;
+		init3d.magic = INTEL_PRIVATE_DATA_MAGIC;
+		if (ioctl(sShim.fd, INTEL_RING_INIT_3D, &init3d, sizeof(init3d)) == 0)
+			printf("[drm] 3D pipeline workarounds applied\n");
+		else
+			printf("[drm] INTEL_RING_INIT_3D not available (old kernel?)\n");
 	}
 
 	/* Sync ring position with hardware TAIL (don't reset — kills CS).
