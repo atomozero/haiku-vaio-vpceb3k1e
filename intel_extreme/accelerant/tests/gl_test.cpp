@@ -16,7 +16,7 @@ public:
 	{
 		fGLView = new BGLView(Bounds(), "gl",
 			B_FOLLOW_ALL, B_WILL_DRAW,
-			BGL_RGB | BGL_DOUBLE);
+			BGL_RGB | BGL_ALPHA | BGL_DOUBLE);
 		AddChild(fGLView);
 	}
 
