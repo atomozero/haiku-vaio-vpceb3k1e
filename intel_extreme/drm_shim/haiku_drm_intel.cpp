@@ -20,9 +20,8 @@
 #include "lock.h"
 
 /* MI commands for ring submission */
-#define MI_BATCH_GTT              (2 << 6)
 #define MI_BATCH_NON_SECURE_I965  (1 << 8)
-#define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | MI_BATCH_GTT)
+#define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | MI_BATCH_NON_SECURE_I965)
 #define MI_NOOP_CMD               0x00000000
 #define MI_FLUSH_DRM              (0x04 << 23)
 #define MI_STORE_DATA_IMM_GGTT    ((0x20 << 23) | (1 << 22) | 2)
@@ -459,6 +458,10 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	for (uint32_t i = 0; i < batch_dwords; i++)
 		RING_EMIT(batch_src[i]);
 
+	/* MI_FLUSH + MI_STORE_DATA_IMM for completion marker.
+	 * Note: marker may not be written after 3D batches (MI_FLUSH
+	 * doesn't fully drain 3D pipeline on Gen5). The fallback in
+	 * step 4 treats HEAD==TAIL as success. */
 	RING_EMIT(MI_FLUSH_DRM);
 
 	if (sShim.marker_cpu) {
@@ -479,11 +482,19 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	/* --- Step 4: Wait for completion --- */
 	if (sShim.marker_cpu) {
-		bigtime_t deadline = system_time() + 2000000;
+		bigtime_t deadline = system_time() + 100000; /* 100ms */
 		while (*sShim.marker_cpu != seq) {
 			if (system_time() > deadline) {
 				uint32_t head = ring_read32(ring.register_base
 					+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
+				uint32_t tail = ring_read32(ring.register_base
+					+ RING_BUFFER_TAIL) & (ring.size - 1);
+				if (head == tail) {
+					/* HEAD==TAIL: GPU consumed everything. Marker
+					 * write failed but batch DID execute. Treat as
+					 * success to avoid cascade failures in crocus. */
+					break;
+				}
 				printf("[drm] EXECBUF2: TIMEOUT seq %u (got 0x%x) "
 					"HEAD=0x%x TAIL=0x%x\n",
 					seq, *sShim.marker_cpu, head, ring.position);
