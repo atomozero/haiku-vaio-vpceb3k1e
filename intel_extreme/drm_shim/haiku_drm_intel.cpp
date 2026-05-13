@@ -469,6 +469,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
 
+	/* Inline batch commands into ring (crocus handles pipeline setup) */
 	for (uint32_t i = 0; i < cmd_count; i++)
 		RING_EMIT(batch_cmd[i]);
 
@@ -529,7 +530,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	/* Debug: dump first 16 DWORDs of batch for failed submissions */
 	static uint32_t sExecCount = 0;
 	sExecCount++;
-	if (sExecCount <= 5) {
+	if (sExecCount <= 15) {
 		printf("[drm] EXECBUF2 #%u: %u cmds inlined at ring 0x%x-0x%x\n",
 			sExecCount, cmd_count,
 			ring.position - (pos - ring.position/4)*4,

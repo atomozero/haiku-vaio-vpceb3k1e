@@ -266,9 +266,11 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       **Mesa crocus test (gl_test) — 2026-05-13 sessione:**
       - OpenGL 2.1, GLSL 1.20, Mesa Intel(R) HD Graphics (ILK)
       - EXECBUF2 #1 (state setup) completato dalla GPU!
-      - EXECBUF2 #2+ (3D render) hang at HEAD=0x160 (3DSTATE cmds 78xx/79xx)
-      - IPEHR=0x02000000, INSTDONE=0xFFFFFFFF, EIR=0x0, ACTHD=0x160
-      - Need to debug 3D pipeline state init or ISL surface encoding
+      - EXECBUF2 #2 (glClear 3D render) completato dalla GPU!
+      - EXECBUF2 #3+ (readback/triangle) hang at HEAD=0x254
+      - IPEHR=0x79000002 (3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP)
+      - INSTDONE=0xFFFFFFFF, EIR=0x0 — no error, just stalled
+      - Need to debug 3D pipeline state init for complex renders
       **Scoperta critica (2026-05-13):** RING_RESET uccide il CS
       permanentemente. Dopo disable+re-enable, HEAD non avanza più.
       Soluzione: ring sync (leggere TAIL HW, non resettare mai).
