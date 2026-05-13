@@ -283,20 +283,12 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] D.2: crocus_bufmgr → Haiku GEM shim via haiku_drm_intel
 - [x] D.3: Mesa 25.3.3 compilata con crocus (libcrocus.a OK)
 - [-] D.4: CrocusRenderer + "Crocus Pipe" addon (128MB, statically linked)
-      **Stato 2026-05-11 (sessione sera):**
-      - GLInfo carica il Crocus Pipe OK, crocus_screen_create OK
-      - Ring test: GPU WORKS (MI_STORE_DATA_IMM marker OK)
-      - GEM_EXECBUFFER2: **1 batch submitted and completed!** (8 DW, seq=1)
-      - TUTTI i 18 ioctl di GLInfo sono handled nel dispatcher
-      - `st_api_make_current` ritorna OK (low byte = 01 = true)
-      **Problemi identificati:**
-      1. `st_api_make_current` dichiarata come int (linea 135), è bool → ABI garbage
-      2. `SwapBuffers` fa solo flush, nessun readback da GPU surface a BBitmap
-      3. `hgl_create_st_framebuffer(display, &visual, NULL)` → winsysContext=NULL
-      4. `Draw()` è no-op → nessun blit a schermo
-      5. RING_RESET uccide il CS → risolto con sync-only
-      **Analisi 2026-05-11:** il rendering GL avviene su GPU surface, ma
-      manca il bridge GPU→BBitmap→BGLView. Serve readback o BLT diretto.
+      **Stato 2026-05-13 (sessione corrente):**
+      - GLInfo/gl_test carica Crocus Pipe OK, crocus_screen_create OK
+      - Ring sync (no reset): GPU WORKS, ring test marker OK
+      - GEM_EXECBUFFER2: batch #1 + #2 completati! #3+ hang 3D state
+      - OpenGL 2.1, GLSL 1.20, Mesa Intel(R) HD Graphics (ILK)
+      **Prossimo blocco:** 3D pipeline hang al batch #3 (vedi E.2)
 
 ### Fase E: GLInfo e rendering visibile — PIANIFICAZIONE
 
@@ -316,15 +308,31 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] **gl_test non crasha più** — finestra nera (glClear non visibile, serve SwapBuffers)
 
 #### E.2: SwapBuffers GPU→Screen (rendering visibile) + 3D pipeline debug
-- [-] **gl_test sessione 2026-05-12/13:**
+- [-] **gl_test sessione 2026-05-13 (nuova, con ring sync fix):**
       OpenGL 2.1 Mesa 25.3.3 Intel(R) HD Graphics (ILK) — init OK
       EXECBUF2 #1: 9 cmds state setup → **GPU completed!** (seq=1)
-      EXECBUF2 #2: 65 cmds 3D render → **GPU HANG** HEAD=0x190, TAIL=0x1a0
-      Batch inlined (non MI_BATCH_BUFFER_START). Comandi: 79000002
-      (DRAWING_RECT), 61010006 (STATE_BASE_ADDRESS), 78080007
-      (PIPELINED_POINTERS → surface refs 0x42e040, 0x42e063).
-      **Root cause probabile:** surface state encoding o 3D pipeline
-      init mancante. GPU avanza ~metà batch poi stalla.
+      EXECBUF2 #2: 65 cmds glClear → **GPU completed!** (seq=2)
+      EXECBUF2 #3: 67 cmds readback → **GPU HANG** HEAD=0x254, TAIL=0x3e0
+      EXECBUF2 #4+: tutti in timeout, HEAD bloccato a 0x254
+      **Diagnostica hang #3:**
+      - IPEHR=0x79000002 (3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP)
+      - INSTDONE=0xFFFFFFFF (pipeline completato, nessuno stage bloccato)
+      - EIR=0x0 ESR=0x0 (nessun errore HW)
+      - ACTHD=0x254 (GPU ferma nella ring, non nel batch)
+      - Batch #3 inizia con: 79000002 00000000 00000000 00000000
+        poi 61010006 (STATE_BASE_ADDRESS), 78080007 (PIPELINED_POINTERS)
+      - Batch #2 (che funziona) ha comandi quasi identici — differenza?
+      **Analisi batch #2 vs #3:**
+      Batch #2 (OK):  79000002 00000000 **00c7012b** 00000000 61010006...
+      Batch #3 (HANG): 79000002 00000000 **00000000** 00000000 61010006...
+      DW2 di 3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP: 0x00c7012b vs 0x00000000
+      La differenza potrebbe essere significativa (depth buffer config).
+- [ ] **Debug 3D pipeline hang** — prossimo passo:
+      1. Confrontare batch #2 (OK) e #3 (hang) DW per DW
+      2. Verificare surface state encoding (0x42b040, 0x42b080 refs)
+      3. Verificare se manca un PIPE_CONTROL/MI_FLUSH tra batch
+      4. Testare: forzare stessi comandi di batch #2 in batch #3
+      5. Provare ad aggiungere PIPE_CONTROL con CS stall prima di batch #3
 - [ ] Opzione A (rapida): readback GPU surface → memcpy a BBitmap (CPU, lento)
 - [ ] Opzione B (veloce): BLT da GPU surface a framebuffer diretto
 - [ ] Opzione C (corretta): DRI-style direct rendering
