@@ -58,6 +58,11 @@ static struct {
 	uint32_t     marker_gtt;   /* GTT offset of marker DWORD */
 	volatile uint32_t* marker_cpu; /* CPU pointer to marker DWORD */
 	uint32_t     marker_seq;   /* monotonic sequence number */
+	/* Our own ring position — independent of app_server's ring.position.
+	 * Tracks the hardware TAIL as written by our ioctl kicks. */
+	uint32_t     ring_pos;
+	uint32_t     ring_size;
+	addr_t       ring_base;   /* CPU address of ring buffer memory */
 } sShim;
 
 
@@ -449,23 +454,24 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	/* batch + MI_FLUSH(1) + MI_STORE_DATA_IMM(4) + pad */
 	uint32_t needed = cmd_count + 8;
 
-	/* Check ring space — wrap if near end */
-	if (ring.position + needed * 4 + 64 > ring.size) {
+	/* Check ring space — wrap if near end.
+	 * Use sShim.ring_pos (our own), NOT ring.position (app_server's). */
+	if (sShim.ring_pos + needed * 4 + 64 > sShim.ring_size) {
 		bigtime_t deadline = system_time() + 500000;
 		while (system_time() < deadline) {
 			uint32_t head = ring_read32(ring.register_base + RING_BUFFER_HEAD)
 				& INTEL_RING_BUFFER_HEAD_MASK;
-			if (head >= ring.position || head == 0)
+			if (head >= sShim.ring_pos || head == 0)
 				break;
 			snooze(100);
 		}
-		ring.position = 0;
+		sShim.ring_pos = 0;
 	}
 
 	/* Copy batch commands into ring (skip MI_BATCH_BUFFER_END) */
-	uint32_t* rb = (uint32_t*)ring.base;
-	uint32_t pos = ring.position / 4;
-	uint32_t mask = (ring.size / 4) - 1;
+	uint32_t* rb = (uint32_t*)sShim.ring_base;
+	uint32_t pos = sShim.ring_pos / 4;
+	uint32_t mask = (sShim.ring_size / 4) - 1;
 
 	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
 
@@ -490,20 +496,20 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	#undef RING_EMIT
 
-	ring.position = (pos * 4) & (ring.size - 1);
+	sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
 	asm volatile("mfence" ::: "memory");
 
 	uint32_t head_pre = ring_read32(ring.register_base + RING_BUFFER_HEAD)
 		& INTEL_RING_BUFFER_HEAD_MASK;
 
-	ring_kick_tail(ring.position);
+	ring_kick_tail(sShim.ring_pos);
 
 	/* Debug */
 	static uint32_t sExecCount = 0;
 	sExecCount++;
 	if (sExecCount <= 20) {
 		printf("[drm] EXECBUF2 #%u: %u DW, HEAD=0x%x before kick, TAIL→0x%x\n",
-			sExecCount, cmd_count, head_pre, ring.position);
+			sExecCount, cmd_count, head_pre, sShim.ring_pos);
 	}
 
 	/* --- Step 4: Wait for completion --- */
@@ -635,44 +641,30 @@ haiku_drm_open(void)
 			printf("[drm] INTEL_RING_INIT_3D not available (old kernel?)\n");
 	}
 
-	/* Sync ring position with hardware TAIL. If HEAD is stuck
-	 * (previous hang), do a full RING_RESET with GPU domain reset. */
+	/* Sync our OWN ring position with hardware TAIL.
+	 * We use sShim.ring_pos, NOT ring.position (app_server modifies that).
+	 * This prevents app_server's ghost commands from being executed. */
 	{
 		ring_buffer& ring = sShim.shared->primary_ring_buffer;
 		uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
 			& (ring.size - 1);
 		uint32_t hwHead = ring_read32(ring.register_base + RING_BUFFER_HEAD)
 			& INTEL_RING_BUFFER_HEAD_MASK;
-
-		if (hwHead != hwTail) {
-			/* Ring not idle — GPU might be hung. Try RING_RESET with
-			 * GPU domain reset (ILK_GDSR) to recover. */
-			printf("[drm] Ring not idle: HEAD=0x%x TAIL=0x%x — resetting\n",
-				hwHead, hwTail);
-			ring_reset_ioctl();
-			hwHead = ring_read32(ring.register_base + RING_BUFFER_HEAD)
-				& INTEL_RING_BUFFER_HEAD_MASK;
-			hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
-				& (ring.size - 1);
-			printf("[drm] After reset: HEAD=0x%x TAIL=0x%x\n",
-				hwHead, hwTail);
-		}
-
-		ring.position = hwTail;
-		ring.space_left = ring.size - 64;
-		printf("[drm] Ring sync: HEAD=0x%x TAIL=0x%x pos=%u size=%u\n",
-			hwHead, hwTail, ring.position, ring.size);
+		sShim.ring_pos = hwTail;
+		sShim.ring_size = ring.size;
+		sShim.ring_base = (addr_t)ring.base;
+		printf("[drm] Ring sync: HEAD=0x%x TAIL=0x%x mypos=%u size=%u\n",
+			hwHead, hwTail, sShim.ring_pos, sShim.ring_size);
 	}
 
 	/* Ring test: MI_STORE_DATA_IMM via ioctl TAIL kick */
 	if (sShim.marker_cpu) {
-		ring_buffer& ring = sShim.shared->primary_ring_buffer;
 		*sShim.marker_cpu = 0;
 		asm volatile("mfence" ::: "memory");
 
-		uint32_t* rb = (uint32_t*)ring.base;
-		uint32_t pos = ring.position / 4;
-		uint32_t mask = (ring.size / 4) - 1;
+		uint32_t* rb = (uint32_t*)sShim.ring_base;
+		uint32_t pos = sShim.ring_pos / 4;
+		uint32_t mask = (sShim.ring_size / 4) - 1;
 
 		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
 		rb[pos & mask] = 0; pos++;
@@ -680,11 +672,12 @@ haiku_drm_open(void)
 		rb[pos & mask] = 0xBEEF0001; pos++;
 		if (pos & 1) { rb[pos & mask] = 0; pos++; }
 
-		ring.position = (pos * 4) & (ring.size - 1);
+		sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
 		asm volatile("mfence" ::: "memory");
-		ring_kick_tail(ring.position);
+		ring_kick_tail(sShim.ring_pos);
 
 		snooze(10000);
+		ring_buffer& ring = sShim.shared->primary_ring_buffer;
 		uint32_t head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
 
 		printf("[drm] Ring test: marker=0x%08x HEAD=0x%x → %s\n",
