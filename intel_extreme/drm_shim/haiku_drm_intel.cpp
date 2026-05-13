@@ -514,22 +514,17 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	/* --- Step 4: Wait for completion --- */
 	if (sShim.marker_cpu) {
-		bigtime_t deadline = system_time() + 100000; /* 100ms */
+		bigtime_t deadline = system_time() + 500000; /* 500ms */
 		while (*sShim.marker_cpu != seq) {
 			if (system_time() > deadline) {
 				uint32_t head = ring_read32(ring.register_base
 					+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
 				uint32_t tail = ring_read32(ring.register_base
 					+ RING_BUFFER_TAIL) & (ring.size - 1);
-				if (head == tail) {
-					/* HEAD==TAIL: GPU consumed everything. Marker
-					 * write failed but batch DID execute. Treat as
-					 * success to avoid cascade failures in crocus. */
-					break;
-				}
 				printf("[drm] EXECBUF2: TIMEOUT seq %u (got 0x%x) "
-					"HEAD=0x%x TAIL=0x%x\n",
-					seq, *sShim.marker_cpu, head, ring.position);
+					"HEAD=0x%x TAIL=0x%x ringpos=0x%x\n",
+					seq, *sShim.marker_cpu, head, tail,
+					sShim.ring_pos);
 				/* Dump GPU debug registers */
 				printf("[drm]   IPEHR=0x%08x IPEIR=0x%08x\n",
 					ring_read32(0x2068), ring_read32(0x2064));
@@ -537,6 +532,16 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 					ring_read32(0x206C), ring_read32(0x2074));
 				printf("[drm]   EIR=0x%08x ESR=0x%08x\n",
 					ring_read32(0x20B0), ring_read32(0x20B8));
+				/* Dump ring content around HEAD */
+				{
+					uint32_t* rbd = (uint32_t*)sShim.ring_base;
+					uint32_t hmask = (sShim.ring_size/4) - 1;
+					uint32_t hp = (head / 4);
+					printf("[drm]   Ring @HEAD=0x%x:", head);
+					for (int d = -2; d < 10; d++)
+						printf(" %08x", rbd[(hp+d) & hmask]);
+					printf("\n");
+				}
 				/* Dump full batch */
 				printf("[drm]   Full batch (%u DW):\n", cmd_count);
 				for (uint32_t i = 0; i < cmd_count; i += 8) {
@@ -554,11 +559,15 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		snooze(5000);
 	}
 
-	if (sExecCount <= 20) {
+	{
 		uint32_t head_post = ring_read32(ring.register_base
 			+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
-		printf("[drm] EXECBUF2 #%u: OK seq=%u, HEAD 0x%x→0x%x\n",
-			sExecCount, seq, head_pre, head_post);
+		uint32_t marker_val = sShim.marker_cpu ? *sShim.marker_cpu : 0;
+		if (sExecCount <= 20)
+			printf("[drm] EXECBUF2 #%u: OK seq=%u marker=0x%x "
+				"HEAD 0x%x→0x%x ringpos=0x%x\n",
+				sExecCount, seq, marker_val,
+				head_pre, head_post, sShim.ring_pos);
 	}
 	if (sExecCount <= 5) {
 		/* Check render target BO content (first object that isn't batch) */
@@ -680,9 +689,42 @@ haiku_drm_open(void)
 		ring_buffer& ring = sShim.shared->primary_ring_buffer;
 		uint32_t head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
 
+		bool ring_ok = (*sShim.marker_cpu == 0xBEEF0001);
 		printf("[drm] Ring test: marker=0x%08x HEAD=0x%x → %s\n",
 			*sShim.marker_cpu, head_post,
-			*sShim.marker_cpu == 0xBEEF0001 ? "GPU WORKS!" : "FAILED");
+			ring_ok ? "GPU WORKS!" : "FAILED");
+
+		if (!ring_ok) {
+			/* Ring is hung — attempt recovery via RING_RESET.
+			 * This is safe because the ring is already dead. */
+			printf("[drm] Ring hung! Attempting RING_RESET recovery...\n");
+			ring_reset_ioctl();
+			sShim.ring_pos = 0;
+
+			/* Retry ring test after reset */
+			*sShim.marker_cpu = 0;
+			asm volatile("mfence" ::: "memory");
+
+			rb = (uint32_t*)sShim.ring_base;
+			pos = 0;
+
+			rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
+			rb[pos & mask] = 0; pos++;
+			rb[pos & mask] = sShim.marker_gtt; pos++;
+			rb[pos & mask] = 0xBEEF0002; pos++;
+			if (pos & 1) { rb[pos & mask] = 0; pos++; }
+
+			sShim.ring_pos = pos * 4;
+			asm volatile("mfence" ::: "memory");
+			ring_kick_tail(sShim.ring_pos);
+
+			snooze(10000);
+			head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
+			ring_ok = (*sShim.marker_cpu == 0xBEEF0002);
+			printf("[drm] After reset: marker=0x%08x HEAD=0x%x → %s\n",
+				*sShim.marker_cpu, head_post,
+				ring_ok ? "RECOVERED!" : "STILL DEAD");
+		}
 	}
 
 	printf("[drm] Haiku DRM shim opened: chipset=0x%04x\n",

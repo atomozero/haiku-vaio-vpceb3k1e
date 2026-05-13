@@ -267,20 +267,14 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       dopo il primo uso — il secondo reset lascia HEAD bloccato.
       Fix: sync con TAIL hardware senza reset (come render_init_clone).
       **Standalone test**: test_execbuf.cpp — batch submit + completion.
-      **gl_test 2026-05-13**: EXECBUF2 #1 (state setup) completed by GPU!
-      EXECBUF2 #2 (glClear) completed by GPU!
-      EXECBUF2 #3+ (3D render) hang at HEAD=0x284 (3DSTATE cmds 78xx/79xx).
-      IPEHR=0x79000002, INSTDONE=0xFFFFFFFF, EIR=0x0.
-      Need to debug 3D pipeline state init or ISL surface encoding.
-      - EXECBUF2 #2 (glClear 3D render) completato dalla GPU!
-      - EXECBUF2 #3+ (readback/triangle) hang at HEAD=0x254
-      - IPEHR=0x79000002 (3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP)
-      - INSTDONE=0xFFFFFFFF, EIR=0x0 — no error, just stalled
-      - Need to debug 3D pipeline state init for complex renders
-      **Scoperta critica (2026-05-13):** RING_RESET uccide il CS
-      permanentemente. Dopo disable+re-enable, HEAD non avanza più.
-      Soluzione: ring sync (leggere TAIL HW, non resettare mai).
-      Batch test: GPU esegue e ritorna correttamente.
+      **gl_test**: EXECBUF2 #1 (state setup) completed by GPU!
+      EXECBUF2 #2+ (glClear/3D render) hang: IPEHR=0x02000000 (MI_FLUSH
+      after batch return), INSTDONE=0xFFFFFFFF, EIR=0x0.
+      HEAD advances through MI_BATCH_BUFFER_START but stalls on
+      post-batch MI_FLUSH. The 3D pipeline state from the batch
+      leaves the CS unable to flush. Need to debug pipeline state.
+      **Scoperta critica:** RING_RESET (disable→re-enable) uccide il CS
+      permanentemente. Soluzione: ring sync (leggere TAIL HW, mai resettare).
 - [x] C.4: GET_RESET_STATS, SET_TILING, GET_TILING, SET_CACHING, GEM_WAIT,
       CONTEXT_GETPARAM/SETPARAM, MADVISE — tutti implementati nel dispatcher
 
