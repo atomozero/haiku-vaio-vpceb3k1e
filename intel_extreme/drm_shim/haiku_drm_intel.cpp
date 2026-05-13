@@ -446,7 +446,8 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	uint32_t needed = cmd_count + 8; /* batch + flush + marker + pad */
+	/* batch + 8 PIPE_CONTROLs (32 DW) + pad */
+	uint32_t needed = cmd_count + 34;
 
 	/* Check ring space — wrap if near end */
 	if (ring.position + needed * 4 + 64 > ring.size) {
@@ -471,14 +472,49 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	for (uint32_t i = 0; i < cmd_count; i++)
 		RING_EMIT(batch_cmd[i]);
 
-	/* No MI_FLUSH or PIPE_CONTROL here — both stall on ILK after 3D.
-	 * Crocus handles pipeline flushing internally via PIPE_CONTROL in the
-	 * batch. We just need the marker for completion tracking. */
+	/* Gen5 (ILK) completion tracking via PIPE_CONTROL, matching i915's
+	 * pc_render_add_request(). MI_STORE_DATA_IMM stalls after 3D commands.
+	 * Sequence: 1 QW_WRITE + 6 depth stall flushes + 1 final QW_WRITE.
+	 * Each flush writes to a separate cacheline (incoherence workaround). */
 	if (sShim.marker_cpu) {
-		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
-		RING_EMIT(0);
-		RING_EMIT(sShim.marker_gtt);
+		#define GFX_PIPE_CONTROL   0x7A000002  /* (3<<29)|(3<<27)|(2<<24)|2 */
+		#define PC_QW_WRITE        (1 << 14)
+		#define PC_WRITE_FLUSH     (1 << 12)
+		#define PC_DEPTH_STALL     (1 << 13)
+		#define PC_TC_INVALIDATE   (1 << 10)
+		#define PC_GLOBAL_GTT      (1 << 2)
+
+		uint32_t marker_addr = sShim.marker_gtt | PC_GLOBAL_GTT;
+		/* First: QW_WRITE + WRITE_FLUSH + TC_INVALIDATE → write seqno */
+		RING_EMIT(GFX_PIPE_CONTROL | PC_QW_WRITE | PC_WRITE_FLUSH
+			| PC_TC_INVALIDATE);
+		RING_EMIT(marker_addr);
 		RING_EMIT(seq);
+		RING_EMIT(0);
+
+		/* 6 cacheline flushes (QW_WRITE + DEPTH_STALL) */
+		uint32_t scratch = (sShim.marker_gtt + 128) | PC_GLOBAL_GTT;
+		for (int f = 0; f < 6; f++) {
+			RING_EMIT(GFX_PIPE_CONTROL | PC_QW_WRITE | PC_DEPTH_STALL);
+			RING_EMIT(scratch);
+			RING_EMIT(0);
+			RING_EMIT(0);
+			scratch += 128;  /* next cacheline pair */
+		}
+
+		/* Final: QW_WRITE + WRITE_FLUSH + TC_INVALIDATE → write seqno again */
+		RING_EMIT(GFX_PIPE_CONTROL | PC_QW_WRITE | PC_WRITE_FLUSH
+			| PC_TC_INVALIDATE);
+		RING_EMIT(marker_addr);
+		RING_EMIT(seq);
+		RING_EMIT(0);
+
+		#undef GFX_PIPE_CONTROL
+		#undef PC_QW_WRITE
+		#undef PC_WRITE_FLUSH
+		#undef PC_DEPTH_STALL
+		#undef PC_TC_INVALIDATE
+		#undef PC_GLOBAL_GTT
 	}
 
 	if (pos & 1)
