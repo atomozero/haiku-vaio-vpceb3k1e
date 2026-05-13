@@ -39,7 +39,7 @@ make && make install    # kernel driver, requires reboot
 
 ### intel_extreme/accelerant/ — GPU accelerant (userspace, loaded by app_server)
 - **engine.cpp** — Ring buffer command submission, 2D BLT engine, HWS sync.
-- **render.cpp / render.h** — 3D render engine (Gen5 solid fills via RECTLIST).
+- **render.cpp / render.h** — 3D render engine (Gen5 solid fills via RECTLIST, TRILIST triangles). `render_init_clone()` for userspace access.
 - **media_pipeline.cpp / media_pipeline.h** — Gen5 media pipeline: EU kernel dispatch via MEDIA_OBJECT, compute tests, MPEG-2 decode path.
 - **gpu_bo.cpp / gpu_bo.h** — GPU buffer object allocator (GTT-mapped).
 - **gpu_debug.cpp / gpu_debug.h** — GPU register dumps (INSTDONE, IPEHR, ACTHD, EIR).
@@ -51,7 +51,10 @@ make && make install    # kernel driver, requires reboot
   - **mc_forward.g4a** — P-frame forward MC: Media Block Read from reference, half-pel bilinear interpolation (4 cases), Media Block Write to output.
   - **iq_idct_intra.g4a** — Combined IQ+IDCT for intra blocks.
   - **idct_single.g4a** — Standalone IDCT outputting S16 (Phase 3.1 test).
-- **tests/** — Standalone test programs (no reboot needed): parser test, parse+decode integration, MC decode test.
+- **tests/** — Standalone test programs (no reboot needed): parser test, parse+decode integration, MC decode test, GPU benchmarks.
+- **tests/gpu_idct_bench.cpp** — GPU vs CPU IDCT benchmark (400 blocks). GPU 4× faster. No reboot.
+- **tests/gpu_plasma_demo.cpp** — Animated plasma via GPU IDCT, BWindow display.
+- **tests/gpu_triangle.cpp** — 3D TRILIST triangle test (ring clone diagnostic).
 - **tests/test_mc_decode.cpp** — Multi-frame I+P decoder with half-pel MC. Outputs PPM frames.
 - **Ports.cpp** — Display port implementations. Ironlake LVDS fixes.
 - **Pipes.cpp** — Display pipe configuration. IBX watermark fix.
@@ -152,6 +155,33 @@ The CBP VLC table (Table B-9) has 64 entries mapping VLC codes (3-9 bits) to 6-b
 ### MPEG-2 EOB after full 64-coefficient block (CRITICAL BUG FIX)
 
 When all 64 coefficients of a DCT block are coded (idx reaches 63 after the last run+level), the bitstream STILL contains an EOB marker (`10`, 2 bits). The parser MUST consume this EOB even though the block is "full". Failing to consume it causes a **2-bit drift per full block**, which accumulates across MBs and eventually corrupts the entire slice. This is the #1 cause of "75% coverage" failures on high-detail content. Fix: after the AC decode loop, if `idx >= 64`, read and discard one more VLC (the EOB).
+
+## Userspace GPU Access (Ring Clone)
+
+Standalone programs can access the GPU by cloning the accelerant's shared_info:
+
+```cpp
+int fd = open("/dev/graphics/intel_extreme_000200", B_READ_WRITE);
+ioctl(fd, INTEL_GET_PRIVATE_DATA, &data, sizeof(data));
+clone_area("shared", &gInfo->shared_info, ..., data.shared_info_area);
+clone_area("regs", &gInfo->registers, ..., shared_info->registers_area);
+```
+
+### CRITICAL: Ring buffer rules for clones
+
+1. **NEVER reset the ring** from userspace. `render_init_clone()` syncs `sw_pos` with hardware TAIL — does NOT disable/re-enable the ring. Resetting kills the CS permanently.
+2. **Media pipeline kills the CS** after N dispatches (MI_FLUSH IS stall). After any media pipeline test at boot, the ring is dead for ALL subsequent users. Build with `make` (not `make test`) for a clean ring.
+3. **`ring.base` is valid** in clones — it equals `graphics_memory` (shared mapping).
+4. **`QueueCommands` works** from clones when the CS is alive.
+5. **Benchmark tool**: `tests/gpu_idct_bench` — runs 400 IDCT blocks, GPU 4× faster than CPU. No reboot needed on a clean ring.
+
+### Build for userspace GPU tools
+
+```sh
+cd intel_extreme/accelerant && make    # build accelerant .o files
+cd tests
+g++ -Wall -O2 -I.. [include flags] -o tool tool.cpp ../*.o ../../libaccelerantscommon.a -lbe -lstdc++
+```
 
 ## Media Pipeline Test Protocol
 

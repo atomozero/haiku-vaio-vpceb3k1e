@@ -43,11 +43,45 @@ public:
 		glGetIntegerv(GL_MINOR_VERSION, &minor);
 		printf("GL version:  %d.%d\n", major, minor);
 
-		// Quick render test
+		// Quick render test: clear to blue
+		printf("\n--- Render Test ---\n");
+		GLint vp[4];
+		glGetIntegerv(GL_VIEWPORT, vp);
+		printf("Viewport: %d,%d %dx%d\n", vp[0], vp[1], vp[2], vp[3]);
+
+		glViewport(0, 0, 300, 200);
 		glClearColor(0.2f, 0.4f, 0.8f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 		glFinish();
-		printf("glClear + glFinish done\n");
+		printf("glClear(blue) + glFinish done\n");
+
+		// Read back pixels via GL
+		uint8 pixel[4] = {0};
+		glReadPixels(150, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+		printf("glReadPixels(150,100): R=%u G=%u B=%u A=%u\n",
+			pixel[0], pixel[1], pixel[2], pixel[3]);
+
+		// Also try a simple triangle
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity();
+		glOrtho(0, 300, 0, 200, -1, 1);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity();
+
+		glBegin(GL_TRIANGLES);
+		glColor3f(1.0f, 0.0f, 0.0f);
+		glVertex2f(150, 180);
+		glColor3f(0.0f, 1.0f, 0.0f);
+		glVertex2f(50, 20);
+		glColor3f(0.0f, 0.0f, 1.0f);
+		glVertex2f(250, 20);
+		glEnd();
+		glFinish();
+		printf("Triangle drawn + glFinish done\n");
+
+		glReadPixels(150, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+		printf("glReadPixels(150,100): R=%u G=%u B=%u A=%u\n",
+			pixel[0], pixel[1], pixel[2], pixel[3]);
 
 		fGLView->SwapBuffers();
 		fGLView->UnlockGL();

@@ -547,6 +547,7 @@ enum {
 	// Ring buffer control (kernel-mediated MMIO writes)
 	INTEL_RING_RESET,			// re-init ring: disable, reset HEAD, re-enable
 	INTEL_RING_WRITE_TAIL,		// write TAIL register to kick GPU
+	INTEL_RING_INIT_3D,			// apply Gen5 3D workarounds (MI_MODE, etc)
 	INTEL_EXEC_BATCH			// emit MI_BATCH_BUFFER_START + kick (like i915)
 };
 
