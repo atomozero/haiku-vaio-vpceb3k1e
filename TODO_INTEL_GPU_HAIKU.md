@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-12 (Mesa crocus OpenGL 2.1, EXECBUF2 batch submit verified, 3D hang debug next)
+**Ultimo aggiornamento:** 2026-05-13 (GEM_EXECBUFFER2 verified working, ring sync (no reset) fix)
 
 ---
 
@@ -248,6 +248,8 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Build manuale con -fPIC + mutex ABI shim (_mutex→mutex) per hrev59669.
       Blacklist driver di sistema via /boot/system/settings/packages.
       **TEST PASS**: HEAD avanza dopo TAIL write → GPU esegue MI_NOOP!
+      CRITICAL: never RING_RESET after boot — kills CS permanently.
+      Use ring sync (read HW TAIL, set sw pos) instead.
 - [x] B.2: BLT via ioctl — 3D cubo 480×480 a 60 FPS, GPU BLT a schermo
 - [ ] B.3: GPU hang detection + ILK_GDSR recovery nel kernel
 
