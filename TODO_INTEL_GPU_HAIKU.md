@@ -258,11 +258,17 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] C.2: GEM_MMAP — already mapped by allocator, just return addr ✅
 - [x] C.2b: GETPARAM + GET_APERTURE + GEM_BUSY + SET_DOMAIN ✅
 - [x] C.2c: GEM_CONTEXT_CREATE/DESTROY (stub) ✅
-- [x] C.3: **GEM_EXECBUFFER2** — FUNZIONANTE! (2026-05-11)
+- [x] C.3: **GEM_EXECBUFFER2** — FUNZIONANTE! (2026-05-13)
       DRM shim: MI_BATCH_BUFFER_START nel ring + TAIL kick via ioctl.
       Ring sync (non reset!) con TAIL hardware — RING_RESET uccide il CS.
       Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST supportati.
       Completion marker via MI_STORE_DATA_IMM nel ring (non nel batch).
+      **Mesa crocus test (gl_test)**:
+      - OpenGL 2.1, GLSL 1.20, Mesa Intel(R) HD Graphics (ILK)
+      - EXECBUF2 #1 (state setup) completato dalla GPU!
+      - EXECBUF2 #2+ (3D render) hang at HEAD=0x160 (3DSTATE cmds 78xx/79xx)
+      - IPEHR=MI_FLUSH, INSTDONE=0xFFFFFFFF, EIR=0x0 → pipeline stall
+      - Need to debug 3D pipeline state init or ISL surface encoding
       Batch test: GPU esegue e ritorna correttamente.
 - [x] C.4: GET_RESET_STATS, SET_TILING, GET_TILING, SET_CACHING, GEM_WAIT,
       CONTEXT_GETPARAM/SETPARAM, MADVISE — tutti implementati nel dispatcher
@@ -305,15 +311,15 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] **gl_test non crasha più** — finestra nera (glClear non visibile, serve SwapBuffers)
 
 #### E.2: SwapBuffers GPU→Screen (rendering visibile) + 3D pipeline debug
-- [-] **gl_test sessione 2026-05-12:**
+- [-] **gl_test sessione 2026-05-12/13:**
       OpenGL 2.1 Mesa 25.3.3 Intel(R) HD Graphics (ILK) — init OK
       EXECBUF2 #1: 9 cmds state setup → **GPU completed!** (seq=1)
-      EXECBUF2 #2: 65 cmds 3D render → **GPU HANG** HEAD=0x160, TAIL=0x170
-      I comandi 3D (78xxx/79xxx prefixes) causano hang del CS.
-      3DSTATE commands: 790a (CC_STATE), 7808 (BINDING_TABLE), 61010006
-      (STATE_BASE_ADDRESS). La GPU avanza fino a 0x160 poi si blocca.
-      **Root cause probabile:** stato 3D non inizializzato (VF, SF, WM,
-      CLIP, VS unit state) oppure ISL surface state encoding errato.
+      EXECBUF2 #2: 65 cmds 3D render → **GPU HANG** HEAD=0x190, TAIL=0x1a0
+      Batch inlined (non MI_BATCH_BUFFER_START). Comandi: 79000002
+      (DRAWING_RECT), 61010006 (STATE_BASE_ADDRESS), 78080007
+      (PIPELINED_POINTERS → surface refs 0x42e040, 0x42e063).
+      **Root cause probabile:** surface state encoding o 3D pipeline
+      init mancante. GPU avanza ~metà batch poi stalla.
 - [ ] Opzione A (rapida): readback GPU surface → memcpy a BBitmap (CPU, lento)
 - [ ] Opzione B (veloce): BLT da GPU surface a framebuffer diretto
 - [ ] Opzione C (corretta): DRI-style direct rendering

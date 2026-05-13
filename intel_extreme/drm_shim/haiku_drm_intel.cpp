@@ -519,6 +519,21 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 				printf("[drm] EXECBUF2: TIMEOUT seq %u (got 0x%x) "
 					"HEAD=0x%x TAIL=0x%x\n",
 					seq, *sShim.marker_cpu, head, ring.position);
+				/* Dump GPU debug registers */
+				printf("[drm]   IPEHR=0x%08x IPEIR=0x%08x\n",
+					ring_read32(0x2068), ring_read32(0x2064));
+				printf("[drm]   INSTDONE=0x%08x ACTHD=0x%08x\n",
+					ring_read32(0x206C), ring_read32(0x2074));
+				printf("[drm]   EIR=0x%08x ESR=0x%08x\n",
+					ring_read32(0x20B0), ring_read32(0x20B8));
+				/* Dump full batch */
+				printf("[drm]   Full batch (%u DW):\n", cmd_count);
+				for (uint32_t i = 0; i < cmd_count; i += 8) {
+					printf("[drm]   [%3u]", i);
+					for (uint32_t j = i; j < i+8 && j < cmd_count; j++)
+						printf(" %08x", batch_cmd[j]);
+					printf("\n");
+				}
 				errno = ETIMEDOUT;
 				return -1;
 			}
