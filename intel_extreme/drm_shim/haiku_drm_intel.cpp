@@ -454,8 +454,8 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	/* batch + MI_FLUSH(1) + MI_STORE_DATA_IMM(4) + pad */
-	uint32_t needed = cmd_count + 8;
+	/* Pre-batch invalidate (22 DW) + batch + PIPE_CONTROL(4) + pad */
+	uint32_t needed = 22 + cmd_count + 8;
 
 	/* Check ring space — wrap if near end.
 	 * Use sShim.ring_pos (our own), NOT ring.position (app_server's). */
@@ -478,24 +478,39 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
 
-	/* Inline batch commands into ring (crocus handles pipeline setup) */
+	/* --- Gen5 ILK pre-batch cache invalidation ---
+	 * MI_FLUSH is safe BEFORE 3D state (stalls only AFTER 3DPRIMITIVE).
+	 * Emit MI_FLUSH for cache invalidate, then PIPE_CONTROL with non-zero
+	 * post-sync to force the flush (ILK workaround: must have post-sync). */
+	{
+		uint32_t scratch_gtt = sShim.marker_gtt + 64;
+
+		/* MI_FLUSH with EXE_FLUSH (bit 1) only — bit 5 is reserved on Gen5 */
+		RING_EMIT((0x04u << 23) | (1u << 1));
+
+		/* PIPE_CONTROL #1: non-zero post-sync to scratch (ILK requires this) */
+		RING_EMIT(0x7a000002);
+		RING_EMIT((1u << 14) | (1u << 2) | (1u << 0));  /* WriteImm|GGTT|DepthFlush */
+		RING_EMIT(scratch_gtt);
+		RING_EMIT(0);
+
+		/* PIPE_CONTROL #2: CS stall + RT flush (ILK needs two PIPE_CONTROLs) */
+		RING_EMIT(0x7a000002);
+		RING_EMIT((1u << 20) | (1u << 14) | (1u << 12) | (1u << 2));  /* CS_Stall|WriteImm|RT_Flush|GGTT */
+		RING_EMIT(scratch_gtt);
+		RING_EMIT(0);
+	}
+
+	/* Inline batch commands into ring */
 	for (uint32_t i = 0; i < cmd_count; i++)
 		RING_EMIT(batch_cmd[i]);
 
-	/* Completion tracking: PIPE_CONTROL + MI_STORE_DATA_IMM.
-	 * MI_FLUSH hangs after 3D pipeline commands on Gen5 — the pipeline
-	 * stall never completes. Use PIPE_CONTROL with write-flush instead,
-	 * which is what i915/crocus uses for pipeline synchronization. */
+	/* --- Post-batch completion tracking ---
+	 * Use MI_STORE_DATA_IMM (proven working in ring test) instead of
+	 * PIPE_CONTROL which doesn't write on this Gen5 hardware. */
 	if (sShim.marker_cpu) {
-		/* PIPE_CONTROL: CS stall + render target flush + depth cache flush
-		 * + write immediate (post-sync) to marker BO.
-		 * DW0: 0x7a000002 = PIPE_CONTROL, len=4 (3+1)
-		 * DW1: bit20=CS_STALL, bit12=RT_FLUSH, bit0=DEPTH_FLUSH,
-		 *       bits[15:14]=01 (Write Immediate), bit2=GGTT
-		 * DW2: marker GTT address
-		 * DW3: marker value */
-		RING_EMIT(0x7a000002);
-		RING_EMIT((1u << 20) | (1u << 12) | (1u << 14) | (1u << 2) | 1u);
+		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
+		RING_EMIT(0);
 		RING_EMIT(sShim.marker_gtt);
 		RING_EMIT(seq);
 	}
