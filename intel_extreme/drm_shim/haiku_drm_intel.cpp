@@ -384,7 +384,9 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	/* --- Step 2: Apply relocations --- */
-	if (!(args->flags & I915_EXEC_NO_RELOC)) {
+	uint32_t total_relocs = 0;
+	bool no_reloc = (args->flags & I915_EXEC_NO_RELOC) != 0;
+	if (!no_reloc) {
 		for (uint32_t i = 0; i < args->buffer_count; i++) {
 			if (objs[i].relocation_count == 0)
 				continue;
@@ -416,6 +418,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 				/* Update presumed_offset for NO_RELOC optimization */
 				relocs[r].presumed_offset = target_gtt;
+				total_relocs++;
 			}
 		}
 	}
@@ -479,14 +482,20 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	for (uint32_t i = 0; i < cmd_count; i++)
 		RING_EMIT(batch_cmd[i]);
 
-	/* Completion tracking: MI_FLUSH + MI_STORE_DATA_IMM.
-	 * MI_FLUSH synchronizes the pipeline before the marker write.
-	 * MI_STORE_DATA_IMM writes the sequence number to the marker BO.
-	 * This is simpler than PIPE_CONTROL and proven working in the ring. */
+	/* Completion tracking: PIPE_CONTROL + MI_STORE_DATA_IMM.
+	 * MI_FLUSH hangs after 3D pipeline commands on Gen5 — the pipeline
+	 * stall never completes. Use PIPE_CONTROL with write-flush instead,
+	 * which is what i915/crocus uses for pipeline synchronization. */
 	if (sShim.marker_cpu) {
-		RING_EMIT(MI_FLUSH_DRM);
-		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
-		RING_EMIT(0);
+		/* PIPE_CONTROL: CS stall + render target flush + depth cache flush
+		 * + write immediate (post-sync) to marker BO.
+		 * DW0: 0x7a000002 = PIPE_CONTROL, len=4 (3+1)
+		 * DW1: bit20=CS_STALL, bit12=RT_FLUSH, bit0=DEPTH_FLUSH,
+		 *       bits[15:14]=01 (Write Immediate), bit2=GGTT
+		 * DW2: marker GTT address
+		 * DW3: marker value */
+		RING_EMIT(0x7a000002);
+		RING_EMIT((1u << 20) | (1u << 12) | (1u << 14) | (1u << 2) | 1u);
 		RING_EMIT(sShim.marker_gtt);
 		RING_EMIT(seq);
 	}
@@ -508,8 +517,10 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	static uint32_t sExecCount = 0;
 	sExecCount++;
 	if (sExecCount <= 20) {
-		printf("[drm] EXECBUF2 #%u: %u DW, HEAD=0x%x before kick, TAIL→0x%x\n",
-			sExecCount, cmd_count, head_pre, sShim.ring_pos);
+		printf("[drm] EXECBUF2 #%u: %u DW, %u relocs%s, HEAD=0x%x TAIL→0x%x\n",
+			sExecCount, cmd_count, total_relocs,
+			no_reloc ? " (NO_RELOC)" : "",
+			head_pre, sShim.ring_pos);
 	}
 
 	/* --- Step 4: Wait for completion --- */

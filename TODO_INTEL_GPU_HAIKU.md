@@ -263,11 +263,14 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Ring sync (non reset!) con TAIL hardware — RING_RESET uccide il CS.
       Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST supportati.
       Completion marker via MI_STORE_DATA_IMM nel ring (non nel batch).
-      **Scoperta critica**: RING_RESET (disable→re-enable) uccide il CS
-      dopo il primo uso — il secondo reset lascia HEAD bloccato.
-      Fix: sync con TAIL hardware senza reset (come render_init_clone).
-      **Standalone test**: test_execbuf.cpp — batch submit + completion.
-      **gl_test**: EXECBUF2 #1 (state setup) completed by GPU!
+      **CRITICAL**: RING_RESET (disable→re-enable) uccide il CS dopo il
+      primo uso. Fix: sync con TAIL hw senza reset (render_init_clone).
+      **gl_test risultati** (2026-05-13):
+      - EXECBUF #1 (state setup): **completato dalla GPU**
+      - EXECBUF #2 (glClear, 3DSTATE cmds): **stall su MI_FLUSH**
+        IPEHR=0x02000000, HEAD=0x160, INSTDONE=0xFFFFFFFF, EIR=0x0
+      - Causa: 3D pipeline state issue (non ring submission)
+      - Next: debug 3D pipeline state o ISL surface encoding
       EXECBUF2 #2+ (glClear/3D render) hang: IPEHR=0x02000000 (MI_FLUSH
       after batch return), INSTDONE=0xFFFFFFFF, EIR=0x0.
       HEAD advances through MI_BATCH_BUFFER_START but stalls on
