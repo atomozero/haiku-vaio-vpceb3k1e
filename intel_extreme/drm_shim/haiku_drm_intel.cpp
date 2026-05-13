@@ -25,6 +25,13 @@
 #define MI_NOOP_CMD               0x00000000
 #define MI_FLUSH_DRM              (0x04 << 23)
 #define MI_STORE_DATA_IMM_GGTT    ((0x20 << 23) | (1 << 22) | 2)
+/* PIPE_CONTROL for post-batch flush (Gen5+).
+ * MI_FLUSH causes IS stall after 3D pipeline commands on ILK. */
+#define PIPE_CONTROL_CMD          ((0x60 << 16) | 2)  /* 3 DW: header + flags + addr */
+#define PIPE_CONTROL_CS_STALL     (1 << 20)
+#define PIPE_CONTROL_WC_FLUSH     (1 << 12)
+#define PIPE_CONTROL_TC_FLUSH     (1 << 10)
+#define PIPE_CONTROL_NOWRITE      0
 
 #define MAX_BOS 4096
 
@@ -464,10 +471,9 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	for (uint32_t i = 0; i < cmd_count; i++)
 		RING_EMIT(batch_cmd[i]);
 
-	/* MI_FLUSH after batch commands */
-	RING_EMIT(MI_FLUSH_DRM);
-
-	/* Completion marker */
+	/* No MI_FLUSH or PIPE_CONTROL here — both stall on ILK after 3D.
+	 * Crocus handles pipeline flushing internally via PIPE_CONTROL in the
+	 * batch. We just need the marker for completion tracking. */
 	if (sShim.marker_cpu) {
 		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
 		RING_EMIT(0);

@@ -263,12 +263,15 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Ring sync (non reset!) con TAIL hardware — RING_RESET uccide il CS.
       Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST supportati.
       Completion marker via MI_STORE_DATA_IMM nel ring (non nel batch).
-      **Mesa crocus test (gl_test)**:
+      **Mesa crocus test (gl_test) — 2026-05-13 sessione:**
       - OpenGL 2.1, GLSL 1.20, Mesa Intel(R) HD Graphics (ILK)
       - EXECBUF2 #1 (state setup) completato dalla GPU!
       - EXECBUF2 #2+ (3D render) hang at HEAD=0x160 (3DSTATE cmds 78xx/79xx)
-      - IPEHR=MI_FLUSH, INSTDONE=0xFFFFFFFF, EIR=0x0 → pipeline stall
+      - IPEHR=0x02000000, INSTDONE=0xFFFFFFFF, EIR=0x0, ACTHD=0x160
       - Need to debug 3D pipeline state init or ISL surface encoding
+      **Scoperta critica (2026-05-13):** RING_RESET uccide il CS
+      permanentemente. Dopo disable+re-enable, HEAD non avanza più.
+      Soluzione: ring sync (leggere TAIL HW, non resettare mai).
       Batch test: GPU esegue e ritorna correttamente.
 - [x] C.4: GET_RESET_STATS, SET_TILING, GET_TILING, SET_CACHING, GEM_WAIT,
       CONTEXT_GETPARAM/SETPARAM, MADVISE — tutti implementati nel dispatcher
