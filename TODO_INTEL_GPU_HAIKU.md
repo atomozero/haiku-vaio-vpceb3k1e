@@ -263,9 +263,11 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Ring sync (non reset!) con TAIL hardware — RING_RESET uccide il CS.
       Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST supportati.
       Completion marker via MI_STORE_DATA_IMM nel ring (non nel batch).
-      **Mesa crocus test (gl_test) — 2026-05-13 sessione:**
-      - OpenGL 2.1, GLSL 1.20, Mesa Intel(R) HD Graphics (ILK)
-      - EXECBUF2 #1 (state setup) completato dalla GPU!
+      **Scoperta critica**: RING_RESET (disable→re-enable) uccide il CS
+      dopo il primo uso — il secondo reset lascia HEAD bloccato.
+      Fix: sync con TAIL hardware senza reset (come render_init_clone).
+      **Standalone test**: test_execbuf.cpp — batch con MI_STORE_DATA_IMM,
+      HEAD avanza, completion marker scritto, GPU ritorna dal batch.
       - EXECBUF2 #2 (glClear 3D render) completato dalla GPU!
       - EXECBUF2 #3+ (readback/triangle) hang at HEAD=0x254
       - IPEHR=0x79000002 (3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP)

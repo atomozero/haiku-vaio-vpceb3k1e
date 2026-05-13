@@ -446,8 +446,8 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	/* batch + 8 PIPE_CONTROLs (32 DW) + pad */
-	uint32_t needed = cmd_count + 34;
+	/* batch + MI_FLUSH(1) + MI_STORE_DATA_IMM(4) + pad */
+	uint32_t needed = cmd_count + 8;
 
 	/* Check ring space — wrap if near end */
 	if (ring.position + needed * 4 + 64 > ring.size) {
@@ -473,49 +473,16 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	for (uint32_t i = 0; i < cmd_count; i++)
 		RING_EMIT(batch_cmd[i]);
 
-	/* Gen5 (ILK) completion tracking via PIPE_CONTROL, matching i915's
-	 * pc_render_add_request(). MI_STORE_DATA_IMM stalls after 3D commands.
-	 * Sequence: 1 QW_WRITE + 6 depth stall flushes + 1 final QW_WRITE.
-	 * Each flush writes to a separate cacheline (incoherence workaround). */
+	/* Completion tracking: MI_FLUSH + MI_STORE_DATA_IMM.
+	 * MI_FLUSH synchronizes the pipeline before the marker write.
+	 * MI_STORE_DATA_IMM writes the sequence number to the marker BO.
+	 * This is simpler than PIPE_CONTROL and proven working in the ring. */
 	if (sShim.marker_cpu) {
-		#define GFX_PIPE_CONTROL   0x7A000002  /* (3<<29)|(3<<27)|(2<<24)|2 */
-		#define PC_QW_WRITE        (1 << 14)
-		#define PC_WRITE_FLUSH     (1 << 12)
-		#define PC_DEPTH_STALL     (1 << 13)
-		#define PC_TC_INVALIDATE   (1 << 10)
-		#define PC_GLOBAL_GTT      (1 << 2)
-
-		uint32_t marker_addr = sShim.marker_gtt | PC_GLOBAL_GTT;
-		/* First: QW_WRITE + WRITE_FLUSH + TC_INVALIDATE → write seqno */
-		RING_EMIT(GFX_PIPE_CONTROL | PC_QW_WRITE | PC_WRITE_FLUSH
-			| PC_TC_INVALIDATE);
-		RING_EMIT(marker_addr);
-		RING_EMIT(seq);
+		RING_EMIT(MI_FLUSH_DRM);
+		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
 		RING_EMIT(0);
-
-		/* 6 cacheline flushes (QW_WRITE + DEPTH_STALL) */
-		uint32_t scratch = (sShim.marker_gtt + 128) | PC_GLOBAL_GTT;
-		for (int f = 0; f < 6; f++) {
-			RING_EMIT(GFX_PIPE_CONTROL | PC_QW_WRITE | PC_DEPTH_STALL);
-			RING_EMIT(scratch);
-			RING_EMIT(0);
-			RING_EMIT(0);
-			scratch += 128;  /* next cacheline pair */
-		}
-
-		/* Final: QW_WRITE + WRITE_FLUSH + TC_INVALIDATE → write seqno again */
-		RING_EMIT(GFX_PIPE_CONTROL | PC_QW_WRITE | PC_WRITE_FLUSH
-			| PC_TC_INVALIDATE);
-		RING_EMIT(marker_addr);
+		RING_EMIT(sShim.marker_gtt);
 		RING_EMIT(seq);
-		RING_EMIT(0);
-
-		#undef GFX_PIPE_CONTROL
-		#undef PC_QW_WRITE
-		#undef PC_WRITE_FLUSH
-		#undef PC_DEPTH_STALL
-		#undef PC_TC_INVALIDATE
-		#undef PC_GLOBAL_GTT
 	}
 
 	if (pos & 1)
@@ -525,23 +492,18 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	ring.position = (pos * 4) & (ring.size - 1);
 	asm volatile("mfence" ::: "memory");
+
+	uint32_t head_pre = ring_read32(ring.register_base + RING_BUFFER_HEAD)
+		& INTEL_RING_BUFFER_HEAD_MASK;
+
 	ring_kick_tail(ring.position);
 
-	/* Debug: dump first 16 DWORDs of batch for failed submissions */
+	/* Debug */
 	static uint32_t sExecCount = 0;
 	sExecCount++;
-	if (sExecCount <= 15) {
-		printf("[drm] EXECBUF2 #%u: %u cmds inlined at ring 0x%x-0x%x\n",
-			sExecCount, cmd_count,
-			ring.position - (pos - ring.position/4)*4,
-			ring.position);
-		printf("[drm]   batch[0..7]: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-			batch_cmd[0], batch_cmd[1], batch_cmd[2], batch_cmd[3],
-			batch_cmd[4], batch_cmd[5], batch_cmd[6], batch_cmd[7]);
-		if (cmd_count > 8)
-			printf("[drm]   batch[8..15]: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-				batch_cmd[8], batch_cmd[9], batch_cmd[10], batch_cmd[11],
-				batch_cmd[12], batch_cmd[13], batch_cmd[14], batch_cmd[15]);
+	if (sExecCount <= 20) {
+		printf("[drm] EXECBUF2 #%u: %u DW, HEAD=0x%x before kick, TAIL→0x%x\n",
+			sExecCount, cmd_count, head_pre, ring.position);
 	}
 
 	/* --- Step 4: Wait for completion --- */
@@ -586,11 +548,13 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		snooze(5000);
 	}
 
-	static int execCount = 0;
-	execCount++;
-	if (execCount <= 5) {
-		printf("[drm] EXECBUF2 #%d: OK (batch submit, seq=%u)\n",
-			execCount, seq);
+	if (sExecCount <= 20) {
+		uint32_t head_post = ring_read32(ring.register_base
+			+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
+		printf("[drm] EXECBUF2 #%u: OK seq=%u, HEAD 0x%x→0x%x\n",
+			sExecCount, seq, head_pre, head_post);
+	}
+	if (sExecCount <= 5) {
 		/* Check render target BO content (first object that isn't batch) */
 		for (uint32_t i = 0; i < args->buffer_count; i++) {
 			uint32_t h = objs[i].handle;
@@ -671,14 +635,29 @@ haiku_drm_open(void)
 			printf("[drm] INTEL_RING_INIT_3D not available (old kernel?)\n");
 	}
 
-	/* Sync ring position with hardware TAIL (don't reset — kills CS).
-	 * Same approach as render_init_clone: read HW TAIL, set sw pos. */
+	/* Sync ring position with hardware TAIL. If HEAD is stuck
+	 * (previous hang), do a full RING_RESET with GPU domain reset. */
 	{
 		ring_buffer& ring = sShim.shared->primary_ring_buffer;
 		uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
 			& (ring.size - 1);
 		uint32_t hwHead = ring_read32(ring.register_base + RING_BUFFER_HEAD)
 			& INTEL_RING_BUFFER_HEAD_MASK;
+
+		if (hwHead != hwTail) {
+			/* Ring not idle — GPU might be hung. Try RING_RESET with
+			 * GPU domain reset (ILK_GDSR) to recover. */
+			printf("[drm] Ring not idle: HEAD=0x%x TAIL=0x%x — resetting\n",
+				hwHead, hwTail);
+			ring_reset_ioctl();
+			hwHead = ring_read32(ring.register_base + RING_BUFFER_HEAD)
+				& INTEL_RING_BUFFER_HEAD_MASK;
+			hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
+				& (ring.size - 1);
+			printf("[drm] After reset: HEAD=0x%x TAIL=0x%x\n",
+				hwHead, hwTail);
+		}
+
 		ring.position = hwTail;
 		ring.space_left = ring.size - 64;
 		printf("[drm] Ring sync: HEAD=0x%x TAIL=0x%x pos=%u size=%u\n",
