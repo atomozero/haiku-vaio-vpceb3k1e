@@ -170,10 +170,36 @@ clone_area("regs", &gInfo->registers, ..., shared_info->registers_area);
 ### CRITICAL: Ring buffer rules for clones
 
 1. **NEVER reset the ring** from userspace. `render_init_clone()` syncs `sw_pos` with hardware TAIL — does NOT disable/re-enable the ring. Resetting kills the CS permanently.
-2. **Media pipeline kills the CS** after N dispatches (MI_FLUSH IS stall). After any media pipeline test at boot, the ring is dead for ALL subsequent users. Build with `make` (not `make test`) for a clean ring.
+2. **NEVER RING_RESET after boot** — the kernel's `setup_ring_buffer` initializes the ring at boot. Calling `INTEL_RING_RESET` ioctl (disable→re-enable) kills the CS permanently. It works exactly ONCE after boot, then all subsequent resets fail (HEAD stuck at 0). The CS cannot be restarted after disable.
 3. **`ring.base` is valid** in clones — it equals `graphics_memory` (shared mapping).
 4. **`QueueCommands` works** from clones when the CS is alive.
 5. **Benchmark tool**: `tests/gpu_idct_bench` — runs 400 IDCT blocks, GPU 4× faster than CPU. No reboot needed on a clean ring.
+
+### CRITICAL: MI_LOAD_REGISTER_IMM (LRI) does NOT work on Gen5
+
+LRI (opcode 0x22) in the ring hangs the CS after 2 DWORDs on Ironlake. Masked registers (MI_MODE, _3D_CHICKEN2, CACHE_MODE_0) get corrupted by raw LRI writes. The CS reads the LRI header + first register address, then stops permanently.
+
+**Use INTEL_RING_INIT_3D kernel ioctl instead** — the kernel writes workaround registers via direct MMIO, which handles masked register semantics correctly.
+
+### CRITICAL: MMIO writes are READ-ONLY from userspace
+
+All MMIO register writes via `clone_area` are silently ignored (kernel maps with `B_KERNEL_WRITE_AREA` only, no `B_WRITE_AREA`). Verified with `/dev/misc/poke` BAR0 mapping too. Only the kernel driver can write MMIO registers.
+
+**Kernel ioctls for ring access** (added to intel_extreme kernel driver):
+- `INTEL_RING_RESET` — DO NOT USE (kills CS, see above)
+- `INTEL_RING_WRITE_TAIL` — writes TAIL register, kicks GPU. This is the ONLY way to submit ring commands from userspace.
+
+**Correct pattern for ring submission from userspace:**
+```cpp
+// 1. Sync ring position with hardware TAIL (reads work)
+ring.position = read32(ring.register_base + RING_BUFFER_TAIL) & (ring.size - 1);
+// 2. Write commands to ring memory (graphics_memory IS writable)
+uint32* cmd = (uint32*)(ring.base + ring.position);
+cmd[0] = ...; cmd[1] = ...;
+// 3. Kick GPU via kernel ioctl
+intel_ring_tail data = { INTEL_PRIVATE_DATA_MAGIC, new_position };
+ioctl(fd, INTEL_RING_WRITE_TAIL, &data, sizeof(data));
+```
 
 ### Build for userspace GPU tools
 

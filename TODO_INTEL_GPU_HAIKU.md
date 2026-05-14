@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-14 (GEM_EXECBUFFER2 working, Mesa crocus loads + creates resources)
+**Ultimo aggiornamento:** 2026-05-14 (kernel ioctl TAIL/RESET/INIT_3D, BLT 60FPS, media pipeline 3.5x, LRI hang scoperto)
 
 ---
 
@@ -242,16 +242,23 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       BAR0 0xF0000000) silenziosamente ignorate. Serve kernel ioctl.
 - [x] A.4: Cubo 3D visibile via framebuffer diretto (CPU raster, 60 FPS)
 
-### Fase B: Kernel ioctl per ring submission — COMPLETATA (base)
+### Fase B: Kernel ioctl per ring submission — COMPLETATA
 - [x] B.1: INTEL_RING_RESET + INTEL_RING_WRITE_TAIL ioctl nel kernel driver
       Kernel scrive TAIL/HEAD/CTL via MMIO (userspace è R/O).
       Build manuale con -fPIC + mutex ABI shim (_mutex→mutex) per hrev59669.
       Blacklist driver di sistema via /boot/system/settings/packages.
       **TEST PASS**: HEAD avanza dopo TAIL write → GPU esegue MI_NOOP!
-      CRITICAL: never RING_RESET after boot — kills CS permanently.
-      Use ring sync (read HW TAIL, set sw pos) instead.
+      **CRITICAL**: RING_RESET (disable→re-enable) uccide il CS dopo il
+      primo uso. Soluzione: ring sync (read HW TAIL, mai resettare).
 - [x] B.2: BLT via ioctl — 3D cubo 480×480 a 60 FPS, GPU BLT a schermo
-- [ ] B.3: GPU hang detection + ILK_GDSR recovery nel kernel
+- [x] B.3: INTEL_RING_INIT_3D ioctl — workaround Gen5 via kernel MMIO
+      MI_MODE (0x209C), _3D_CHICKEN2 (0x208C), CACHE_MODE_0 (0x2120).
+      Confermato funzionante via syslog.
+      **LRI (MI_LOAD_REGISTER_IMM) NON funziona su Gen5**: hanga il CS
+      dopo 2 DW. I registri masked (MI_MODE, CACHE_MODE_0) si corrompono
+      con scritture raw via LRI. Solo kernel MMIO diretto funziona.
+- [x] B.4: Media pipeline via ioctl — GPU IDCT 3.5x, 400 blocchi
+- [ ] B.5: GPU hang detection + ILK_GDSR recovery nel kernel
 
 ### Fase C: Interfaccia DRM minimale per Mesa crocus
 - [x] C.1: GEM_CREATE / GEM_CLOSE — wrapper su INTEL_ALLOCATE_GRAPHICS_MEMORY ✅
@@ -335,12 +342,16 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       DW2 di 3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP: 0x00c7012b vs 0x00000000
       La differenza potrebbe essere significativa (depth buffer config).
 - [ ] **Debug 3D pipeline hang** — BLOCCO ATTIVO
-      **Sessione 2026-05-14:** Confermato con kernel ioctl patchato.
-      EXECBUF2 #1 (9 DW state setup) hang su PIPE_CONTROL (0x7a000002).
-      HEAD avanza a TAIL (ring consumato) ma GPU bloccata nel batch.
-      INSTDONE=0xFFFFFFFE (quasi completato). Batch decodifica:
-      MI_FLUSH + PIPE_CONTROL + 3DSTATE cmds (790a, 7906).
-      Prossimo passo:
+      **Sessione 2026-05-14 (sera):**
+      - Workaround registri confermati applicati (syslog: INIT_3D 5 volte)
+      - LRI in ring HANGA CS su Gen5 (dopo 2 DW) — registri masked corrotti
+      - EXECBUF2 #1 hang con ring sporco (da LRI precedente) — invalido
+      - Serve boot pulito per test affidabile
+      **Sessione 2026-05-13 (riferimento, ring pulito):**
+      - EXECBUF2 #1 (state): OK, EXECBUF2 #2 (glClear): OK
+      - EXECBUF2 #3 (readback): HANG su 3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP
+      - Differenza batch #2 vs #3: DW2 = 0x00c7012b vs 0x00000000
+      Prossimo passo (dopo reboot):
       1. Confrontare batch #2 (OK) e #3 (hang) DW per DW
       2. Verificare surface state encoding (0x42b040, 0x42b080 refs)
       3. Verificare se manca un PIPE_CONTROL/MI_FLUSH tra batch
