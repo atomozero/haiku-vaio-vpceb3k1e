@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-13 (GEM_EXECBUFFER2 verified working, ring sync (no reset) fix)
+**Ultimo aggiornamento:** 2026-05-14 (GEM_EXECBUFFER2 working, Mesa crocus loads + creates resources)
 
 ---
 
@@ -288,11 +288,13 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] D.2: crocus_bufmgr → Haiku GEM shim via haiku_drm_intel
 - [x] D.3: Mesa 25.3.3 compilata con crocus (libcrocus.a OK)
 - [-] D.4: CrocusRenderer + "Crocus Pipe" addon (128MB, statically linked)
-      **Stato 2026-05-13 (sessione corrente):**
+      **Stato 2026-05-14:**
       - GLInfo/gl_test carica Crocus Pipe OK, crocus_screen_create OK
       - Ring sync (no reset): GPU WORKS, ring test marker OK
-      - GEM_EXECBUFFER2: batch #1 + #2 completati! #3+ hang 3D state
+      - GEM_EXECBUFFER2 #1 (state setup): completato dalla GPU!
+      - gl_test: resource_create OK, validate_textures OK, crash in ralloc
       - OpenGL 2.1, GLSL 1.20, Mesa Intel(R) HD Graphics (ILK)
+      - Next: debug crash dopo validate_textures (ralloc/syncobj)
       **Prossimo blocco:** 3D pipeline hang al batch #3 (vedi E.2)
 
 ### Fase E: GLInfo e rendering visibile — PIANIFICAZIONE
