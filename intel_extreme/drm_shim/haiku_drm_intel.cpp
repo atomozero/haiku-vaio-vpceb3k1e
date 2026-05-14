@@ -454,8 +454,8 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	/* Pre-batch invalidate (22 DW) + batch + PIPE_CONTROL(4) + pad */
-	uint32_t needed = 22 + cmd_count + 8;
+	/* MI_FLUSH(1) + batch + MI_STORE_DATA_IMM(4) + pad */
+	uint32_t needed = 1 + cmd_count + 6;
 
 	/* Check ring space — wrap if near end.
 	 * Use sShim.ring_pos (our own), NOT ring.position (app_server's). */
@@ -478,28 +478,10 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
 
-	/* --- Gen5 ILK pre-batch cache invalidation ---
-	 * MI_FLUSH is safe BEFORE 3D state (stalls only AFTER 3DPRIMITIVE).
-	 * Emit MI_FLUSH for cache invalidate, then PIPE_CONTROL with non-zero
-	 * post-sync to force the flush (ILK workaround: must have post-sync). */
-	{
-		uint32_t scratch_gtt = sShim.marker_gtt + 64;
-
-		/* MI_FLUSH with EXE_FLUSH (bit 1) only — bit 5 is reserved on Gen5 */
-		RING_EMIT((0x04u << 23) | (1u << 1));
-
-		/* PIPE_CONTROL #1: non-zero post-sync to scratch (ILK requires this) */
-		RING_EMIT(0x7a000002);
-		RING_EMIT((1u << 14) | (1u << 2) | (1u << 0));  /* WriteImm|GGTT|DepthFlush */
-		RING_EMIT(scratch_gtt);
-		RING_EMIT(0);
-
-		/* PIPE_CONTROL #2: CS stall + RT flush (ILK needs two PIPE_CONTROLs) */
-		RING_EMIT(0x7a000002);
-		RING_EMIT((1u << 20) | (1u << 14) | (1u << 12) | (1u << 2));  /* CS_Stall|WriteImm|RT_Flush|GGTT */
-		RING_EMIT(scratch_gtt);
-		RING_EMIT(0);
-	}
+	/* Pre-batch: MI_FLUSH only.
+	 * PIPE_CONTROL hangs on Gen5 ILK when 3D pipeline not yet initialized
+	 * (WriteImm requires active pipeline context). */
+	RING_EMIT((0x04u << 23) | (1u << 1));  /* MI_FLUSH with EXE_FLUSH */
 
 	/* Inline batch commands into ring */
 	for (uint32_t i = 0; i < cmd_count; i++)

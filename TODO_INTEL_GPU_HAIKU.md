@@ -334,7 +334,13 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       Batch #3 (HANG): 79000002 00000000 **00000000** 00000000 61010006...
       DW2 di 3DSTATE_GLOBAL_DEPTH_OFFSET_CLAMP: 0x00c7012b vs 0x00000000
       La differenza potrebbe essere significativa (depth buffer config).
-- [ ] **Debug 3D pipeline hang** — prossimo passo:
+- [ ] **Debug 3D pipeline hang** — BLOCCO ATTIVO
+      **Sessione 2026-05-14:** Confermato con kernel ioctl patchato.
+      EXECBUF2 #1 (9 DW state setup) hang su PIPE_CONTROL (0x7a000002).
+      HEAD avanza a TAIL (ring consumato) ma GPU bloccata nel batch.
+      INSTDONE=0xFFFFFFFE (quasi completato). Batch decodifica:
+      MI_FLUSH + PIPE_CONTROL + 3DSTATE cmds (790a, 7906).
+      Prossimo passo:
       1. Confrontare batch #2 (OK) e #3 (hang) DW per DW
       2. Verificare surface state encoding (0x42b040, 0x42b080 refs)
       3. Verificare se manca un PIPE_CONTROL/MI_FLUSH tra batch
