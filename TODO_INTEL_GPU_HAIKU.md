@@ -298,8 +298,11 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       **Stato 2026-05-14:**
       - GLInfo/gl_test carica Crocus Pipe OK, crocus_screen_create OK
       - Ring sync (no reset): GPU WORKS, ring test marker OK
-      - GEM_EXECBUFFER2 #1 (state setup): completato dalla GPU!
-      - gl_test: resource_create OK, validate_textures OK, crash in ralloc
+      - GEM_EXECBUFFER2 #1 (state setup): **completato dalla GPU!**
+      - GEM_EXECBUFFER2 #2+ (glClear/render): hang su MI_FLUSH post-batch
+        IPEHR=0x02000000, INSTDONE=0xFFFFFFFF. CS stall dopo 3DSTATE.
+        HEAD avanza attraverso batch ma stalla su MI_FLUSH nel ring.
+      - Prossimo: sostituire MI_FLUSH con PIPE_CONTROL o workaround
       - OpenGL 2.1, GLSL 1.20, Mesa Intel(R) HD Graphics (ILK)
       - Next: debug crash dopo validate_textures (ralloc/syncobj)
       **Prossimo blocco:** 3D pipeline hang al batch #3 (vedi E.2)
