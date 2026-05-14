@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-14 (kernel ioctl TAIL/RESET/INIT_3D, BLT 60FPS, media pipeline 3.5x, LRI hang scoperto)
+**Ultimo aggiornamento:** 2026-05-14 (GEM_EXECBUFFER2 funzionante, Mesa OpenGL 2.1 inizializzato, 3D batch hang su MI_FLUSH)
 
 ---
 

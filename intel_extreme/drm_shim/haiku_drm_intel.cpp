@@ -411,6 +411,15 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 				uint32_t target_gtt = sShim.bos[target_h].gtt_offset;
 				uint32_t patched = target_gtt + (uint32_t)relocs[r].delta;
 
+				/* Bounds check: reloc offset must be within BO */
+				if (relocs[r].offset + 4 > bo.size) {
+					printf("[drm] EXECBUF2: reloc offset 0x%llx OOB "
+						"(BO size 0x%llx)\n",
+						(unsigned long long)relocs[r].offset,
+						(unsigned long long)bo.size);
+					errno = EINVAL;
+					return -1;
+				}
 				/* Patch the address into the BO at reloc.offset */
 				uint32_t* patch_addr = (uint32_t*)((uint8_t*)bo.cpu_addr
 					+ relocs[r].offset);
@@ -454,11 +463,16 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	/* MI_FLUSH(1) + batch + MI_STORE_DATA_IMM(4) + pad */
-	uint32_t needed = 1 + cmd_count + 6;
+	/* batch + MI_STORE_DATA_IMM(4) + pad (NO MI_FLUSH — stalls CS on Gen5) */
+	uint32_t needed = cmd_count + 6;
 
-	/* Check ring space — wrap if near end.
-	 * Use sShim.ring_pos (our own), NOT ring.position (app_server's). */
+	/* Re-sync ring_pos: app_server may have advanced ring.position past us.
+	 * If so, skip ahead to avoid writing into their space. */
+	if (ring.position > sShim.ring_pos
+		&& ring.position < sShim.ring_size)
+		sShim.ring_pos = ring.position;
+
+	/* Check ring space — wrap if near end. */
 	if (sShim.ring_pos + needed * 4 + 64 > sShim.ring_size) {
 		bigtime_t deadline = system_time() + 500000;
 		while (system_time() < deadline) {
@@ -478,12 +492,10 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
 
-	/* Pre-batch: MI_FLUSH with state instruction cache invalidate.
-	 * Bit 1 = EXE_FLUSH, Bit 0 = STATE_INSTRUCTION_CACHE_INVALIDATE.
-	 * Ensures fresh shader state between batches. */
-	RING_EMIT((0x04u << 23) | (1u << 1) | (1u << 0));
-
-	/* Inline batch commands into ring */
+	/* Inline batch commands into ring.
+	 * NO MI_FLUSH before or after — MI_FLUSH after 3D pipeline commands
+	 * causes IS stall on Ironlake Gen5 (IPEHR=0x02000000, HEAD stuck).
+	 * Ring ordering guarantees commands execute before the marker. */
 	for (uint32_t i = 0; i < cmd_count; i++)
 		RING_EMIT(batch_cmd[i]);
 
@@ -503,6 +515,13 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	#undef RING_EMIT
 
 	sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
+
+	/* Keep shared ring.position in sync so app_server writes AFTER us,
+	 * not on top of our commands (race condition: app_server's QueueCommands
+	 * advances ring.position between our EXECBUF calls). */
+	ring.position = sShim.ring_pos;
+	ring.space_left = ring.size - 64;
+
 	asm volatile("mfence" ::: "memory");
 
 	uint32_t head_pre = ring_read32(ring.register_base + RING_BUFFER_HEAD)
@@ -683,6 +702,12 @@ haiku_drm_open(void)
 		if (pos & 1) { rb[pos & mask] = 0; pos++; }
 
 		sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
+		/* Sync shared position so app_server doesn't overwrite us */
+		{
+			ring_buffer& r = sShim.shared->primary_ring_buffer;
+			r.position = sShim.ring_pos;
+			r.space_left = r.size - 64;
+		}
 		asm volatile("mfence" ::: "memory");
 		ring_kick_tail(sShim.ring_pos);
 
