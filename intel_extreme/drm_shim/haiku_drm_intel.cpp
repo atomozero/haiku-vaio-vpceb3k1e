@@ -719,9 +719,17 @@ haiku_drm_open(void)
 			sShim.marker_gtt, (void*)sShim.marker_cpu);
 	}
 
-	/* Gen5 3D workarounds applied via INTEL_RING_INIT_3D kernel ioctl
-	 * (see above). DO NOT use MI_LOAD_REGISTER_IMM — it hangs the CS
-	 * on Gen5 (masked register writes via LRI corrupt register state). */
+	/* Apply Gen5 3D workarounds via kernel ioctl.
+	 * Critical: WaDisableRenderCachePipelinedFlush (CACHE_MODE_0 bit 8)
+	 * Without this, MI_FLUSH after 3DSTATE commands hangs the CS. */
+	{
+		intel_get_private_data init3d;
+		init3d.magic = INTEL_PRIVATE_DATA_MAGIC;
+		if (ioctl(sShim.fd, INTEL_RING_INIT_3D, &init3d, sizeof(init3d)) == 0)
+			printf("[drm] 3D pipeline workarounds applied\n");
+		else
+			printf("[drm] WARNING: INTEL_RING_INIT_3D failed!\n");
+	}
 
 	/* Sync our OWN ring position with hardware TAIL.
 	 * We use sShim.ring_pos, NOT ring.position (app_server modifies that).
@@ -774,35 +782,18 @@ haiku_drm_open(void)
 			ring_ok ? "GPU WORKS!" : "FAILED");
 
 		if (!ring_ok) {
-			/* Ring is hung — attempt recovery via RING_RESET.
-			 * This is safe because the ring is already dead. */
-			printf("[drm] Ring hung! Attempting RING_RESET recovery...\n");
-			ring_reset_ioctl();
-			sShim.ring_pos = 0;
-
-			/* Retry ring test after reset */
-			*sShim.marker_cpu = 0;
-			asm volatile("mfence" ::: "memory");
-
-			rb = (uint32_t*)sShim.ring_base;
-			pos = 0;
-
-			rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
-			rb[pos & mask] = 0; pos++;
-			rb[pos & mask] = sShim.marker_gtt; pos++;
-			rb[pos & mask] = 0xBEEF0002; pos++;
-			if (pos & 1) { rb[pos & mask] = 0; pos++; }
-
-			sShim.ring_pos = pos * 4;
-			asm volatile("mfence" ::: "memory");
-			ring_kick_tail(sShim.ring_pos);
-
-			snooze(10000);
-			head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
+			/* Ring is hung. DO NOT call RING_RESET — it kills the CS
+			 * permanently (disable+re-enable never recovers on Gen5).
+			 * The only recovery is a full system reboot. */
+			printf("[drm] WARNING: Ring is hung! HEAD stuck at 0x%x.\n"
+				"[drm] Reboot required to recover the command streamer.\n",
+				head_post);
+#if 0  /* DISABLED: RING_RESET kills CS permanently on Gen5 */
 			ring_ok = (*sShim.marker_cpu == 0xBEEF0002);
 			printf("[drm] After reset: marker=0x%08x HEAD=0x%x → %s\n",
 				*sShim.marker_cpu, head_post,
 				ring_ok ? "RECOVERED!" : "STILL DEAD");
+#endif  /* RING_RESET disabled */
 		}
 	}
 
