@@ -33,6 +33,19 @@
 #define PIPE_CONTROL_TC_FLUSH     (1 << 10)
 #define PIPE_CONTROL_NOWRITE      0
 
+/* Flush WC (write-combining) buffers to ensure GPU visibility.
+ * On Gen5, GTT aperture is mapped WC. mfence alone does NOT guarantee
+ * data reaches GGTT — clflush is required per cache line. */
+static inline void
+clflush_range(void* addr, size_t size)
+{
+	uintptr_t start = (uintptr_t)addr & ~63ULL;
+	uintptr_t end = ((uintptr_t)addr + size + 63) & ~63ULL;
+	for (uintptr_t p = start; p < end; p += 64)
+		asm volatile("clflush (%0)" :: "r"(p) : "memory");
+	asm volatile("mfence" ::: "memory");
+}
+
 #define MAX_BOS 4096
 
 /* Per-BO tracking */
@@ -432,48 +445,57 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		}
 	}
 
-	/* Flush CPU writes to all BOs */
-	asm volatile("mfence" ::: "memory");
+	/* Flush CPU writes to all BOs via clflush (WC requires this).
+	 * mfence alone does NOT flush WC combining buffers on Gen5.
+	 * clflush forces each cache line out to the GGTT aperture. */
+	for (uint32_t i = 0; i < args->buffer_count; i++) {
+		uint32_t h = objs[i].handle;
+		gem_bo& bo = sShim.bos[h];
+		clflush_range(bo.cpu_addr, bo.size);
+	}
 
-	/* --- Step 3: Inline batch commands into the ring --- */
-	/* MI_BATCH_BUFFER_START hangs on Gen5 (CS never returns from batch).
-	 * Instead, copy batch commands directly into the ring, followed by
-	 * MI_FLUSH + MI_STORE_DATA_IMM for completion tracking.
-	 * This matches the proven approach from media_pipeline.cpp. */
+	/* --- Step 3: Submit batch --- */
+	/* With clflush, batch BO data should now be visible to GPU via GGTT.
+	 * USE_BATCH_BUFFER_START: use MI_BATCH_BUFFER_START (proper dispatch).
+	 * Without it: inline batch commands into ring (fallback). */
+#define USE_BATCH_BUFFER_START 0  /* Inline batch into ring — BBS hangs on Gen5 */
 
-	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
+	uint32_t batch_dwords = args->batch_len / 4;
+	if (batch_dwords == 0)
+		batch_dwords = batch_bo.size / 4;
+
+	const uint32_t* batch_src = (const uint32_t*)((uint8_t*)batch_bo.cpu_addr
+		+ args->batch_start_offset);
 
 	/* Prepare completion marker */
 	uint32_t seq = ++sShim.marker_seq;
 	if (sShim.marker_cpu)
 		*sShim.marker_cpu = 0;
 
-	/* Scan batch for MI_BATCH_BUFFER_END to determine command count */
-	uint32_t* batch_cmd = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
-		+ args->batch_start_offset);
-	uint32_t batch_dwords = args->batch_len / 4;
-	if (batch_dwords == 0)
-		batch_dwords = 4096 / 4;  /* safety limit */
-	/* Find end marker */
-	uint32_t cmd_count = 0;
-	for (uint32_t i = 0; i < batch_dwords; i++) {
-		if (batch_cmd[i] == (0x0Au << 23))  /* MI_BATCH_BUFFER_END */
-			break;
-		cmd_count++;
-	}
-
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-	/* batch + MI_STORE_DATA_IMM(4) + pad (NO MI_FLUSH — stalls CS on Gen5) */
-	uint32_t needed = cmd_count + 6;
 
-	/* Re-sync ring_pos: app_server may have advanced ring.position past us.
-	 * If so, skip ahead to avoid writing into their space. */
-	if (ring.position > sShim.ring_pos
-		&& ring.position < sShim.ring_size)
-		sShim.ring_pos = ring.position;
+#if USE_BATCH_BUFFER_START
+	/* MI_BATCH_BUFFER_START (2 DW) + marker(4) + pad(2) */
+	uint32_t needed = 8;
+#else
+	/* Strip MI_BATCH_BUFFER_END for inline path */
+	uint32_t emit_dwords = batch_dwords;
+	while (emit_dwords > 0
+		&& (batch_src[emit_dwords - 1] == 0           /* MI_NOOP */
+			|| batch_src[emit_dwords - 1] == 0x05000000)) /* MI_BBE */
+		emit_dwords--;
+	uint32_t needed = emit_dwords + 6;  /* batch + marker(4) + pad(2) */
+#endif
 
-	/* Check ring space — wrap if near end. */
+	/* Re-sync ring_pos with hardware TAIL */
+	uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
+		& (ring.size - 1);
+	if (hwTail != sShim.ring_pos)
+		sShim.ring_pos = hwTail;
+
+	/* Check ring space — pad with NOOPs and wrap if near end */
 	if (sShim.ring_pos + needed * 4 + 64 > sShim.ring_size) {
+		/* Wait for GPU to drain past current position */
 		bigtime_t deadline = system_time() + 500000;
 		while (system_time() < deadline) {
 			uint32_t head = ring_read32(ring.register_base + RING_BUFFER_HEAD)
@@ -482,47 +504,63 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 				break;
 			snooze(100);
 		}
+		/* Fill remainder of ring with MI_NOOPs to prevent stale cmd exec */
+		uint32_t* rb_pad = (uint32_t*)sShim.ring_base;
+		uint32_t pad_start = sShim.ring_pos / 4;
+		uint32_t pad_end = sShim.ring_size / 4;
+		for (uint32_t i = pad_start; i < pad_end; i++)
+			rb_pad[i] = MI_NOOP_CMD;
+		clflush_range((uint8_t*)sShim.ring_base + sShim.ring_pos,
+			sShim.ring_size - sShim.ring_pos);
 		sShim.ring_pos = 0;
 	}
 
-	/* Copy batch commands into ring (skip MI_BATCH_BUFFER_END) */
 	uint32_t* rb = (uint32_t*)sShim.ring_base;
+	uint32_t write_start = sShim.ring_pos;  /* remember for clflush */
 	uint32_t pos = sShim.ring_pos / 4;
 	uint32_t mask = (sShim.ring_size / 4) - 1;
 
-	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
+#if USE_BATCH_BUFFER_START
+	/* Dispatch batch via MI_BATCH_BUFFER_START.
+	 * The batch BO MUST contain MI_BATCH_BUFFER_END.
+	 * After batch completes, execution returns to ring at next cmd. */
+	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
+	rb[(pos + 0) & mask] = MI_BATCH_BUFFER_START_CMD;
+	rb[(pos + 1) & mask] = batch_gtt;
+	pos += 2;
+#else
+	/* Inline batch commands into ring (fallback) */
+	for (uint32_t i = 0; i < emit_dwords; i++)
+		rb[(pos + i) & mask] = batch_src[i];
+	pos += emit_dwords;
+#endif
 
-	/* Inline batch commands into ring.
-	 * NO MI_FLUSH before or after — MI_FLUSH after 3D pipeline commands
-	 * causes IS stall on Ironlake Gen5 (IPEHR=0x02000000, HEAD stuck).
-	 * Ring ordering guarantees commands execute before the marker. */
-	for (uint32_t i = 0; i < cmd_count; i++)
-		RING_EMIT(batch_cmd[i]);
-
-	/* --- Post-batch completion tracking ---
-	 * Use MI_STORE_DATA_IMM (proven working in ring test) instead of
-	 * PIPE_CONTROL which doesn't write on this Gen5 hardware. */
+	/* Completion marker via MI_STORE_DATA_IMM */
 	if (sShim.marker_cpu) {
-		RING_EMIT(MI_STORE_DATA_IMM_GGTT);
-		RING_EMIT(0);
-		RING_EMIT(sShim.marker_gtt);
-		RING_EMIT(seq);
+		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
+		rb[pos & mask] = 0; pos++;
+		rb[pos & mask] = sShim.marker_gtt; pos++;
+		rb[pos & mask] = seq; pos++;
 	}
 
-	if (pos & 1)
-		RING_EMIT(MI_NOOP_CMD);
-
-	#undef RING_EMIT
+	/* QWord align */
+	if (pos & 1) { rb[pos & mask] = MI_NOOP_CMD; pos++; }
 
 	sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
 
-	/* Keep shared ring.position in sync so app_server writes AFTER us,
-	 * not on top of our commands (race condition: app_server's QueueCommands
-	 * advances ring.position between our EXECBUF calls). */
 	ring.position = sShim.ring_pos;
 	ring.space_left = ring.size - 64;
 
-	asm volatile("mfence" ::: "memory");
+	/* clflush the ring commands we just wrote (ring is also WC-mapped) */
+	if (sShim.ring_pos >= write_start) {
+		clflush_range((uint8_t*)sShim.ring_base + write_start,
+			sShim.ring_pos - write_start + 64);
+	} else {
+		/* Wrapped — flush from write_start to end, then 0 to ring_pos */
+		clflush_range((uint8_t*)sShim.ring_base + write_start,
+			sShim.ring_size - write_start);
+		clflush_range((void*)sShim.ring_base, sShim.ring_pos + 64);
+	}
 
 	uint32_t head_pre = ring_read32(ring.register_base + RING_BUFFER_HEAD)
 		& INTEL_RING_BUFFER_HEAD_MASK;
@@ -533,10 +571,21 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	static uint32_t sExecCount = 0;
 	sExecCount++;
 	if (sExecCount <= 20) {
-		printf("[drm] EXECBUF2 #%u: %u DW, %u relocs%s, HEAD=0x%x TAIL→0x%x\n",
-			sExecCount, cmd_count, total_relocs,
+#if USE_BATCH_BUFFER_START
+		printf("[drm] EXECBUF2 #%u: BBS gtt=0x%x, %u relocs%s, "
+			"HEAD=0x%x TAIL→0x%x\n",
+			sExecCount,
+			batch_bo.gtt_offset + args->batch_start_offset,
+			total_relocs,
 			no_reloc ? " (NO_RELOC)" : "",
 			head_pre, sShim.ring_pos);
+#else
+		printf("[drm] EXECBUF2 #%u: inline %u DW, %u relocs%s, "
+			"HEAD=0x%x TAIL→0x%x\n",
+			sExecCount, emit_dwords, total_relocs,
+			no_reloc ? " (NO_RELOC)" : "",
+			head_pre, sShim.ring_pos);
+#endif
 	}
 
 	/* --- Step 4: Wait for completion --- */
@@ -569,13 +618,17 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 						printf(" %08x", rbd[(hp+d) & hmask]);
 					printf("\n");
 				}
-				/* Dump full batch */
-				printf("[drm]   Full batch (%u DW):\n", cmd_count);
-				for (uint32_t i = 0; i < cmd_count; i += 8) {
-					printf("[drm]   [%3u]", i);
-					for (uint32_t j = i; j < i+8 && j < cmd_count; j++)
-						printf(" %08x", batch_cmd[j]);
-					printf("\n");
+				/* Dump batch BO content */
+				{
+					uint32_t* bcmd = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
+						+ args->batch_start_offset);
+					printf("[drm]   Batch BO (%u DW):\n", batch_dwords);
+					for (uint32_t i = 0; i < batch_dwords && i < 128; i += 8) {
+						printf("[drm]   [%3u]", i);
+						for (uint32_t j = i; j < i+8 && j < batch_dwords; j++)
+							printf(" %08x", bcmd[j]);
+						printf("\n");
+					}
 				}
 				errno = ETIMEDOUT;
 				return -1;
