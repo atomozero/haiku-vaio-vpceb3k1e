@@ -478,10 +478,10 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	#define RING_EMIT(v) do { rb[pos & mask] = (v); pos++; } while(0)
 
-	/* Pre-batch: MI_FLUSH only.
-	 * PIPE_CONTROL hangs on Gen5 ILK when 3D pipeline not yet initialized
-	 * (WriteImm requires active pipeline context). */
-	RING_EMIT((0x04u << 23) | (1u << 1));  /* MI_FLUSH with EXE_FLUSH */
+	/* Pre-batch: MI_FLUSH with state instruction cache invalidate.
+	 * Bit 1 = EXE_FLUSH, Bit 0 = STATE_INSTRUCTION_CACHE_INVALIDATE.
+	 * Ensures fresh shader state between batches. */
+	RING_EMIT((0x04u << 23) | (1u << 1) | (1u << 0));
 
 	/* Inline batch commands into ring */
 	for (uint32_t i = 0; i < cmd_count; i++)
@@ -647,16 +647,9 @@ haiku_drm_open(void)
 			sShim.marker_gtt, (void*)sShim.marker_cpu);
 	}
 
-	/* Apply Gen5 3D workarounds via kernel ioctl (MI_MODE, etc).
-	 * Without this, 3D commands in the ring cause CS hang. */
-	{
-		intel_get_private_data init3d;
-		init3d.magic = INTEL_PRIVATE_DATA_MAGIC;
-		if (ioctl(sShim.fd, INTEL_RING_INIT_3D, &init3d, sizeof(init3d)) == 0)
-			printf("[drm] 3D pipeline workarounds applied\n");
-		else
-			printf("[drm] INTEL_RING_INIT_3D not available (old kernel?)\n");
-	}
+	/* Gen5 3D workarounds applied via INTEL_RING_INIT_3D kernel ioctl
+	 * (see above). DO NOT use MI_LOAD_REGISTER_IMM — it hangs the CS
+	 * on Gen5 (masked register writes via LRI corrupt register state). */
 
 	/* Sync our OWN ring position with hardware TAIL.
 	 * We use sShim.ring_pos, NOT ring.position (app_server modifies that).
