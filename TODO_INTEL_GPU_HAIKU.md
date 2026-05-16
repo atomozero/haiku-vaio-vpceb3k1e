@@ -257,7 +257,7 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
       **LRI (MI_LOAD_REGISTER_IMM) NON funziona su Gen5**: hanga il CS
       dopo 2 DW. I registri masked (MI_MODE, CACHE_MODE_0) si corrompono
       con scritture raw via LRI. Solo kernel MMIO diretto funziona.
-- [x] B.4: Media pipeline via ioctl — GPU IDCT 3.5x, 400 blocchi
+- [x] B.4: Media pipeline via ioctl — GPU IDCT **5.8x**, 400 blocchi (155µs vs 905µs)
 - [ ] B.5: GPU hang detection + ILK_GDSR recovery nel kernel
 
 ### Fase C: Interfaccia DRM minimale per Mesa crocus
