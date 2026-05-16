@@ -469,8 +469,9 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
 
-	/* BBS(2) + 2×PIPE_CONTROL(8) + MI_STORE_DATA_IMM(4) + pad(2) + zero(16) */
-	uint32_t needed = 32;
+	/* Inline batch + 2×PIPE_CONTROL(8) + MI_STORE_DATA_IMM(4) + pad(2) + zero(16) */
+	uint32_t batch_dw_count_est = args->batch_len / 4;
+	uint32_t needed = batch_dw_count_est + 32;
 
 	/* Use our tracked ring_pos — do NOT re-sync with hardware TAIL.
 	 * App_server writes stale commands (MI_FLUSH etc) to ring memory
@@ -534,27 +535,32 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		}
 	}
 
-	/* Dispatch batch via MI_BATCH_BUFFER_START.
-	 * GPU jumps to batch BO, returns to ring after MI_BATCH_BUFFER_END. */
-	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
-	rb[(pos + 0) & mask] = MI_BATCH_BUFFER_START_CMD;
-	rb[(pos + 1) & mask] = batch_gtt;
-	pos += 2;
+	/* Inline batch into ring (MI_BATCH_BUFFER_START hangs CS on Gen5).
+	 * Copy all batch commands except MI_BATCH_BUFFER_END directly to ring. */
+	for (uint32_t i = 0; i < batch_dw_count; i++) {
+		uint32_t cmd = batch_cmds[i];
+		if (cmd == 0x0A000000)  /* MI_BATCH_BUFFER_END — skip */
+			break;
+		rb[pos & mask] = cmd;
+		pos++;
+	}
 
-	/* --- Fix 2: PIPE_CONTROL(CS_STALL) after batch return.
-	 * Ensures 3D pipeline is fully drained before completion marker.
-	 * i915 Linux uses PIPE_CONTROL on ILK for post-batch sync.
+	/* --- Fix 2: PIPE_CONTROL after batch return.
+	 * On Gen5 ILK, MI_FLUSH after 3D commands causes permanent IS stall.
+	 * i915 Linux uses PIPE_CONTROL for post-batch sync.
+	 * Gen5 PIPE_CONTROL: flags go in DW0 (header), not DW1 (address).
 	 * ILK workaround: emit two PIPE_CONTROLs (first may be ignored). */
-	/* First PIPE_CONTROL: dummy stall (ILK workaround) */
-	rb[pos & mask] = PIPE_CONTROL_CMD; pos++;
-	rb[pos & mask] = PIPE_CONTROL_CS_STALL; pos++;
-	rb[pos & mask] = 0; pos++;
-	rb[pos & mask] = 0; pos++;
-	/* Second PIPE_CONTROL: real stall */
-	rb[pos & mask] = PIPE_CONTROL_CMD; pos++;
-	rb[pos & mask] = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_WC_FLUSH; pos++;
-	rb[pos & mask] = 0; pos++;
-	rb[pos & mask] = 0; pos++;
+	/* First PIPE_CONTROL: CS stall (ILK workaround — first may be dropped) */
+	rb[pos & mask] = PIPE_CONTROL_CMD | PIPE_CONTROL_CS_STALL; pos++;
+	rb[pos & mask] = 0; pos++;  /* DW1: address (unused) */
+	rb[pos & mask] = 0; pos++;  /* DW2: data low */
+	rb[pos & mask] = 0; pos++;  /* DW3: data high */
+	/* Second PIPE_CONTROL: real stall + render target flush */
+	rb[pos & mask] = PIPE_CONTROL_CMD | PIPE_CONTROL_CS_STALL
+		| PIPE_CONTROL_WC_FLUSH; pos++;
+	rb[pos & mask] = 0; pos++;  /* DW1: address */
+	rb[pos & mask] = 0; pos++;  /* DW2: data low */
+	rb[pos & mask] = 0; pos++;  /* DW3: data high */
 
 	/* Completion marker via MI_STORE_DATA_IMM (GGTT) — proven working */
 	if (sShim.marker_cpu) {
