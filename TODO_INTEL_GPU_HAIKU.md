@@ -5,7 +5,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-14 (GEM_EXECBUFFER2 funzionante, Mesa OpenGL 2.1 inizializzato, 3D batch hang su MI_FLUSH)
+**Ultimo aggiornamento:** 2026-05-16 (GEM_EXECBUFFER2 verified working, ring sync (no reset) fix)
 
 ---
 
@@ -265,11 +265,15 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] C.2: GEM_MMAP — already mapped by allocator, just return addr ✅
 - [x] C.2b: GETPARAM + GET_APERTURE + GEM_BUSY + SET_DOMAIN ✅
 - [x] C.2c: GEM_CONTEXT_CREATE/DESTROY (stub) ✅
-- [x] C.3: **GEM_EXECBUFFER2** — FUNZIONANTE! (2026-05-13)
-      DRM shim: MI_BATCH_BUFFER_START nel ring + TAIL kick via ioctl.
+- [x] C.3: **GEM_EXECBUFFER2** — FUNZIONANTE! (2026-05-13, ioctl path 2026-05-16)
+      DRM shim: inline batch nel ring + TAIL kick via INTEL_RING_WRITE_TAIL ioctl.
       Ring sync (non reset!) con TAIL hardware — RING_RESET uccide il CS.
       Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST supportati.
       Completion marker via MI_STORE_DATA_IMM nel ring (non nel batch).
+      **gl_test 2026-05-16**: OpenGL 2.1 Mesa Intel(R) HD Graphics (ILK),
+      GLSL 1.20. EXECBUF2 #1 (state setup) completato dalla GPU!
+      EXECBUF2 #2+ (3D render) hang su MI_FLUSH (IPEHR=0x02000000) —
+      problema 3D pipeline, non EXECBUF2.
       **CRITICAL**: RING_RESET (disable→re-enable) uccide il CS dopo il
       primo uso. Fix: sync con TAIL hw senza reset (render_init_clone).
       **gl_test risultati** (2026-05-13):
