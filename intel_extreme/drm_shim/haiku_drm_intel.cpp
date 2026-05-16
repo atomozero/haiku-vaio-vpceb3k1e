@@ -473,12 +473,15 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	uint32_t batch_dw_count_est = args->batch_len / 4;
 	uint32_t needed = batch_dw_count_est + 32;
 
-	/* Use our tracked ring_pos — do NOT re-sync with hardware TAIL.
-	 * App_server writes stale commands (MI_FLUSH etc) to ring memory
-	 * between our submissions, advancing ring.position in shared_info.
-	 * The hardware TAIL reflects our last ioctl kick, which is correct. */
+	/* Acquire ring lock to prevent app_server from writing MI_FLUSH
+	 * over our commands. Use ring.position (shared with app_server)
+	 * as the write start — this prevents overlap. */
+	acquire_lock(&ring.lock);
 
-	/* Check ring space — pad with NOOPs and wrap if near end */
+	/* Sync with shared ring.position (app_server may have advanced it) */
+	sShim.ring_pos = ring.position;
+
+	/* Check ring space — wrap if near end */
 	if (sShim.ring_pos + needed * 4 + 64 > sShim.ring_size) {
 		/* Wait for GPU to drain past current position */
 		bigtime_t deadline = system_time() + 500000;
@@ -489,7 +492,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 				break;
 			snooze(100);
 		}
-		/* Fill remainder of ring with MI_NOOPs to prevent stale cmd exec */
+		/* Fill remainder with NOOPs */
 		uint32_t* rb_pad = (uint32_t*)sShim.ring_base;
 		uint32_t pad_start = sShim.ring_pos / 4;
 		uint32_t pad_end = sShim.ring_size / 4;
@@ -501,7 +504,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	uint32_t* rb = (uint32_t*)sShim.ring_base;
-	uint32_t write_start = sShim.ring_pos;  /* remember for clflush */
+	uint32_t write_start = sShim.ring_pos;
 	uint32_t pos = sShim.ring_pos / 4;
 	uint32_t mask = (sShim.ring_size / 4) - 1;
 
@@ -523,15 +526,24 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		clflush_range(&batch_cmds[batch_dw_count], 8);
 	}
 
-	/* --- Fix 4: Patch MI_FLUSH (0x02000000) → MI_NOOP inside the batch.
-	 * On ILK Gen5, MI_FLUSH after 3DSTATE commands causes an IS stall
-	 * that permanently hangs the CS. Crocus emits MI_FLUSH before
-	 * 3DSTATE_PIPELINED_POINTERS (clip max threads errata workaround).
-	 * Replace with MI_NOOP — crocus also emits PIPE_CONTROL internally
-	 * for actual cache flushing, so the MI_FLUSH is redundant. */
+	/* --- Fix 4: Patch MI_FLUSH → MI_NOOP inside the batch.
+	 * On ILK Gen5, MI_FLUSH after 3DSTATE commands hangs the CS.
+	 * Use masked comparison to catch all flag variants. */
 	for (uint32_t i = 0; i < batch_dw_count; i++) {
-		if (batch_cmds[i] == MI_FLUSH_DRM) {
+		if ((batch_cmds[i] & 0xFF800000) == MI_FLUSH_DRM) {
 			batch_cmds[i] = MI_NOOP_CMD;
+		}
+	}
+
+	/* --- Fix 5: Patch Gen6+ PIPE_CONTROL (0x7B) → Gen5 (0x7A) or NOP.
+	 * Crocus may emit 0x7B PIPE_CONTROL (Gen6+ encoding with 6 DW) but
+	 * Gen5 PIPE_CONTROL is 0x7A with 4 DW. NOP out the entire command. */
+	for (uint32_t i = 0; i < batch_dw_count; i++) {
+		if ((batch_cmds[i] & 0xFFFF0000) == 0x7B000000) {
+			/* Gen6+ PIPE_CONTROL: length field + 2 DWs total */
+			uint32_t len = (batch_cmds[i] & 0xFF) + 2;
+			for (uint32_t j = 0; j < len && (i + j) < batch_dw_count; j++)
+				batch_cmds[i + j] = MI_NOOP_CMD;
 		}
 	}
 
@@ -582,8 +594,11 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
 
+	/* Update shared ring.position so app_server writes AFTER our commands */
 	ring.position = sShim.ring_pos;
 	ring.space_left = ring.size - 64;
+
+	release_lock(&ring.lock);
 
 	/* clflush the ring commands we just wrote (ring is also WC-mapped) */
 	if (sShim.ring_pos >= write_start) {
