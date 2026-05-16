@@ -508,6 +508,20 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	uint32_t pos = sShim.ring_pos / 4;
 	uint32_t mask = (sShim.ring_size / 4) - 1;
 
+	/* Zero-fill ring from HEAD to our write position.
+	 * App_server writes MI_FLUSH via shared lock between our calls.
+	 * Those stale MI_FLUSHs hang the CS after 3D commands.
+	 * By zeroing everything between HEAD and our start, we ensure
+	 * only MI_NOOPs precede our batch. */
+	{
+		uint32_t head_now = ring_read32(ring.register_base + RING_BUFFER_HEAD)
+			& INTEL_RING_BUFFER_HEAD_MASK;
+		uint32_t zero_from = head_now / 4;
+		uint32_t zero_to = pos;
+		for (uint32_t z = zero_from; z != zero_to; z = (z + 1) & mask)
+			rb[z] = MI_NOOP_CMD;
+	}
+
 	/* --- Fix 1: Ensure MI_BATCH_BUFFER_END exists in batch BO.
 	 * Without BB_END, GPU reads past batch into garbage, corrupts pipeline
 	 * state, and any subsequent ring command (even MI_NOOP) may hang. */
@@ -526,53 +540,45 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		clflush_range(&batch_cmds[batch_dw_count], 8);
 	}
 
-	/* --- Fix 4: Patch MI_FLUSH → MI_NOOP inside the batch.
-	 * On ILK Gen5, MI_FLUSH after 3DSTATE commands hangs the CS.
-	 * Use masked comparison to catch all flag variants. */
-	for (uint32_t i = 0; i < batch_dw_count; i++) {
-		if ((batch_cmds[i] & 0xFF800000) == MI_FLUSH_DRM) {
-			batch_cmds[i] = MI_NOOP_CMD;
-		}
-	}
-
-	/* --- Fix 5: Patch Gen6+ PIPE_CONTROL (0x7B) → Gen5 (0x7A) or NOP.
-	 * Crocus may emit 0x7B PIPE_CONTROL (Gen6+ encoding with 6 DW) but
-	 * Gen5 PIPE_CONTROL is 0x7A with 4 DW. NOP out the entire command. */
-	for (uint32_t i = 0; i < batch_dw_count; i++) {
-		if ((batch_cmds[i] & 0xFFFF0000) == 0x7B000000) {
-			/* Gen6+ PIPE_CONTROL: length field + 2 DWs total */
-			uint32_t len = (batch_cmds[i] & 0xFF) + 2;
-			for (uint32_t j = 0; j < len && (i + j) < batch_dw_count; j++)
-				batch_cmds[i + j] = MI_NOOP_CMD;
-		}
-	}
-
-	/* Inline batch into ring (MI_BATCH_BUFFER_START hangs CS on Gen5).
-	 * Copy all batch commands except MI_BATCH_BUFFER_END directly to ring. */
+	/* Inline batch into ring with on-the-fly patching.
+	 * In-place patches to WC-mapped GTT memory aren't visible on readback
+	 * (write-combining coherency issue), so we patch during the copy. */
+	uint32_t skip_until = 0;
 	for (uint32_t i = 0; i < batch_dw_count; i++) {
 		uint32_t cmd = batch_cmds[i];
-		if (cmd == 0x0A000000)  /* MI_BATCH_BUFFER_END — skip */
+		if (cmd == 0x0A000000)  /* MI_BATCH_BUFFER_END — stop */
 			break;
+
+		/* Skip remaining DWORDs of a multi-DW command being NOP'd */
+		if (i < skip_until) {
+			rb[pos & mask] = MI_NOOP_CMD;
+			pos++;
+			continue;
+		}
+
+		/* Patch MI_FLUSH → MI_NOOP (hangs CS after 3D state on Gen5) */
+		if ((cmd & 0xFF800000) == MI_FLUSH_DRM) {
+			rb[pos & mask] = MI_NOOP_CMD;
+			pos++;
+			continue;
+		}
+
+		/* Patch Gen6+ PIPE_CONTROL (0x7B) → NOP entire command.
+		 * Gen5 uses 0x7A. Crocus emits 0x7B which is invalid on Gen5. */
+		if ((cmd & 0xFFFF0000) == 0x7B000000) {
+			uint32_t len = (cmd & 0xFF) + 2;
+			skip_until = i + len;
+			rb[pos & mask] = MI_NOOP_CMD;
+			pos++;
+			continue;
+		}
+
 		rb[pos & mask] = cmd;
 		pos++;
 	}
 
-	/* --- Fix 2: PIPE_CONTROL after batch return.
-	 * On Gen5 ILK, MI_FLUSH after 3D commands causes permanent IS stall.
-	 * i915 Linux uses PIPE_CONTROL for post-batch sync.
-	 * Gen5 PIPE_CONTROL: flags go in DW0 (header), not DW1 (address).
-	 * ILK workaround: emit two PIPE_CONTROLs (first may be ignored). */
-	/* First PIPE_CONTROL: CS stall (ILK workaround — first may be dropped) */
-	rb[pos & mask] = PIPE_CONTROL_CMD | PIPE_CONTROL_CS_STALL; pos++;
-	rb[pos & mask] = 0; pos++;  /* DW1: address (unused) */
-	rb[pos & mask] = 0; pos++;  /* DW2: data low */
-	rb[pos & mask] = 0; pos++;  /* DW3: data high */
-	/* Second PIPE_CONTROL: real stall + render target flush */
-	rb[pos & mask] = PIPE_CONTROL_CMD | PIPE_CONTROL_CS_STALL
-		| PIPE_CONTROL_WC_FLUSH; pos++;
-	rb[pos & mask] = 0; pos++;  /* DW1: address */
-	rb[pos & mask] = 0; pos++;  /* DW2: data low */
-	rb[pos & mask] = 0; pos++;  /* DW3: data high */
+	/* No PIPE_CONTROL, no MI_FLUSH — both stall the CS on Gen5.
+	 * MI_STORE_DATA_IMM is an MI command, doesn't need pipeline sync. */
 
 	/* Completion marker via MI_STORE_DATA_IMM (GGTT) — proven working */
 	if (sShim.marker_cpu) {
@@ -598,14 +604,11 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	ring.position = sShim.ring_pos;
 	ring.space_left = ring.size - 64;
 
-	release_lock(&ring.lock);
-
 	/* clflush the ring commands we just wrote (ring is also WC-mapped) */
 	if (sShim.ring_pos >= write_start) {
 		clflush_range((uint8_t*)sShim.ring_base + write_start,
 			sShim.ring_pos - write_start + 64);
 	} else {
-		/* Wrapped — flush from write_start to end, then 0 to ring_pos */
 		clflush_range((uint8_t*)sShim.ring_base + write_start,
 			sShim.ring_size - write_start);
 		clflush_range((void*)sShim.ring_base, sShim.ring_pos + 64);
@@ -614,7 +617,33 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	uint32_t head_pre = ring_read32(ring.register_base + RING_BUFFER_HEAD)
 		& INTEL_RING_BUFFER_HEAD_MASK;
 
+	/* Scan ring from HEAD to new TAIL and replace any MI_FLUSH
+	 * (0x02000000) with MI_NOOP. App_server writes MI_FLUSH to the ring
+	 * via shared ring lock, but its MMIO TAIL write is silently ignored.
+	 * Our TAIL kick makes the GPU process everything including app_server's
+	 * stale MI_FLUSH, which hangs the CS after 3D pipeline commands.
+	 * Do this UNDER the lock and kick BEFORE releasing, so app_server
+	 * can't sneak in MI_FLUSH between scan and kick. */
+	{
+		uint32_t scan_start = head_pre / 4;
+		uint32_t scan_end = sShim.ring_pos / 4;
+		uint32_t rmask = (sShim.ring_size / 4) - 1;
+		uint32_t patched = 0;
+		for (uint32_t s = scan_start; s != scan_end; s = (s + 1) & rmask) {
+			if (rb[s] == 0x02000000) {  /* MI_FLUSH */
+				rb[s] = MI_NOOP_CMD;
+				patched++;
+			}
+		}
+		if (patched > 0) {
+			asm volatile("mfence" ::: "memory");
+			clflush_range((void*)sShim.ring_base, sShim.ring_size);
+		}
+	}
+
 	ring_kick_tail(sShim.ring_pos);
+
+	release_lock(&ring.lock);
 
 	/* Debug */
 	static uint32_t sExecCount = 0;
@@ -828,18 +857,29 @@ haiku_drm_open(void)
 			ring_ok ? "GPU WORKS!" : "FAILED");
 
 		if (!ring_ok) {
-			/* Ring is hung. DO NOT call RING_RESET — it kills the CS
-			 * permanently (disable+re-enable never recovers on Gen5).
-			 * The only recovery is a full system reboot. */
-			printf("[drm] WARNING: Ring is hung! HEAD stuck at 0x%x.\n"
-				"[drm] Reboot required to recover the command streamer.\n",
+			/* Ring hung — attempt GPU engine reset via ILK_GDSR + ring reinit */
+			printf("[drm] Ring hung (HEAD=0x%x), attempting engine reset...\n",
 				head_post);
-#if 0  /* DISABLED: RING_RESET kills CS permanently on Gen5 */
+			ring_reset_ioctl();
+			snooze(5000);
+			/* Re-test */
+			*sShim.marker_cpu = 0;
+			pos = sShim.ring_pos / 4;
+			rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
+			rb[pos & mask] = 0; pos++;
+			rb[pos & mask] = sShim.marker_gtt; pos++;
+			rb[pos & mask] = 0xBEEF0002; pos++;
+			if (pos & 1) { rb[pos & mask] = 0; pos++; }
+			sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
+			sShim.shared->primary_ring_buffer.position = sShim.ring_pos;
+			clflush_range((uint8_t*)sShim.ring_base, sShim.ring_pos + 64);
+			ring_kick_tail(sShim.ring_pos);
+			snooze(10000);
+			head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
 			ring_ok = (*sShim.marker_cpu == 0xBEEF0002);
 			printf("[drm] After reset: marker=0x%08x HEAD=0x%x → %s\n",
 				*sShim.marker_cpu, head_post,
-				ring_ok ? "RECOVERED!" : "STILL DEAD");
-#endif  /* RING_RESET disabled */
+				ring_ok ? "GPU RECOVERED!" : "STILL DEAD");
 		}
 	}
 
