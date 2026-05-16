@@ -472,11 +472,10 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	/* BBS(2) + 2×PIPE_CONTROL(8) + MI_STORE_DATA_IMM(4) + pad(2) + zero(16) */
 	uint32_t needed = 32;
 
-	/* Re-sync ring_pos with hardware TAIL */
-	uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
-		& (ring.size - 1);
-	if (hwTail != sShim.ring_pos)
-		sShim.ring_pos = hwTail;
+	/* Use our tracked ring_pos — do NOT re-sync with hardware TAIL.
+	 * App_server writes stale commands (MI_FLUSH etc) to ring memory
+	 * between our submissions, advancing ring.position in shared_info.
+	 * The hardware TAIL reflects our last ioctl kick, which is correct. */
 
 	/* Check ring space — pad with NOOPs and wrap if near end */
 	if (sShim.ring_pos + needed * 4 + 64 > sShim.ring_size) {
@@ -521,6 +520,18 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		batch_cmds[batch_dw_count] = 0x0A000000;  /* MI_BATCH_BUFFER_END */
 		batch_cmds[batch_dw_count + 1] = 0;       /* MI_NOOP pad */
 		clflush_range(&batch_cmds[batch_dw_count], 8);
+	}
+
+	/* --- Fix 4: Patch MI_FLUSH (0x02000000) → MI_NOOP inside the batch.
+	 * On ILK Gen5, MI_FLUSH after 3DSTATE commands causes an IS stall
+	 * that permanently hangs the CS. Crocus emits MI_FLUSH before
+	 * 3DSTATE_PIPELINED_POINTERS (clip max threads errata workaround).
+	 * Replace with MI_NOOP — crocus also emits PIPE_CONTROL internally
+	 * for actual cache flushing, so the MI_FLUSH is redundant. */
+	for (uint32_t i = 0; i < batch_dw_count; i++) {
+		if (batch_cmds[i] == MI_FLUSH_DRM) {
+			batch_cmds[i] = MI_NOOP_CMD;
+		}
 	}
 
 	/* Dispatch batch via MI_BATCH_BUFFER_START.
