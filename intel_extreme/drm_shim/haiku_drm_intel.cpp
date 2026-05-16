@@ -20,18 +20,22 @@
 #include "lock.h"
 
 /* MI commands for ring submission */
-#define MI_BATCH_NON_SECURE_I965  (1 << 8)
-#define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | MI_BATCH_NON_SECURE_I965)
+#define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | (2 << 6))  /* Gen4/5 GGTT (MI_BATCH_GTT) */
 #define MI_NOOP_CMD               0x00000000
 #define MI_FLUSH_DRM              (0x04 << 23)
 #define MI_STORE_DATA_IMM_GGTT    ((0x20 << 23) | (1 << 22) | 2)
 /* PIPE_CONTROL for post-batch flush (Gen5+).
- * MI_FLUSH causes IS stall after 3D pipeline commands on ILK. */
-#define PIPE_CONTROL_CMD          ((0x60 << 16) | 2)  /* 3 DW: header + flags + addr */
-#define PIPE_CONTROL_CS_STALL     (1 << 20)
-#define PIPE_CONTROL_WC_FLUSH     (1 << 12)
+ * MI_FLUSH causes IS stall after 3D pipeline commands on ILK.
+ * SNA/i915 use PIPE_CONTROL with RT flush after 3DPRIMITIVE. */
+#define PIPE_CONTROL_CMD          0x7A000002  /* 4 DW total, flags in DW0 on Gen5 */
+#define PIPE_CONTROL_CS_STALL     (1 << 20)   /* Command Streamer stall */
+#define PIPE_CONTROL_QW_WRITE     (1 << 14)   /* QWord write to address in DW1 */
+#define PIPE_CONTROL_WC_FLUSH     (1 << 12)   /* Render Target Cache Flush */
+#define PIPE_CONTROL_GLOBAL_GTT   (1 << 2)    /* DW1: use GGTT (not PPGTT) */
 #define PIPE_CONTROL_TC_FLUSH     (1 << 10)
 #define PIPE_CONTROL_NOWRITE      0
+/* PIPELINE_SELECT — must be 3D before any 3DSTATE commands */
+#define CMD_PIPELINE_SELECT_3D    0x69040000
 
 /* Flush WC (write-combining) buffers to ensure GPU visibility.
  * On Gen5, GTT aperture is mapped WC. mfence alone does NOT guarantee
@@ -458,15 +462,6 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	/* With clflush, batch BO data should now be visible to GPU via GGTT.
 	 * USE_BATCH_BUFFER_START: use MI_BATCH_BUFFER_START (proper dispatch).
 	 * Without it: inline batch commands into ring (fallback). */
-#define USE_BATCH_BUFFER_START 0  /* Inline batch into ring — BBS hangs on Gen5 */
-
-	uint32_t batch_dwords = args->batch_len / 4;
-	if (batch_dwords == 0)
-		batch_dwords = batch_bo.size / 4;
-
-	const uint32_t* batch_src = (const uint32_t*)((uint8_t*)batch_bo.cpu_addr
-		+ args->batch_start_offset);
-
 	/* Prepare completion marker */
 	uint32_t seq = ++sShim.marker_seq;
 	if (sShim.marker_cpu)
@@ -474,18 +469,8 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
 
-#if USE_BATCH_BUFFER_START
-	/* MI_BATCH_BUFFER_START (2 DW) + marker(4) + pad(2) */
-	uint32_t needed = 8;
-#else
-	/* Strip MI_BATCH_BUFFER_END for inline path */
-	uint32_t emit_dwords = batch_dwords;
-	while (emit_dwords > 0
-		&& (batch_src[emit_dwords - 1] == 0           /* MI_NOOP */
-			|| batch_src[emit_dwords - 1] == 0x05000000)) /* MI_BBE */
-		emit_dwords--;
-	uint32_t needed = emit_dwords + 6;  /* batch + marker(4) + pad(2) */
-#endif
+	/* BBS(2) + 2×PIPE_CONTROL(8) + MI_STORE_DATA_IMM(4) + pad(2) + zero(16) */
+	uint32_t needed = 32;
 
 	/* Re-sync ring_pos with hardware TAIL */
 	uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
@@ -520,22 +505,47 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	uint32_t pos = sShim.ring_pos / 4;
 	uint32_t mask = (sShim.ring_size / 4) - 1;
 
-#if USE_BATCH_BUFFER_START
+	/* --- Fix 1: Ensure MI_BATCH_BUFFER_END exists in batch BO.
+	 * Without BB_END, GPU reads past batch into garbage, corrupts pipeline
+	 * state, and any subsequent ring command (even MI_NOOP) may hang. */
+	uint32_t batch_dw_count = args->batch_len / 4;
+	uint32_t* batch_cmds = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
+		+ args->batch_start_offset);
+	/* Check if last DW or DW after batch_len is BB_END (0x0A000000) */
+	bool has_bb_end = false;
+	if (batch_dw_count > 0 && batch_cmds[batch_dw_count - 1] == 0x0A000000)
+		has_bb_end = true;
+	if (!has_bb_end && (args->batch_start_offset + args->batch_len + 8)
+			<= batch_bo.size) {
+		/* Append BB_END + pad after batch_len */
+		batch_cmds[batch_dw_count] = 0x0A000000;  /* MI_BATCH_BUFFER_END */
+		batch_cmds[batch_dw_count + 1] = 0;       /* MI_NOOP pad */
+		clflush_range(&batch_cmds[batch_dw_count], 8);
+	}
+
 	/* Dispatch batch via MI_BATCH_BUFFER_START.
-	 * The batch BO MUST contain MI_BATCH_BUFFER_END.
-	 * After batch completes, execution returns to ring at next cmd. */
+	 * GPU jumps to batch BO, returns to ring after MI_BATCH_BUFFER_END. */
 	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
 	rb[(pos + 0) & mask] = MI_BATCH_BUFFER_START_CMD;
 	rb[(pos + 1) & mask] = batch_gtt;
 	pos += 2;
-#else
-	/* Inline batch commands into ring (fallback) */
-	for (uint32_t i = 0; i < emit_dwords; i++)
-		rb[(pos + i) & mask] = batch_src[i];
-	pos += emit_dwords;
-#endif
 
-	/* Completion marker via MI_STORE_DATA_IMM */
+	/* --- Fix 2: PIPE_CONTROL(CS_STALL) after batch return.
+	 * Ensures 3D pipeline is fully drained before completion marker.
+	 * i915 Linux uses PIPE_CONTROL on ILK for post-batch sync.
+	 * ILK workaround: emit two PIPE_CONTROLs (first may be ignored). */
+	/* First PIPE_CONTROL: dummy stall (ILK workaround) */
+	rb[pos & mask] = PIPE_CONTROL_CMD; pos++;
+	rb[pos & mask] = PIPE_CONTROL_CS_STALL; pos++;
+	rb[pos & mask] = 0; pos++;
+	rb[pos & mask] = 0; pos++;
+	/* Second PIPE_CONTROL: real stall */
+	rb[pos & mask] = PIPE_CONTROL_CMD; pos++;
+	rb[pos & mask] = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_WC_FLUSH; pos++;
+	rb[pos & mask] = 0; pos++;
+	rb[pos & mask] = 0; pos++;
+
+	/* Completion marker via MI_STORE_DATA_IMM (GGTT) — proven working */
 	if (sShim.marker_cpu) {
 		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
 		rb[pos & mask] = 0; pos++;
@@ -545,6 +555,13 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 
 	/* QWord align */
 	if (pos & 1) { rb[pos & mask] = MI_NOOP_CMD; pos++; }
+
+	/* --- Fix 3: Zero out ring memory from our end to new TAIL position.
+	 * Prevents GPU from executing stale commands (MI_FLUSH etc) if ring
+	 * position tracking drifts or app_server writes stale data. */
+	uint32_t zero_start = pos;
+	for (uint32_t z = 0; z < 16; z++)
+		rb[(zero_start + z) & mask] = MI_NOOP_CMD;
 
 	sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
 
@@ -571,21 +588,11 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	static uint32_t sExecCount = 0;
 	sExecCount++;
 	if (sExecCount <= 20) {
-#if USE_BATCH_BUFFER_START
-		printf("[drm] EXECBUF2 #%u: BBS gtt=0x%x, %u relocs%s, "
-			"HEAD=0x%x TAIL→0x%x\n",
+		printf("[drm] EXECBUF2 #%u: %u DW, HEAD=0x%x before kick, "
+			"TAIL→0x%x\n",
 			sExecCount,
-			batch_bo.gtt_offset + args->batch_start_offset,
-			total_relocs,
-			no_reloc ? " (NO_RELOC)" : "",
+			(uint32_t)(args->batch_len / 4),
 			head_pre, sShim.ring_pos);
-#else
-		printf("[drm] EXECBUF2 #%u: inline %u DW, %u relocs%s, "
-			"HEAD=0x%x TAIL→0x%x\n",
-			sExecCount, emit_dwords, total_relocs,
-			no_reloc ? " (NO_RELOC)" : "",
-			head_pre, sShim.ring_pos);
-#endif
 	}
 
 	/* --- Step 4: Wait for completion --- */
@@ -622,10 +629,10 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 				{
 					uint32_t* bcmd = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
 						+ args->batch_start_offset);
-					printf("[drm]   Batch BO (%u DW):\n", batch_dwords);
-					for (uint32_t i = 0; i < batch_dwords && i < 128; i += 8) {
+					printf("[drm]   Batch BO (%u DW):\n", (args->batch_len / 4));
+					for (uint32_t i = 0; i < (args->batch_len / 4) && i < 128; i += 8) {
 						printf("[drm]   [%3u]", i);
-						for (uint32_t j = i; j < i+8 && j < batch_dwords; j++)
+						for (uint32_t j = i; j < i+8 && j < (args->batch_len / 4); j++)
 							printf(" %08x", bcmd[j]);
 						printf("\n");
 					}
@@ -769,7 +776,14 @@ haiku_drm_open(void)
 			r.position = sShim.ring_pos;
 			r.space_left = r.size - 64;
 		}
-		asm volatile("mfence" ::: "memory");
+		/* clflush WC ring memory before kicking TAIL (mfence alone
+		 * does NOT flush WC combining buffers — Expert 4 bug fix) */
+		{
+			uint32_t write_start = sShim.ring_pos > 20
+				? sShim.ring_pos - 20 : 0;
+			clflush_range((uint8_t*)sShim.ring_base + write_start,
+				sShim.ring_pos - write_start + 64);
+		}
 		ring_kick_tail(sShim.ring_pos);
 
 		snooze(10000);
