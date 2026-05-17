@@ -53,11 +53,14 @@ uint32 gpu_bo_read32(gpu_bo* bo, uint32 offset);
 // Copy a block of bytes into the BO at the given offset.
 void gpu_bo_write(gpu_bo* bo, uint32 offset, const void* data, uint32 size);
 
-// Memory barrier to ensure prior CPU writes are visible to the GPU before
-// the batch referencing this BO is submitted. On x86 Haiku with graphics
-// memory mapped write-combining by the kernel driver, a single mfence is
-// sufficient — same primitive as render.cpp uses for its 3D state writes.
+// Memory barrier (mfence) to order CPU writes. May NOT be sufficient for
+// WC-mapped GTT memory — use gpu_bo_clflush() for guaranteed GPU visibility.
 void gpu_bo_flush_cpu_writes(void);
+
+// Flush a BO's CPU cache lines via clflush + mfence. Required on Gen5 where
+// GTT aperture is mapped write-combining: mfence alone does not guarantee
+// WC combining buffers are drained to GGTT-visible memory.
+void gpu_bo_clflush(gpu_bo* bo);
 
 // Debug: number of currently live BOs allocated through this API.
 uint32 gpu_bo_live_count(void);

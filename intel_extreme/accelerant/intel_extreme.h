@@ -583,6 +583,8 @@ struct intel_exec_batch {
 	uint32	magic;
 	uint32	batch_gtt;		// GTT offset of batch buffer start
 	uint32	batch_len;		// batch length in bytes (unused, for future)
+	uint32	marker_gtt;		// GTT offset of marker DWORD (0 = no marker)
+	uint32	marker_value;	// value to write via MI_STORE_DATA_IMM
 };
 
 // brightness legacy

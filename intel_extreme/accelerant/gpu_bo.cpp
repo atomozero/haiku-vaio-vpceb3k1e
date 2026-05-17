@@ -174,10 +174,30 @@ gpu_bo_write(gpu_bo* bo, uint32 offset, const void* data, uint32 size)
 }
 
 
+static inline void
+_clflush_range(void* addr, size_t size)
+{
+	uintptr_t start = (uintptr_t)addr & ~63ULL;
+	uintptr_t end = ((uintptr_t)addr + size + 63) & ~63ULL;
+	for (uintptr_t p = start; p < end; p += 64)
+		asm volatile("clflush (%0)" :: "r"(p) : "memory");
+	asm volatile("mfence" ::: "memory");
+}
+
+
 void
 gpu_bo_flush_cpu_writes(void)
 {
 	asm volatile("mfence" ::: "memory");
+}
+
+
+void
+gpu_bo_clflush(gpu_bo* bo)
+{
+	if (bo == NULL || !bo->valid)
+		return;
+	_clflush_range((void*)bo->cpu_addr, bo->size);
 }
 
 

@@ -458,192 +458,46 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		clflush_range(bo.cpu_addr, bo.size);
 	}
 
-	/* --- Step 3: Submit batch --- */
-	/* With clflush, batch BO data should now be visible to GPU via GGTT.
-	 * USE_BATCH_BUFFER_START: use MI_BATCH_BUFFER_START (proper dispatch).
-	 * Without it: inline batch commands into ring (fallback). */
-	/* Prepare completion marker */
+	/* --- Step 3: Submit batch via kernel ioctl --- */
+	/* Kernel writes MI_BATCH_BUFFER_START + MI_STORE_DATA_IMM marker
+	 * directly to ring memory (no WC coherency issues) and kicks TAIL.
+	 * NO MI_FLUSH — causes IS stall on ILK after 3D state commands. */
 	uint32_t seq = ++sShim.marker_seq;
 	if (sShim.marker_cpu)
 		*sShim.marker_cpu = 0;
 
 	ring_buffer& ring = sShim.shared->primary_ring_buffer;
 
-	/* Inline batch + 2×PIPE_CONTROL(8) + MI_STORE_DATA_IMM(4) + pad(2) + zero(16) */
-	uint32_t batch_dw_count_est = args->batch_len / 4;
-	uint32_t needed = batch_dw_count_est + 32;
-
-	/* Acquire ring lock to prevent app_server from writing MI_FLUSH
-	 * over our commands. Use ring.position (shared with app_server)
-	 * as the write start — this prevents overlap. */
-	acquire_lock(&ring.lock);
-
-	/* Sync with shared ring.position (app_server may have advanced it) */
-	sShim.ring_pos = ring.position;
-
-	/* Check ring space — wrap if near end */
-	if (sShim.ring_pos + needed * 4 + 64 > sShim.ring_size) {
-		/* Wait for GPU to drain past current position */
-		bigtime_t deadline = system_time() + 500000;
-		while (system_time() < deadline) {
-			uint32_t head = ring_read32(ring.register_base + RING_BUFFER_HEAD)
-				& INTEL_RING_BUFFER_HEAD_MASK;
-			if (head >= sShim.ring_pos || head == 0)
-				break;
-			snooze(100);
-		}
-		/* Fill remainder with NOOPs */
-		uint32_t* rb_pad = (uint32_t*)sShim.ring_base;
-		uint32_t pad_start = sShim.ring_pos / 4;
-		uint32_t pad_end = sShim.ring_size / 4;
-		for (uint32_t i = pad_start; i < pad_end; i++)
-			rb_pad[i] = MI_NOOP_CMD;
-		clflush_range((uint8_t*)sShim.ring_base + sShim.ring_pos,
-			sShim.ring_size - sShim.ring_pos);
-		sShim.ring_pos = 0;
-	}
-
-	uint32_t* rb = (uint32_t*)sShim.ring_base;
-	uint32_t write_start = sShim.ring_pos;
-	uint32_t pos = sShim.ring_pos / 4;
-	uint32_t mask = (sShim.ring_size / 4) - 1;
-
-	/* Zero-fill ring from HEAD to our write position.
-	 * App_server writes MI_FLUSH via shared lock between our calls.
-	 * Those stale MI_FLUSHs hang the CS after 3D commands.
-	 * By zeroing everything between HEAD and our start, we ensure
-	 * only MI_NOOPs precede our batch. */
-	{
-		uint32_t head_now = ring_read32(ring.register_base + RING_BUFFER_HEAD)
-			& INTEL_RING_BUFFER_HEAD_MASK;
-		uint32_t zero_from = head_now / 4;
-		uint32_t zero_to = pos;
-		for (uint32_t z = zero_from; z != zero_to; z = (z + 1) & mask)
-			rb[z] = MI_NOOP_CMD;
-	}
-
-	/* --- Fix 1: Ensure MI_BATCH_BUFFER_END exists in batch BO.
-	 * Without BB_END, GPU reads past batch into garbage, corrupts pipeline
-	 * state, and any subsequent ring command (even MI_NOOP) may hang. */
+	/* Ensure MI_BATCH_BUFFER_END exists in batch BO */
 	uint32_t batch_dw_count = args->batch_len / 4;
 	uint32_t* batch_cmds = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
 		+ args->batch_start_offset);
-	/* Check if last DW or DW after batch_len is BB_END (0x0A000000) */
-	bool has_bb_end = false;
-	if (batch_dw_count > 0 && batch_cmds[batch_dw_count - 1] == 0x0A000000)
-		has_bb_end = true;
-	if (!has_bb_end && (args->batch_start_offset + args->batch_len + 8)
-			<= batch_bo.size) {
-		/* Append BB_END + pad after batch_len */
-		batch_cmds[batch_dw_count] = 0x0A000000;  /* MI_BATCH_BUFFER_END */
-		batch_cmds[batch_dw_count + 1] = 0;       /* MI_NOOP pad */
-		clflush_range(&batch_cmds[batch_dw_count], 8);
+	if (batch_dw_count > 0 && batch_cmds[batch_dw_count - 1] != 0x0A000000
+		&& (args->batch_start_offset + args->batch_len + 8) <= batch_bo.size) {
+		batch_cmds[batch_dw_count] = 0x0A000000;
+		batch_cmds[batch_dw_count + 1] = 0;
 	}
+	asm volatile("mfence" ::: "memory");
 
-	/* Inline batch into ring with on-the-fly patching.
-	 * In-place patches to WC-mapped GTT memory aren't visible on readback
-	 * (write-combining coherency issue), so we patch during the copy. */
-	uint32_t skip_until = 0;
-	for (uint32_t i = 0; i < batch_dw_count; i++) {
-		uint32_t cmd = batch_cmds[i];
-		if (cmd == 0x0A000000)  /* MI_BATCH_BUFFER_END — stop */
-			break;
-
-		/* Skip remaining DWORDs of a multi-DW command being NOP'd */
-		if (i < skip_until) {
-			rb[pos & mask] = MI_NOOP_CMD;
-			pos++;
-			continue;
-		}
-
-		/* Patch MI_FLUSH → MI_NOOP (hangs CS after 3D state on Gen5) */
-		if ((cmd & 0xFF800000) == MI_FLUSH_DRM) {
-			rb[pos & mask] = MI_NOOP_CMD;
-			pos++;
-			continue;
-		}
-
-		/* Patch Gen6+ PIPE_CONTROL (0x7B) → NOP entire command.
-		 * Gen5 uses 0x7A. Crocus emits 0x7B which is invalid on Gen5. */
-		if ((cmd & 0xFFFF0000) == 0x7B000000) {
-			uint32_t len = (cmd & 0xFF) + 2;
-			skip_until = i + len;
-			rb[pos & mask] = MI_NOOP_CMD;
-			pos++;
-			continue;
-		}
-
-		rb[pos & mask] = cmd;
-		pos++;
-	}
-
-	/* No PIPE_CONTROL, no MI_FLUSH — both stall the CS on Gen5.
-	 * MI_STORE_DATA_IMM is an MI command, doesn't need pipeline sync. */
-
-	/* Completion marker via MI_STORE_DATA_IMM (GGTT) — proven working */
-	if (sShim.marker_cpu) {
-		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
-		rb[pos & mask] = 0; pos++;
-		rb[pos & mask] = sShim.marker_gtt; pos++;
-		rb[pos & mask] = seq; pos++;
-	}
-
-	/* QWord align */
-	if (pos & 1) { rb[pos & mask] = MI_NOOP_CMD; pos++; }
-
-	/* --- Fix 3: Zero out ring memory from our end to new TAIL position.
-	 * Prevents GPU from executing stale commands (MI_FLUSH etc) if ring
-	 * position tracking drifts or app_server writes stale data. */
-	uint32_t zero_start = pos;
-	for (uint32_t z = 0; z < 16; z++)
-		rb[(zero_start + z) & mask] = MI_NOOP_CMD;
-
-	sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
-
-	/* Update shared ring.position so app_server writes AFTER our commands */
-	ring.position = sShim.ring_pos;
-	ring.space_left = ring.size - 64;
-
-	/* clflush the ring commands we just wrote (ring is also WC-mapped) */
-	if (sShim.ring_pos >= write_start) {
-		clflush_range((uint8_t*)sShim.ring_base + write_start,
-			sShim.ring_pos - write_start + 64);
-	} else {
-		clflush_range((uint8_t*)sShim.ring_base + write_start,
-			sShim.ring_size - write_start);
-		clflush_range((void*)sShim.ring_base, sShim.ring_pos + 64);
-	}
+	/* Submit via kernel ioctl — kernel writes to ring memory (no WC issues),
+	 * emits MI_BATCH_BUFFER_START + MI_STORE_DATA_IMM marker, kicks TAIL. */
+	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
+	intel_exec_batch execData;
+	execData.magic = INTEL_PRIVATE_DATA_MAGIC;
+	execData.batch_gtt = batch_gtt;
+	execData.batch_len = args->batch_len;
+	execData.marker_gtt = sShim.marker_cpu ? sShim.marker_gtt : 0;
+	execData.marker_value = seq;
 
 	uint32_t head_pre = ring_read32(ring.register_base + RING_BUFFER_HEAD)
 		& INTEL_RING_BUFFER_HEAD_MASK;
 
-	/* Scan ring from HEAD to new TAIL and replace any MI_FLUSH
-	 * (0x02000000) with MI_NOOP. App_server writes MI_FLUSH to the ring
-	 * via shared ring lock, but its MMIO TAIL write is silently ignored.
-	 * Our TAIL kick makes the GPU process everything including app_server's
-	 * stale MI_FLUSH, which hangs the CS after 3D pipeline commands.
-	 * Do this UNDER the lock and kick BEFORE releasing, so app_server
-	 * can't sneak in MI_FLUSH between scan and kick. */
-	{
-		uint32_t scan_start = head_pre / 4;
-		uint32_t scan_end = sShim.ring_pos / 4;
-		uint32_t rmask = (sShim.ring_size / 4) - 1;
-		uint32_t patched = 0;
-		for (uint32_t s = scan_start; s != scan_end; s = (s + 1) & rmask) {
-			if (rb[s] == 0x02000000) {  /* MI_FLUSH */
-				rb[s] = MI_NOOP_CMD;
-				patched++;
-			}
-		}
-		if (patched > 0) {
-			asm volatile("mfence" ::: "memory");
-			clflush_range((void*)sShim.ring_base, sShim.ring_size);
-		}
+	int exec_ret = ioctl(sShim.fd, INTEL_EXEC_BATCH, &execData, sizeof(execData));
+	if (exec_ret != 0) {
+		printf("[drm] EXEC_BATCH ioctl failed: %d\n", exec_ret);
+		errno = EIO;
+		return -1;
 	}
-
-	ring_kick_tail(sShim.ring_pos);
-
-	release_lock(&ring.lock);
 
 	/* Debug */
 	static uint32_t sExecCount = 0;
