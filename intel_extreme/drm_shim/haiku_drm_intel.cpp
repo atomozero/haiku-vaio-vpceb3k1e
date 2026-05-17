@@ -458,69 +458,85 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 		clflush_range(bo.cpu_addr, bo.size);
 	}
 
-	/* --- Step 3: Submit batch via kernel ioctl --- */
-	/* Kernel writes MI_BATCH_BUFFER_START + MI_STORE_DATA_IMM marker
-	 * directly to ring memory (no WC coherency issues) and kicks TAIL.
-	 * NO MI_FLUSH — causes IS stall on ILK after 3D state commands. */
+	/* --- Step 3: Inline batch into ring + MI_STORE_DATA_IMM marker --- */
 	uint32_t seq = ++sShim.marker_seq;
 	if (sShim.marker_cpu)
 		*sShim.marker_cpu = 0;
 
-	ring_buffer& ring = sShim.shared->primary_ring_buffer;
-
-	/* Ensure MI_BATCH_BUFFER_END exists in batch BO */
 	uint32_t batch_dw_count = args->batch_len / 4;
 	uint32_t* batch_cmds = (uint32_t*)((uint8_t*)batch_bo.cpu_addr
 		+ args->batch_start_offset);
-	if (batch_dw_count > 0 && batch_cmds[batch_dw_count - 1] != 0x0A000000
-		&& (args->batch_start_offset + args->batch_len + 8) <= batch_bo.size) {
-		batch_cmds[batch_dw_count] = 0x0A000000;
-		batch_cmds[batch_dw_count + 1] = 0;
+
+	/* Strip trailing MI_BATCH_BUFFER_END + padding (not valid in ring) */
+	while (batch_dw_count > 0
+		&& (batch_cmds[batch_dw_count - 1] == (0x0A << 23)
+			|| batch_cmds[batch_dw_count - 1] == 0))
+		batch_dw_count--;
+
+	/* Use sShim.ring_pos (our own tracking, not shared ring.position) */
+	uint32_t rpos = sShim.ring_pos;
+	uint32_t total_bytes = (batch_dw_count + 6) * 4;  /* batch + marker(4) + pad(2) */
+
+	/* Wrap ring if needed */
+	if (rpos + total_bytes + 64 > sShim.ring_size)
+		rpos = 0;
+
+	/* Write batch commands + marker into ring memory */
+	uint32_t* rb = (uint32_t*)(sShim.ring_base + rpos);
+	uint32_t pos = 0;
+
+	for (uint32_t i = 0; i < batch_dw_count; i++)
+		rb[pos++] = batch_cmds[i];
+
+	/* Completion marker via MI_STORE_DATA_IMM */
+	if (sShim.marker_cpu) {
+		rb[pos++] = MI_STORE_DATA_IMM_GGTT;
+		rb[pos++] = 0;
+		rb[pos++] = sShim.marker_gtt;
+		rb[pos++] = seq;
 	}
-	asm volatile("mfence" ::: "memory");
 
-	/* Submit via kernel ioctl — kernel writes to ring memory (no WC issues),
-	 * emits MI_BATCH_BUFFER_START + MI_STORE_DATA_IMM marker, kicks TAIL. */
-	uint32_t batch_gtt = batch_bo.gtt_offset + args->batch_start_offset;
-	intel_exec_batch execData;
-	execData.magic = INTEL_PRIVATE_DATA_MAGIC;
-	execData.batch_gtt = batch_gtt;
-	execData.batch_len = args->batch_len;
-	execData.marker_gtt = sShim.marker_cpu ? sShim.marker_gtt : 0;
-	execData.marker_value = seq;
+	/* QWord align */
+	if (pos & 1)
+		rb[pos++] = MI_NOOP_CMD;
 
-	uint32_t head_pre = ring_read32(ring.register_base + RING_BUFFER_HEAD)
-		& INTEL_RING_BUFFER_HEAD_MASK;
+	uint32_t new_rpos = (rpos + pos * 4) & (sShim.ring_size - 1);
+	sShim.ring_pos = new_rpos;
 
-	int exec_ret = ioctl(sShim.fd, INTEL_EXEC_BATCH, &execData, sizeof(execData));
-	if (exec_ret != 0) {
-		printf("[drm] EXEC_BATCH ioctl failed: %d\n", exec_ret);
-		errno = EIO;
-		return -1;
+	/* Sync shared ring position + flush WC + kick */
+	{
+		ring_buffer& ring = sShim.shared->primary_ring_buffer;
+		ring.position = new_rpos;
+		ring.space_left = ring.size - 64;
 	}
+	clflush_range((uint8_t*)sShim.ring_base + rpos, pos * 4);
+	ring_kick_tail(new_rpos);
 
 	/* Debug */
 	static uint32_t sExecCount = 0;
 	sExecCount++;
+	uint32_t head_pre = ring_read32(
+		sShim.shared->primary_ring_buffer.register_base
+		+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
 	if (sExecCount <= 20) {
-		printf("[drm] EXECBUF2 #%u: %u DW, HEAD=0x%x before kick, "
-			"TAIL→0x%x\n",
-			sExecCount,
-			(uint32_t)(args->batch_len / 4),
-			head_pre, sShim.ring_pos);
+		printf("[drm] EXECBUF2 #%u: %u DW inlined @0x%x, "
+			"HEAD=0x%x TAIL→0x%x\n",
+			sExecCount, batch_dw_count, rpos,
+			head_pre, new_rpos);
 	}
 
 	/* --- Step 4: Wait for completion --- */
 	if (sShim.marker_cpu) {
-		bigtime_t deadline = system_time() + 500000; /* 500ms */
+		bigtime_t deadline = system_time() + 2000000; /* 2s */
 		while (*sShim.marker_cpu != seq) {
 			if (system_time() > deadline) {
+				ring_buffer& ring = sShim.shared->primary_ring_buffer;
 				uint32_t head = ring_read32(ring.register_base
 					+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
 				uint32_t tail = ring_read32(ring.register_base
 					+ RING_BUFFER_TAIL) & (ring.size - 1);
 				printf("[drm] EXECBUF2: TIMEOUT seq %u (got 0x%x) "
-					"HEAD=0x%x TAIL=0x%x ringpos=0x%x\n",
+					"HEAD=0x%x TAIL=0x%x rpos=0x%x\n",
 					seq, *sShim.marker_cpu, head, tail,
 					sShim.ring_pos);
 				/* Dump GPU debug registers */
@@ -562,14 +578,14 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 	}
 
 	{
-		uint32_t head_post = ring_read32(ring.register_base
-			+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
 		uint32_t marker_val = sShim.marker_cpu ? *sShim.marker_cpu : 0;
-		if (sExecCount <= 20)
-			printf("[drm] EXECBUF2 #%u: OK seq=%u marker=0x%x "
-				"HEAD 0x%x→0x%x ringpos=0x%x\n",
-				sExecCount, seq, marker_val,
-				head_pre, head_post, sShim.ring_pos);
+		if (sExecCount <= 20) {
+			uint32_t head_post = ring_read32(
+				sShim.shared->primary_ring_buffer.register_base
+				+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
+			printf("[drm] EXECBUF2 #%u: OK seq=%u HEAD→0x%x rpos=0x%x\n",
+				sExecCount, seq, head_post, sShim.ring_pos);
+		}
 	}
 	if (sExecCount <= 5) {
 		/* Check render target BO content (first object that isn't batch) */
