@@ -3,7 +3,7 @@
  * Distributed under the terms of the MIT License.
  *
  * MPEG-2 video decoder plugin for Haiku media_kit.
- * Decodes I and P frames with motion compensation + CPU IDCT.
+ * Decodes I, P and B frames with motion compensation + CPU IDCT.
  * Outputs B_YCbCr420 planar (Y + Cb + Cr planes).
  */
 
@@ -109,6 +109,25 @@ mc_block(const uint8* ref, int ref_w, int ref_h,
 	}
 }
 
+// Bidirectional motion compensate: blend forward + backward refs.
+// mv_fwd_h/v and mv_bwd_h/v are in half-pel units.
+static void
+mc_block_bidir(const uint8* fwd_ref, const uint8* bwd_ref,
+	int ref_w, int ref_h,
+	int block_x, int block_y,
+	int mv_fwd_h, int mv_fwd_v,
+	int mv_bwd_h, int mv_bwd_v,
+	uint8 dst[64], int bw, int bh)
+{
+	uint8 fwd[64], bwd[64];
+	mc_block(fwd_ref, ref_w, ref_h, block_x, block_y,
+		mv_fwd_h, mv_fwd_v, fwd, bw, bh);
+	mc_block(bwd_ref, ref_w, ref_h, block_x, block_y,
+		mv_bwd_h, mv_bwd_v, bwd, bw, bh);
+	for (int i = 0; i < bw * bh; i++)
+		dst[i] = (uint8)(((int32)fwd[i] + (int32)bwd[i] + 1) >> 1);
+}
+
 // Write 8x8 block of pixels to a plane at (bx, by).
 static void
 write_block(uint8* plane, uint32 stride, uint32 pw, uint32 ph,
@@ -177,11 +196,17 @@ private:
 							bool isInter, const uint8* mcRef);
 	void				_FlushBatch();
 
-	// Reference frame for P-frame motion compensation
-	uint8*				fRefY;
-	uint8*				fRefCb;
-	uint8*				fRefCr;
-	bool				fHasReference;
+	// Forward reference frame (most recent I/P)
+	uint8*				fFwdRefY;
+	uint8*				fFwdRefCb;
+	uint8*				fFwdRefCr;
+	bool				fHasFwdRef;
+
+	// Backward reference frame (previous I/P before forward)
+	uint8*				fBwdRefY;
+	uint8*				fBwdRefCb;
+	uint8*				fBwdRefCr;
+	bool				fHasBwdRef;
 };
 
 
@@ -191,10 +216,14 @@ MPEG2Decoder::MPEG2Decoder()
 	fWidth(0),
 	fHeight(0),
 	fFrameNum(0),
-	fRefY(NULL),
-	fRefCb(NULL),
-	fRefCr(NULL),
-	fHasReference(false)
+	fFwdRefY(NULL),
+	fFwdRefCb(NULL),
+	fFwdRefCr(NULL),
+	fHasFwdRef(false),
+	fBwdRefY(NULL),
+	fBwdRefCb(NULL),
+	fBwdRefCr(NULL),
+	fHasBwdRef(false)
 {
 	memset(&fDec, 0, sizeof(fDec));
 	memset(&fOutputFormat, 0, sizeof(fOutputFormat));
@@ -220,11 +249,17 @@ MPEG2Decoder::~MPEG2Decoder()
 void
 MPEG2Decoder::_FreeReference()
 {
-	free(fRefY);
-	free(fRefCb);
-	free(fRefCr);
-	fRefY = fRefCb = fRefCr = NULL;
-	fHasReference = false;
+	free(fFwdRefY);
+	free(fFwdRefCb);
+	free(fFwdRefCr);
+	fFwdRefY = fFwdRefCb = fFwdRefCr = NULL;
+	fHasFwdRef = false;
+
+	free(fBwdRefY);
+	free(fBwdRefCb);
+	free(fBwdRefCr);
+	fBwdRefY = fBwdRefCb = fBwdRefCr = NULL;
+	fHasBwdRef = false;
 }
 
 
@@ -234,15 +269,29 @@ MPEG2Decoder::_SaveReference(const uint8* y, const uint8* cb, const uint8* cr)
 	uint32 ySize = fWidth * fHeight;
 	uint32 cSize = (fWidth / 2) * (fHeight / 2);
 
-	if (!fRefY) {
-		fRefY = (uint8*)malloc(ySize);
-		fRefCb = (uint8*)malloc(cSize);
-		fRefCr = (uint8*)malloc(cSize);
+	// Shift current forward ref → backward ref
+	if (fHasFwdRef) {
+		if (!fBwdRefY) {
+			fBwdRefY = (uint8*)malloc(ySize);
+			fBwdRefCb = (uint8*)malloc(cSize);
+			fBwdRefCr = (uint8*)malloc(cSize);
+		}
+		memcpy(fBwdRefY, fFwdRefY, ySize);
+		memcpy(fBwdRefCb, fFwdRefCb, cSize);
+		memcpy(fBwdRefCr, fFwdRefCr, cSize);
+		fHasBwdRef = true;
 	}
-	memcpy(fRefY, y, ySize);
-	memcpy(fRefCb, cb, cSize);
-	memcpy(fRefCr, cr, cSize);
-	fHasReference = true;
+
+	// Save new frame as forward ref
+	if (!fFwdRefY) {
+		fFwdRefY = (uint8*)malloc(ySize);
+		fFwdRefCb = (uint8*)malloc(cSize);
+		fFwdRefCr = (uint8*)malloc(cSize);
+	}
+	memcpy(fFwdRefY, y, ySize);
+	memcpy(fFwdRefCb, cb, cSize);
+	memcpy(fFwdRefCr, cr, cSize);
+	fHasFwdRef = true;
 }
 
 
@@ -384,7 +433,9 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 
 	uint32 w = fWidth, h = fHeight;
 	uint32 cw = w / 2, ch = h / 2;
-	bool is_p = (fDec.pic.picture_coding_type == 2);
+	int picType = fDec.pic.picture_coding_type;
+	bool is_p = (picType == 2);
+	bool is_b = (picType == 3);
 	uint32 mbDecoded = 0;
 
 	while (mpeg2_bits_available(&bs, 32)) {
@@ -407,6 +458,8 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 		// Reset MV prediction at slice boundary
 		fDec.mv_pred_h = 0;
 		fDec.mv_pred_v = 0;
+		fDec.mv_backward_pred_h = 0;
+		fDec.mv_backward_pred_v = 0;
 
 		uint32 mby = sl.slice_vertical_position - 1;
 		uint32 mbx = 0;
@@ -418,7 +471,9 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 			mb.quantiser_scale_code = sl.quantiser_scale_code;
 			status_t st;
 
-			if (is_p)
+			if (is_b)
+				st = mpeg2_decode_b_macroblock(&bs, &fDec, &mb);
+			else if (is_p)
 				st = mpeg2_decode_p_macroblock(&bs, &fDec, &mb);
 			else
 				st = mpeg2_decode_intra_macroblock(&bs, &fDec, &mb);
@@ -431,7 +486,7 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 			// Handle skipped MBs (address_increment > 1)
 			if (mb.address_increment > 1) {
 				uint32 skip_count = mb.address_increment - 1;
-				if (is_p && fHasReference) {
+				if (is_p && fHasFwdRef) {
 					for (uint32 s = 0; s < skip_count
 						&& mbx < fDec.mb_width; s++) {
 						// Copy from reference (zero MV, no residual)
@@ -442,17 +497,47 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 								for (int c = 0; c < 8; c++)
 									if (bx + c < w && by + r < h)
 										yPlane[(by + r) * w + bx + c] =
-											fRefY[(by + r) * w + bx + c];
+											fFwdRefY[(by + r) * w + bx + c];
 						}
 						uint32 cx = mbx * 8, cy = mby * 8;
 						for (int r = 0; r < 8; r++)
 							for (int c = 0; c < 8; c++)
 								if (cx + c < cw && cy + r < ch) {
 									cbPlane[(cy + r) * cw + cx + c] =
-										fRefCb[(cy + r) * cw + cx + c];
+										fFwdRefCb[(cy + r) * cw + cx + c];
 									crPlane[(cy + r) * cw + cx + c] =
-										fRefCr[(cy + r) * cw + cx + c];
+										fFwdRefCr[(cy + r) * cw + cx + c];
 								}
+						mbx++;
+						mbDecoded++;
+					}
+				} else if (is_b && fHasFwdRef && fHasBwdRef) {
+					// B-frame skipped MBs: MC with previous MV (zero for
+					// first MB in slice), using forward prediction only
+					for (uint32 s = 0; s < skip_count
+						&& mbx < fDec.mb_width; s++) {
+						for (int b = 0; b < 4; b++) {
+							uint32 bx = mbx * 16 + ydx[b];
+							uint32 by = mby * 16 + ydy[b];
+							uint8 mc_ref_block[64];
+							mc_block_bidir(fFwdRefY, fBwdRefY, w, h,
+								bx, by, 0, 0, 0, 0,
+								mc_ref_block, 8, 8);
+							write_block(yPlane, w, w, h, bx, by,
+								mc_ref_block, 8, 8);
+						}
+						uint32 cx = mbx * 8, cy = mby * 8;
+						for (int cc = 0; cc < 2; cc++) {
+							uint8* plane = (cc == 0) ? cbPlane : crPlane;
+							const uint8* fwdP = (cc == 0) ? fFwdRefCb : fFwdRefCr;
+							const uint8* bwdP = (cc == 0) ? fBwdRefCb : fBwdRefCr;
+							uint8 mc_ref_block[64];
+							mc_block_bidir(fwdP, bwdP, cw, ch,
+								cx, cy, 0, 0, 0, 0,
+								mc_ref_block, 8, 8);
+							write_block(plane, cw, cw, ch, cx, cy,
+								mc_ref_block, 8, 8);
+						}
 						mbx++;
 						mbDecoded++;
 					}
@@ -467,9 +552,11 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 
 			if (mb.mb_type & MB_INTRA) {
 				// Intra MB: no MC, just IDCT → enqueue for GPU batch
-				if (is_p) {
+				if (is_p || is_b) {
 					fDec.mv_pred_h = 0;
 					fDec.mv_pred_v = 0;
+					fDec.mv_backward_pred_h = 0;
+					fDec.mv_backward_pred_v = 0;
 				}
 				for (int b = 0; b < 4; b++)
 					_EnqueueBlock(mb.blocks[b], yPlane, w,
@@ -479,7 +566,7 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 					_EnqueueBlock(mb.blocks[4 + cc],
 						cc == 0 ? cbPlane : crPlane, cw,
 						mbx * 8, mby * 8, cw, ch, false, NULL);
-			} else if (is_p && fHasReference) {
+			} else if (is_p && fHasFwdRef) {
 				// Inter MB with forward motion compensation
 				int16 mv_h = mb.motion_h;
 				int16 mv_v = mb.motion_v;
@@ -489,7 +576,7 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 					uint32 bx = mbx * 16 + ydx[b];
 					uint32 by = mby * 16 + ydy[b];
 					uint8 mc_ref_block[64];
-					mc_block(fRefY, w, h, bx, by, mv_h, mv_v,
+					mc_block(fFwdRefY, w, h, bx, by, mv_h, mv_v,
 						mc_ref_block, 8, 8);
 
 					if (mb.coded_block_pattern & (1 << (5 - b))) {
@@ -506,11 +593,84 @@ MPEG2Decoder::_DecodePicture(const uint8* data, size_t size,
 				int16 cmv_v = mv_v / 2;
 				for (int cc = 0; cc < 2; cc++) {
 					uint8* plane = (cc == 0) ? cbPlane : crPlane;
-					const uint8* refPlane = (cc == 0) ? fRefCb : fRefCr;
+					const uint8* refPlane = (cc == 0) ? fFwdRefCb : fFwdRefCr;
 					uint32 cx = mbx * 8, cy = mby * 8;
 					uint8 mc_ref_block[64];
 					mc_block(refPlane, cw, ch, cx, cy, cmv_h, cmv_v,
 						mc_ref_block, 8, 8);
+
+					if (mb.coded_block_pattern & (1 << (1 - cc))) {
+						_EnqueueBlock(mb.blocks[4 + cc], plane, cw,
+							cx, cy, cw, ch, true, mc_ref_block);
+					} else {
+						write_block(plane, cw, cw, ch, cx, cy,
+							mc_ref_block, 8, 8);
+					}
+				}
+			} else if (is_b) {
+				// B-frame inter MB: forward, backward, or bidirectional
+				bool hasFwd = (mb.mb_type & MB_MOTION_FORWARD) && fHasFwdRef;
+				bool hasBwd = (mb.mb_type & MB_MOTION_BACKWARD) && fHasBwdRef;
+
+				int16 fwd_h = mb.motion_h;
+				int16 fwd_v = mb.motion_v;
+				int16 bwd_h = mb.motion_backward_h;
+				int16 bwd_v = mb.motion_backward_v;
+
+				// Y blocks
+				for (int b = 0; b < 4; b++) {
+					uint32 bx = mbx * 16 + ydx[b];
+					uint32 by = mby * 16 + ydy[b];
+					uint8 mc_ref_block[64];
+
+					if (hasFwd && hasBwd) {
+						mc_block_bidir(fFwdRefY, fBwdRefY, w, h,
+							bx, by, fwd_h, fwd_v, bwd_h, bwd_v,
+							mc_ref_block, 8, 8);
+					} else if (hasBwd) {
+						mc_block(fBwdRefY, w, h, bx, by,
+							bwd_h, bwd_v, mc_ref_block, 8, 8);
+					} else if (hasFwd) {
+						mc_block(fFwdRefY, w, h, bx, by,
+							fwd_h, fwd_v, mc_ref_block, 8, 8);
+					} else {
+						memset(mc_ref_block, 128, 64);
+					}
+
+					if (mb.coded_block_pattern & (1 << (5 - b))) {
+						_EnqueueBlock(mb.blocks[b], yPlane, w,
+							bx, by, w, h, true, mc_ref_block);
+					} else {
+						write_block(yPlane, w, w, h, bx, by,
+							mc_ref_block, 8, 8);
+					}
+				}
+
+				// Chroma with scaled MVs
+				int16 cfwd_h = fwd_h / 2;
+				int16 cfwd_v = fwd_v / 2;
+				int16 cbwd_h = bwd_h / 2;
+				int16 cbwd_v = bwd_v / 2;
+				for (int cc = 0; cc < 2; cc++) {
+					uint8* plane = (cc == 0) ? cbPlane : crPlane;
+					const uint8* fwdP = (cc == 0) ? fFwdRefCb : fFwdRefCr;
+					const uint8* bwdP = (cc == 0) ? fBwdRefCb : fBwdRefCr;
+					uint32 cx = mbx * 8, cy = mby * 8;
+					uint8 mc_ref_block[64];
+
+					if (hasFwd && hasBwd) {
+						mc_block_bidir(fwdP, bwdP, cw, ch,
+							cx, cy, cfwd_h, cfwd_v, cbwd_h, cbwd_v,
+							mc_ref_block, 8, 8);
+					} else if (hasBwd) {
+						mc_block(bwdP, cw, ch, cx, cy,
+							cbwd_h, cbwd_v, mc_ref_block, 8, 8);
+					} else if (hasFwd) {
+						mc_block(fwdP, cw, ch, cx, cy,
+							cfwd_h, cfwd_v, mc_ref_block, 8, 8);
+					} else {
+						memset(mc_ref_block, 128, 64);
+					}
 
 					if (mb.coded_block_pattern & (1 << (1 - cc))) {
 						_EnqueueBlock(mb.blocks[4 + cc], plane, cw,
@@ -625,7 +785,7 @@ MPEG2Decoder::Decode(void* buffer, int64* frameCount,
 	uint8* crPlane = cbPlane + cSize;
 
 	// P-frame without reference: skip (output black)
-	if (picType == 2 && !fHasReference) {
+	if (picType == 2 && !fHasFwdRef) {
 		LOG("P-frame without reference, outputting black\n");
 		memset(yPlane, 16, ySize);
 		memset(cbPlane, 128, cSize);
@@ -638,8 +798,9 @@ MPEG2Decoder::Decode(void* buffer, int64* frameCount,
 		return B_OK;
 	}
 
-	// B-frame: not yet supported, output black
-	if (picType == 3) {
+	// B-frame without both references: output black
+	if (picType == 3 && (!fHasFwdRef || !fHasBwdRef)) {
+		LOG("B-frame without both references, outputting black\n");
 		memset(yPlane, 16, ySize);
 		memset(cbPlane, 128, cSize);
 		memset(crPlane, 128, cSize);
@@ -652,21 +813,21 @@ MPEG2Decoder::Decode(void* buffer, int64* frameCount,
 	}
 
 	// Initialize planes
-	if (picType == 2 && fHasReference) {
+	if (picType == 2 && fHasFwdRef) {
 		// P-frame: start from reference (skipped MBs copy from ref)
-		memcpy(yPlane, fRefY, ySize);
-		memcpy(cbPlane, fRefCb, cSize);
-		memcpy(crPlane, fRefCr, cSize);
+		memcpy(yPlane, fFwdRefY, ySize);
+		memcpy(cbPlane, fFwdRefCb, cSize);
+		memcpy(crPlane, fFwdRefCr, cSize);
 	} else {
 		memset(yPlane, 128, ySize);
 		memset(cbPlane, 128, cSize);
 		memset(crPlane, 128, cSize);
 	}
 
-	// Decode the picture (I or P)
+	// Decode the picture (I, P, or B)
 	st = _DecodePicture(data, chunkSize, yPlane, cbPlane, crPlane);
 
-	// Save as reference for future P-frames (I and P frames are references)
+	// Save as reference for future frames (I and P only, NOT B)
 	if (picType == 1 || picType == 2)
 		_SaveReference(yPlane, cbPlane, crPlane);
 

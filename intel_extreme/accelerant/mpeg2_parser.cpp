@@ -1824,3 +1824,172 @@ mpeg2_decode_p_macroblock(mpeg2_bits* bs,
 	mb->valid = true;
 	return B_OK;
 }
+
+
+// ---------------------------------------------------------------------------
+// B-picture macroblock type decoder (ISO 13818-2 Table B-4)
+// ---------------------------------------------------------------------------
+
+static int
+decode_macroblock_type_b(mpeg2_bits* bs, uint8* mb_type)
+{
+	uint32 bits = mpeg2_bits_peek(bs, 6);
+
+	// 2-bit codes (most frequent: bidirectional)
+	if ((bits >> 4) == 0x2) {	// 10 → bidir, no CBP
+		mpeg2_bits_skip(bs, 2);
+		*mb_type = MB_MOTION_FORWARD | MB_MOTION_BACKWARD;
+		return 0;
+	}
+	if ((bits >> 4) == 0x3) {	// 11 → bidir + CBP
+		mpeg2_bits_skip(bs, 2);
+		*mb_type = MB_MOTION_FORWARD | MB_MOTION_BACKWARD | MB_PATTERN;
+		return 0;
+	}
+	// 3-bit codes
+	if ((bits >> 3) == 0x2) {	// 010 → backward, no CBP
+		mpeg2_bits_skip(bs, 3);
+		*mb_type = MB_MOTION_BACKWARD;
+		return 0;
+	}
+	if ((bits >> 3) == 0x3) {	// 011 → backward + CBP
+		mpeg2_bits_skip(bs, 3);
+		*mb_type = MB_MOTION_BACKWARD | MB_PATTERN;
+		return 0;
+	}
+	// 4-bit codes
+	if ((bits >> 2) == 0x2) {	// 0010 → forward, no CBP
+		mpeg2_bits_skip(bs, 4);
+		*mb_type = MB_MOTION_FORWARD;
+		return 0;
+	}
+	if ((bits >> 2) == 0x3) {	// 0011 → forward + CBP
+		mpeg2_bits_skip(bs, 4);
+		*mb_type = MB_MOTION_FORWARD | MB_PATTERN;
+		return 0;
+	}
+	// 5-bit codes
+	if ((bits >> 1) == 0x3) {	// 00011 → intra
+		mpeg2_bits_skip(bs, 5);
+		*mb_type = MB_INTRA;
+		return 0;
+	}
+	if ((bits >> 1) == 0x2) {	// 00010 → quant + bidir + CBP
+		mpeg2_bits_skip(bs, 5);
+		*mb_type = MB_QUANT | MB_MOTION_FORWARD | MB_MOTION_BACKWARD
+			| MB_PATTERN;
+		return 0;
+	}
+	// 6-bit codes
+	if (bits == 0x3) {			// 000011 → quant + backward + CBP
+		mpeg2_bits_skip(bs, 6);
+		*mb_type = MB_QUANT | MB_MOTION_BACKWARD | MB_PATTERN;
+		return 0;
+	}
+	if (bits == 0x2) {			// 000010 → quant + forward + CBP
+		mpeg2_bits_skip(bs, 6);
+		*mb_type = MB_QUANT | MB_MOTION_FORWARD | MB_PATTERN;
+		return 0;
+	}
+	if (bits == 0x1) {			// 000001 → quant + intra
+		mpeg2_bits_skip(bs, 6);
+		*mb_type = MB_QUANT | MB_INTRA;
+		return 0;
+	}
+
+	return -1;
+}
+
+
+// ---------------------------------------------------------------------------
+// Decode one macroblock from a B-picture.
+// ---------------------------------------------------------------------------
+
+status_t
+mpeg2_decode_b_macroblock(mpeg2_bits* bs,
+	mpeg2_decoder* dec, mpeg2_macroblock* mb)
+{
+	mb->valid = false;
+	memset(mb->blocks, 0, sizeof(mb->blocks));
+	mb->motion_h = 0;
+	mb->motion_v = 0;
+	mb->motion_backward_h = 0;
+	mb->motion_backward_v = 0;
+	mb->coded_block_pattern = 0;
+
+	// 1. Macroblock address increment
+	int addr_inc = decode_macroblock_address_increment(bs);
+	if (addr_inc < 0)
+		return B_BAD_DATA;
+	mb->address_increment = (uint8)addr_inc;
+
+	// 2. Macroblock type (Table B-4)
+	if (decode_macroblock_type_b(bs, &mb->mb_type) < 0)
+		return B_BAD_DATA;
+
+	// 3. Quantiser scale change
+	if (mb->mb_type & MB_QUANT) {
+		mb->quantiser_scale_code = mpeg2_bits_read(bs, 5);
+		dec->quantiser_scale = mpeg2_compute_quantiser_scale(
+			mb->quantiser_scale_code, dec->pic_ext.q_scale_type);
+	}
+
+	// 4. Motion vectors
+	if (mb->mb_type & MB_MOTION_FORWARD) {
+		uint8 fcode_h = dec->pic_ext.f_code[0][0];
+		uint8 fcode_v = dec->pic_ext.f_code[0][1];
+		if (fcode_h == 0) fcode_h = 1;
+		if (fcode_v == 0) fcode_v = 1;
+		decode_motion_vector(bs, &dec->mv_pred_h, fcode_h);
+		decode_motion_vector(bs, &dec->mv_pred_v, fcode_v);
+		mb->motion_h = dec->mv_pred_h;
+		mb->motion_v = dec->mv_pred_v;
+	}
+	if (mb->mb_type & MB_MOTION_BACKWARD) {
+		uint8 fcode_h = dec->pic_ext.f_code[1][0];
+		uint8 fcode_v = dec->pic_ext.f_code[1][1];
+		if (fcode_h == 0) fcode_h = 1;
+		if (fcode_v == 0) fcode_v = 1;
+		decode_motion_vector(bs, &dec->mv_backward_pred_h, fcode_h);
+		decode_motion_vector(bs, &dec->mv_backward_pred_v, fcode_v);
+		mb->motion_backward_h = dec->mv_backward_pred_h;
+		mb->motion_backward_v = dec->mv_backward_pred_v;
+	}
+
+	// 5. Coded block pattern
+	if (mb->mb_type & MB_PATTERN) {
+		int cbp = decode_coded_block_pattern(bs);
+		if (cbp < 0)
+			cbp = 0;
+		mb->coded_block_pattern = (uint8)cbp;
+	} else if (mb->mb_type & MB_INTRA) {
+		mb->coded_block_pattern = 0x3F;
+	}
+
+	// 6. Decode blocks
+	if (mb->mb_type & MB_INTRA) {
+		for (int b = 0; b < 6; b++) {
+			int cc = (b < 4) ? 0 : (b - 3);
+			status_t st = decode_intra_block(bs, dec, cc, mb->blocks[b]);
+			if (st != B_OK) return st;
+		}
+		// Intra MB resets all MV predictors
+		dec->mv_pred_h = 0;
+		dec->mv_pred_v = 0;
+		dec->mv_backward_pred_h = 0;
+		dec->mv_backward_pred_v = 0;
+	} else {
+		reset_dc_prediction(dec->pic_ext.intra_dc_precision);
+
+		for (int b = 0; b < 6; b++) {
+			if (mb->coded_block_pattern & (1 << (5 - b))) {
+				status_t st = decode_non_intra_block(bs, dec,
+					mb->blocks[b]);
+				if (st != B_OK) return st;
+			}
+		}
+	}
+
+	mb->valid = true;
+	return B_OK;
+}

@@ -124,7 +124,9 @@ compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md
 - [x] Viewer standalone (mpeg2_viewer) con I+P playback visuale
 - [x] Test multi-frame: 10 frame (2 I + 8 P), 320x240, 100% MB coverage
 - [ ] Test con MediaPlayer su file .m2v
-- [ ] B-frame decode (output nero per ora)
+- [-] B-frame decode — implementato (Table B-4, backward MV, bidir MC)
+      Decode funzionante: 293/300 MB su primo B-frame test.
+      Coverage limitata da errori P-frame reference a monte.
 
 ### 3.9 GPU Motion Compensation kernel — COMPLETATO
 - [x] mc_fullpel_only.g4b.gen5: kernel MC full-pel (13 istruzioni)
@@ -212,7 +214,9 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
 - [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
 - [ ] IDCT IEEE 1180 (sostituire cosine table)
-- [ ] B-frame support
+- [-] B-frame support — parser + MC implementati, decode funzionante
+      Table B-4 (11 VLC), backward MV, bidirectional MC blend.
+      Coverage 270-293/300 MB sui primi B-frame (errori da P-frame ref)
 
 ---
 

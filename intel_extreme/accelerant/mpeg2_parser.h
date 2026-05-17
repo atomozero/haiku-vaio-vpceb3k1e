@@ -127,6 +127,8 @@ struct mpeg2_macroblock {
 	uint8	mb_type;			// MB_* flags
 	int16	motion_h;			// forward horizontal motion vector (half-pel)
 	int16	motion_v;			// forward vertical motion vector (half-pel)
+	int16	motion_backward_h;	// backward horizontal motion vector (B-frames)
+	int16	motion_backward_v;	// backward vertical motion vector (B-frames)
 	uint8	coded_block_pattern;	// 6 bits for 4:2:0 (Y0,Y1,Y2,Y3,Cb,Cr)
 	bool	valid;
 };
@@ -149,8 +151,10 @@ struct mpeg2_decoder {
 	uint16	intra_dc_mult;
 
 	// Motion vector prediction state (P/B frames)
-	int16	mv_pred_h;
+	int16	mv_pred_h;			// forward MV predictor
 	int16	mv_pred_v;
+	int16	mv_backward_pred_h;	// backward MV predictor (B-frames)
+	int16	mv_backward_pred_v;
 
 	bool	initialized;
 };
@@ -192,6 +196,10 @@ status_t mpeg2_decode_intra_macroblock(mpeg2_bits* bs,
 
 // Decode one macroblock from a P-picture (inter or intra).
 status_t mpeg2_decode_p_macroblock(mpeg2_bits* bs,
+	mpeg2_decoder* dec, mpeg2_macroblock* mb);
+
+// Decode one macroblock from a B-picture (forward/backward/bidir/intra).
+status_t mpeg2_decode_b_macroblock(mpeg2_bits* bs,
 	mpeg2_decoder* dec, mpeg2_macroblock* mb);
 
 // Initialize decoder context from parsed headers.
