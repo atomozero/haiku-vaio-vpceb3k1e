@@ -70,12 +70,15 @@ static void cleanup_gpu(void) {
 
 // ---- Ring helpers via ioctl ----
 
-static status_t
-ring_reset(void)
+// Sync ring position with hardware TAIL. Never reset — kills CS.
+static void
+ring_sync(void)
 {
-	intel_get_private_data data;
-	data.magic = INTEL_PRIVATE_DATA_MAGIC;
-	return ioctl(sDeviceFd, INTEL_RING_RESET, &data, sizeof(data));
+	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
+	uint32 hwTail = read32(ring.register_base + RING_BUFFER_TAIL)
+		& (ring.size - 1);
+	ring.position = hwTail;
+	ring.space_left = ring.size - 64;
 }
 
 static status_t
@@ -224,12 +227,8 @@ main(int, char**)
 	printf("render_bo: GTT=0x%x, %u bytes\n", render_bo.gtt_offset, IMG_BYTES);
 
 	// Reset ring via ioctl
-	if (ring_reset() != 0) {
-		printf("RING_RESET ioctl failed\n");
-		gpu_bo_free(&render_bo);
-		cleanup_gpu(); return 1;
-	}
-	printf("Ring reset OK\n");
+	ring_sync();
+	printf("Ring synced: pos=%u\n", gInfo->shared_info->primary_ring_buffer.position);
 
 	uint32 dst_x = (scr_w - IMG_W) / 2;
 	uint32 dst_y = (scr_h - IMG_H) / 2;
@@ -257,7 +256,7 @@ main(int, char**)
 
 	// Main render loop with BLT display
 	uint32 ring_pos = 0;
-	ring_reset();
+	ring_sync();
 
 	uint32 frame = 0;
 	uint32 fps_cnt = 0;
@@ -369,7 +368,7 @@ main(int, char**)
 		// Reset ring when it gets near the end (leave 4KB margin)
 		if (ring_pos > gInfo->shared_info->primary_ring_buffer.size - 4096) {
 			ring_wait_idle(100000);
-			ring_reset();
+			ring_sync();
 			ring_pos = 0;
 		}
 

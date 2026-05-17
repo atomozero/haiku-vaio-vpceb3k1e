@@ -186,8 +186,12 @@ LRI (opcode 0x22) in the ring hangs the CS after 2 DWORDs on Ironlake. Masked re
 All MMIO register writes via `clone_area` are silently ignored (kernel maps with `B_KERNEL_WRITE_AREA` only, no `B_WRITE_AREA`). Verified with `/dev/misc/poke` BAR0 mapping too. Only the kernel driver can write MMIO registers.
 
 **Kernel ioctls for ring access** (added to intel_extreme kernel driver):
-- `INTEL_RING_RESET` — DO NOT USE (kills CS, see above)
+- `INTEL_RING_RESET` — DO NOT USE (kills CS, see below)
 - `INTEL_RING_WRITE_TAIL` — writes TAIL register, kicks GPU. This is the ONLY way to submit ring commands from userspace.
+
+### CRITICAL: never RING_RESET after boot
+
+Calling `INTEL_RING_RESET` ioctl (disable→re-enable) kills the CS permanently. It works exactly ONCE after boot, then all subsequent resets fail (HEAD stuck at 0). The CS cannot be restarted after disable.
 
 **Correct pattern for ring submission from userspace:**
 ```cpp
