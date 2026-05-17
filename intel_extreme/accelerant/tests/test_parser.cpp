@@ -68,6 +68,9 @@ int main(int argc, char** argv)
 				mpeg2_bits_skip(&bs, 4);
 				mpeg2_parse_picture_coding_extension(&bs, &dec.pic_ext);
 				mpeg2_decoder_init(&dec);
+			} else if (ext_id == 1) {
+				// Sequence extension: skip ext_id(4) + 44 bits of data
+				mpeg2_bits_skip(&bs, 4 + 44);
 			}
 
 		} else if (code >= MPEG2_SLICE_START_MIN

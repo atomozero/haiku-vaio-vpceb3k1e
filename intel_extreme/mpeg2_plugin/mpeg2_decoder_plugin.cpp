@@ -725,11 +725,14 @@ MPEG2Decoder::Decode(void* buffer, int64* frameCount,
 			else if (code == MPEG2_PICTURE_START_CODE)
 				mpeg2_parse_picture_header(&bs, &fDec.pic);
 			else if (code == MPEG2_EXTENSION_START_CODE) {
-				if (mpeg2_bits_peek(&bs, 4) == 8) {
+				uint32 ext_id = mpeg2_bits_peek(&bs, 4);
+				if (ext_id == 8) {
 					mpeg2_bits_skip(&bs, 4);
 					mpeg2_parse_picture_coding_extension(&bs,
 						&fDec.pic_ext);
 					mpeg2_decoder_init(&fDec);
+				} else if (ext_id == 1) {
+					mpeg2_bits_skip(&bs, 4 + 44);
 				}
 			} else if (code >= MPEG2_SLICE_START_MIN
 				&& code <= MPEG2_SLICE_START_MAX) {
@@ -764,11 +767,14 @@ MPEG2Decoder::Decode(void* buffer, int64* frameCount,
 			if (code == MPEG2_PICTURE_START_CODE)
 				mpeg2_parse_picture_header(&bs, &fDec.pic);
 			else if (code == MPEG2_EXTENSION_START_CODE) {
-				if (mpeg2_bits_peek(&bs, 4) == 8) {
+				uint32 ext_id = mpeg2_bits_peek(&bs, 4);
+				if (ext_id == 8) {
 					mpeg2_bits_skip(&bs, 4);
 					mpeg2_parse_picture_coding_extension(&bs,
 						&fDec.pic_ext);
 					mpeg2_decoder_init(&fDec);
+				} else if (ext_id == 1) {
+					mpeg2_bits_skip(&bs, 4 + 44);
 				}
 			} else if (code >= MPEG2_SLICE_START_MIN
 				&& code <= MPEG2_SLICE_START_MAX) {
