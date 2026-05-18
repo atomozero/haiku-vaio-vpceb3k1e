@@ -108,8 +108,11 @@ struct gen_ops {
 // Gen5 (Ironlake) — implemented in gen5_ops.cpp
 void gen5_init_ops(gen_ops* ops);
 
+// Gen6 (Sandy Bridge) — implemented in gen6_ops.cpp
+// STATUS: UNTESTED — needs SNB hardware for validation
+void gen6_init_ops(gen_ops* ops);
+
 // Future generations:
-// void gen6_init_ops(gen_ops* ops);  // Sandy Bridge
 // void gen7_init_ops(gen_ops* ops);  // Ivy Bridge / Haswell
 // void gen8_init_ops(gen_ops* ops);  // Broadwell
 
