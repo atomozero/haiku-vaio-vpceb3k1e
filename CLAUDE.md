@@ -41,12 +41,16 @@ make && make install    # kernel driver, requires reboot
 
 #### Generic layer (generation-independent)
 - **gpu_ring.cpp / gpu_ring.h** — Ring buffer submission via kernel ioctl. Handles position tracking, TAIL kicks, idle waits. Works on any Intel gen where the kernel provides `INTEL_RING_WRITE_TAIL` ioctl.
-- **gen_ops.h** — Generation abstraction: `gen_ops` vtable with function pointers for gen-specific command emission (pipeline select, state base address, URB fence, BLT, markers). `batch_writer` DWORD accumulator.
+- **gen_ops.h** — Generation abstraction: `gen_ops` vtable with function pointers for gen-specific command emission (pipeline select, state base address, URB fence, BLT, markers). `batch_writer` DWORD accumulator. `init_gen_ops(ops, generation)` auto-selects the right implementation.
 - **gpu_bo.cpp / gpu_bo.h** — GPU buffer object allocator (GTT-mapped). Generation-independent.
 - **gpu_debug.cpp / gpu_debug.h** — GPU register dumps (INSTDONE, IPEHR, ACTHD, EIR). Marker helpers are generic, register decode is Gen5-specific.
 
+#### Per-generation ops (gen*_ops.cpp)
+- **gen5_ops.cpp** — Gen5 (Ironlake) **TESTED**: STATE_BASE_ADDRESS 8DW, MI_FLUSH, URB_FENCE, CS_URB_STATE, 48 threads.
+- **gen6_ops.cpp** — Gen6 (Sandy Bridge) **UNTESTED**: STATE_BASE_ADDRESS 10DW, PIPE_CONTROL, MEDIA_VFE_STATE inline 8DW, 3DSTATE_URB, MEDIA_CURBE_LOAD, MEDIA_IDL, 60 threads.
+- **gen7_ops.cpp** — Gen7 (Ivy Bridge/Haswell) **UNTESTED**: like Gen6 + DEPTH_BUFFER 8DW, IVB 64 / HSW 112 threads.
+
 #### Gen5 (Ironlake) specific
-- **gen5_ops.cpp** — Gen5 implementation of `gen_ops`: command encodings (CMD_GFX macro), ILK state base address (8 DWORDs), URB fence, CS URB state, BLT (XY_SRC_COPY_BLT), MI_STORE_DATA_IMM markers.
 - **engine.cpp** — Ring buffer command submission (QueueCommands), 2D BLT engine, HWS sync.
 - **render.cpp / render.h** — 3D render engine (Gen5 solid fills via RECTLIST, TRILIST triangles). `render_init_clone()` for userspace access.
 - **media_pipeline.cpp / media_pipeline.h** — Gen5 media pipeline: EU kernel dispatch via MEDIA_OBJECT, compute tests, MPEG-2 decode path. Uses `gpu_ring` for ioctl-based submission.
@@ -163,24 +167,50 @@ The CBP VLC table (Table B-9) has 64 entries mapping VLC codes (3-9 bits) to 6-b
 
 When all 64 coefficients of a DCT block are coded (idx reaches 63 after the last run+level), the bitstream STILL contains an EOB marker (`10`, 2 bits). The parser MUST consume this EOB even though the block is "full". Failing to consume it causes a **2-bit drift per full block**, which accumulates across MBs and eventually corrupts the entire slice. This is the #1 cause of "75% coverage" failures on high-detail content. Fix: after the AC decode loop, if `idx >= 64`, read and discard one more VLC (the EOB).
 
-## Userspace GPU Access (Ring Clone)
+## Userspace GPU Access
 
-Standalone programs can access the GPU by cloning the accelerant's shared_info:
+### Preferred: gpu_ring layer (generation-independent)
+
+The `gpu_ring` layer handles ring buffer management via kernel ioctl.
+Self-contained — clones its own shared_info and register areas:
 
 ```cpp
-int fd = open("/dev/graphics/intel_extreme_000200", B_READ_WRITE);
-ioctl(fd, INTEL_GET_PRIVATE_DATA, &data, sizeof(data));
-clone_area("shared", &gInfo->shared_info, ..., data.shared_info_area);
-clone_area("regs", &gInfo->registers, ..., shared_info->registers_area);
+#include "gpu_ring.h"
+gpu_ring ring;
+gpu_ring_init(&ring, device_fd);          // syncs with hardware TAIL
+gpu_ring_begin(&ring, 8);                 // reserve 8 DWORDs
+gpu_ring_emit(&ring, cmd0);              // write commands
+gpu_ring_emit(&ring, cmd1);
+gpu_ring_advance(&ring);                  // pad + kick TAIL via ioctl
+gpu_ring_wait_idle(&ring, 50000);         // wait for GPU
 ```
 
-### CRITICAL: Ring buffer rules for clones
+Or submit a pre-built command array:
+```cpp
+uint32 cmds[] = { ... };
+gpu_ring_submit(&ring, cmds, count);
+```
 
-1. **NEVER reset the ring** from userspace. `render_init_clone()` syncs `sw_pos` with hardware TAIL — does NOT disable/re-enable the ring. Resetting kills the CS permanently.
-2. **NEVER RING_RESET after boot** — the kernel's `setup_ring_buffer` initializes the ring at boot. Calling `INTEL_RING_RESET` ioctl (disable→re-enable) kills the CS permanently. It works exactly ONCE after boot, then all subsequent resets fail (HEAD stuck at 0). The CS cannot be restarted after disable.
-3. **`ring.base` is valid** in clones — it equals `graphics_memory` (shared mapping).
-4. **`QueueCommands` works** from clones when the CS is alive.
-5. **Benchmark tool**: `tests/gpu_idct_bench` — runs 400 IDCT blocks, GPU 4× faster than CPU. No reboot needed on a clean ring.
+### With gen_ops (auto-detect generation):
+```cpp
+#include "gen_ops.h"
+gen_ops ops;
+init_gen_ops(&ops, shared->device_type.Generation());
+batch_writer w;
+bw_init(&w);
+ops.emit_mi_flush(&w);
+ops.emit_pipeline_select_media(&w);
+// ... build command stream ...
+gpu_ring_submit(&ring, w.dwords, w.count);
+```
+
+### CRITICAL: Ring buffer rules
+
+1. **NEVER reset the ring** — disable+re-enable kills the CS permanently. It works ONCE after boot, then all subsequent resets fail (HEAD stuck at 0).
+2. **NEVER RING_RESET after boot** — the kernel's `setup_ring_buffer` initializes the ring at boot. Use `gpu_ring_init()` which syncs with hardware TAIL without resetting.
+3. **MMIO writes are READ-ONLY from userspace** — all register writes via `clone_area` or poke driver are silently ignored. Only the kernel can write MMIO. Use `INTEL_RING_WRITE_TAIL` ioctl (handled by `gpu_ring_advance`).
+4. **`ring.base` (graphics_memory) IS writable** — command data goes to ring memory via CPU writes, only the TAIL register kick needs the kernel ioctl.
+5. **Benchmark tool**: `tests/gpu_idct_bench` — 400 IDCT blocks, GPU 3.5× faster than CPU.
 
 ### CRITICAL: MI_LOAD_REGISTER_IMM (LRI) does NOT work on Gen5
 
@@ -188,29 +218,15 @@ LRI (opcode 0x22) in the ring hangs the CS after 2 DWORDs on Ironlake. Masked re
 
 **Use INTEL_RING_INIT_3D kernel ioctl instead** — the kernel writes workaround registers via direct MMIO, which handles masked register semantics correctly.
 
-### CRITICAL: MMIO writes are READ-ONLY from userspace
+### Kernel ioctls for ring access
 
-All MMIO register writes via `clone_area` are silently ignored (kernel maps with `B_KERNEL_WRITE_AREA` only, no `B_WRITE_AREA`). Verified with `/dev/misc/poke` BAR0 mapping too. Only the kernel driver can write MMIO registers.
+Added to intel_extreme kernel driver (patched, requires blacklisting system driver):
+- `INTEL_RING_RESET` — DO NOT USE (kills CS after first use, HEAD stuck at 0)
+- `INTEL_RING_WRITE_TAIL` — writes TAIL register, kicks GPU. The ONLY way to submit ring commands from userspace. Used internally by `gpu_ring_advance()`.
 
-**Kernel ioctls for ring access** (added to intel_extreme kernel driver):
-- `INTEL_RING_RESET` — DO NOT USE (kills CS, see below)
-- `INTEL_RING_WRITE_TAIL` — writes TAIL register, kicks GPU. This is the ONLY way to submit ring commands from userspace.
+### Kernel driver build notes
 
-### CRITICAL: never RING_RESET after boot
-
-Calling `INTEL_RING_RESET` ioctl (disable→re-enable) kills the CS permanently. It works exactly ONCE after boot, then all subsequent resets fail (HEAD stuck at 0). The CS cannot be restarted after disable.
-
-**Correct pattern for ring submission from userspace:**
-```cpp
-// 1. Sync ring position with hardware TAIL (reads work)
-ring.position = read32(ring.register_base + RING_BUFFER_TAIL) & (ring.size - 1);
-// 2. Write commands to ring memory (graphics_memory IS writable)
-uint32* cmd = (uint32*)(ring.base + ring.position);
-cmd[0] = ...; cmd[1] = ...;
-// 3. Kick GPU via kernel ioctl
-intel_ring_tail data = { INTEL_PRIVATE_DATA_MAGIC, new_position };
-ioctl(fd, INTEL_RING_WRITE_TAIL, &data, sizeof(data));
-```
+The kernel driver must be compiled separately from the haiku-build tree. ABI differences between build tree and running kernel (e.g. `_mutex_unlock` vs `mutex_unlock`) require a mutex compatibility shim. See commit history for the exact procedure. The patched driver is installed via `/boot/system/settings/packages` blacklist + non-packaged override.
 
 ### Build for userspace GPU tools
 
@@ -236,6 +252,7 @@ Each test phase has its own `media_pipeline_run_*_test()` function called from `
 ## Documentation
 
 - `TODO_INTEL_GPU_HAIKU.md` — Master TODO with milestone tracking
+- `PORTING.md` — **How to add support for a new Intel GPU generation** (contributor guide)
 - `gen5_docs/analysis/MEDIA_PIPELINE_BRINGUP.md` — 10-command media pipeline specification
 - `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md` — Strategic direction (MPEG-2 → H.264 → LLM)
 - `gen5_docs/analysis/PHASE_*.md` — Per-phase test reports
