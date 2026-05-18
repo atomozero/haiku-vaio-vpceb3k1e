@@ -18,7 +18,12 @@
 /* Haiku intel_extreme headers */
 #include "intel_extreme.h"
 #include "lock.h"
+#include "accelerant.h"
 #include "gpu_ring.h"
+
+/* gInfo required by gpu_ring.o, gpu_bo.o, engine.o (accelerant .o files).
+ * Allocated and configured in haiku_drm_open(). */
+accelerant_info* gInfo = NULL;
 
 /* MI commands for ring submission */
 #define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | (2 << 6))  /* Gen4/5 GGTT (MI_BATCH_GTT) */
@@ -472,9 +477,18 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 			|| batch_cmds[batch_dw_count - 1] == 0))
 		batch_dw_count--;
 
-	/* Submit via gpu_ring: batch commands + completion marker */
-	uint32_t total_dw = batch_dw_count + (sShim.marker_cpu ? 4 : 0);
+	/* 3D pipeline preamble: ensure pipeline is in 3D mode.
+	 * NOTE: MI_FLUSH before PIPELINE_SELECT hangs the CS on ILK
+	 * when the ring was previously idle. Only emit PIPELINE_SELECT. */
+	uint32_t preamble_dw = 2;  /* PIPELINE_SELECT(3D) + MI_NOOP pad */
+	uint32_t total_dw = preamble_dw + batch_dw_count
+		+ (sShim.marker_cpu ? 4 : 0);
 	gpu_ring_begin(&sShim.ring, total_dw);
+
+	/* PIPELINE_SELECT: 3D pipeline (value 0).
+	 * Opcode: CMD_GFX(1,1,4) = 0x69040000. Bit 0 = 0 for 3D. */
+	gpu_ring_emit(&sShim.ring, 0x69040000);  /* PIPELINE_SELECT(3D) */
+	gpu_ring_emit(&sShim.ring, 0x00000000);  /* MI_NOOP pad */
 
 	for (uint32_t i = 0; i < batch_dw_count; i++)
 		gpu_ring_emit(&sShim.ring, batch_cmds[i]);
@@ -613,6 +627,15 @@ haiku_drm_open(void)
 		close(sShim.fd);
 		return -1;
 	}
+
+	/* Set up gInfo for accelerant .o files (gpu_ring, gpu_bo, engine) */
+	gInfo = (accelerant_info*)calloc(1, sizeof(accelerant_info));
+	gInfo->is_clone = true;
+	gInfo->device = sShim.fd;
+	gInfo->shared_info = sShim.shared;
+	gInfo->shared_info_area = sShim.shared_area;
+	gInfo->registers = sShim.registers;
+	gInfo->regs_area = sShim.regs_area;
 
 	/* Allocate a small marker BO for batch completion tracking */
 	intel_allocate_graphics_memory marker_alloc;
