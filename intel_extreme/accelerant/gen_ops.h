@@ -105,16 +105,39 @@ struct gen_ops {
 // Call the appropriate gen*_init_ops() to fill in the vtable.
 // -------------------------------------------------------------------
 
-// Gen5 (Ironlake) — implemented in gen5_ops.cpp
-void gen5_init_ops(gen_ops* ops);
+// -------------------------------------------------------------------
+// Per-generation implementations
+// -------------------------------------------------------------------
 
-// Gen6 (Sandy Bridge) — implemented in gen6_ops.cpp
-// STATUS: UNTESTED — needs SNB hardware for validation
-void gen6_init_ops(gen_ops* ops);
+void gen5_init_ops(gen_ops* ops);	// Ironlake — TESTED
+void gen6_init_ops(gen_ops* ops);	// Sandy Bridge — UNTESTED
+void gen7_init_ops(gen_ops* ops);	// Ivy Bridge / Haswell — UNTESTED
 
-// Future generations:
-// void gen7_init_ops(gen_ops* ops);  // Ivy Bridge / Haswell
-// void gen8_init_ops(gen_ops* ops);  // Broadwell
+// Future:
+// void gen8_init_ops(gen_ops* ops);	// Broadwell
+
+
+// -------------------------------------------------------------------
+// Auto-detect: select the right ops based on GPU generation.
+// Returns B_OK if a supported generation was detected, B_UNSUPPORTED
+// if the generation is not yet implemented (gen < 5 or gen > 8).
+//
+// Usage:
+//   gen_ops ops;
+//   if (init_gen_ops(&ops, shared->device_type.Generation()) == B_OK)
+//       ops.emit_mi_flush(&w);
+// -------------------------------------------------------------------
+
+static inline status_t
+init_gen_ops(gen_ops* ops, int generation)
+{
+	switch (generation) {
+		case 5:  gen5_init_ops(ops); return B_OK;
+		case 6:  gen6_init_ops(ops); return B_OK;
+		case 7:  gen7_init_ops(ops); return B_OK;
+		default: return B_UNSUPPORTED;
+	}
+}
 
 
 #endif // GEN_OPS_H

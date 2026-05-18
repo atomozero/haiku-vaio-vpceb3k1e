@@ -230,9 +230,11 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] **gen6_ops.cpp** — Implementazione Gen6 (Sandy Bridge). NON TESTATA.
       Differenze: STATE_BASE_ADDRESS 10DW, PIPE_CONTROL, MEDIA_VFE_STATE
       inline, 3DSTATE_URB, MEDIA_INTERFACE_DESCRIPTOR_LOAD, 60 thread.
-- [ ] gen7_ops.cpp — Ivy Bridge / Haswell (da implementare)
+- [x] **gen7_ops.cpp** — Implementazione Gen7 (Ivy Bridge / Haswell). NON TESTATA.
+      Simile a Gen6: DEPTH_BUFFER 8DW, IVB 64 thread, HSW 112 thread.
+- [x] **init_gen_ops()** — Auto-detect generazione da Generation() → vtable.
+- [x] **PORTING.md** — Guida contributor: come aggiungere una nuova generazione.
 - [ ] gen8_ops.cpp — Broadwell (ultimo con ring submission classico)
-- [ ] Auto-detect generazione da device_type.Generation() per selezione ops
 
 ---
 
