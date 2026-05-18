@@ -1,11 +1,12 @@
-# TODO: Accelerazione GPU Intel Gen5 su Haiku
+# TODO: Accelerazione GPU Intel Gen5+ su Haiku
 
-**Hardware:** Intel HD Graphics 0x0046 (Ironlake Mobile, Gen5), Sony Vaio VPCEB3K1E
+**Hardware primario:** Intel HD Graphics 0x0046 (Ironlake Mobile, Gen5), Sony Vaio VPCEB3K1E
+**Architettura modulare:** gen_ops vtable per multi-generazione (Gen5 testato, Gen6 pronto)
 **OS:** Haiku R1~beta5 (hrev59506+)
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-16 (EXECBUF2 + ring ioctl + BLT + media pipeline, 3D MI_FLUSH hang)
+**Ultimo aggiornamento:** 2026-05-17 (architettura modulare, Gen6 SNB ops, refactoring gpu_ring/gen_ops)
 
 ---
 
@@ -217,6 +218,21 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [-] B-frame support — parser + MC implementati, decode funzionante
       Table B-4 (11 VLC), backward MV, bidirectional MC blend.
       Coverage 270-293/300 MB sui primi B-frame (errori da P-frame ref)
+
+### 3.12 Architettura modulare multi-generazione — COMPLETATA
+- [x] **gpu_ring.h/cpp** — Ring submission generico via kernel ioctl.
+      Self-contained, nessuna dipendenza da gInfo. Funziona su qualsiasi
+      gen Intel con INTEL_RING_WRITE_TAIL ioctl.
+- [x] **gen_ops.h** — Interfaccia vtable: batch_writer + gen_ops struct
+      con function pointer per pipeline select, state base address,
+      URB, BLT, markers. Una gen_ops per generazione.
+- [x] **gen5_ops.cpp** — Implementazione Gen5 (Ironlake). TESTATA.
+- [x] **gen6_ops.cpp** — Implementazione Gen6 (Sandy Bridge). NON TESTATA.
+      Differenze: STATE_BASE_ADDRESS 10DW, PIPE_CONTROL, MEDIA_VFE_STATE
+      inline, 3DSTATE_URB, MEDIA_INTERFACE_DESCRIPTOR_LOAD, 60 thread.
+- [ ] gen7_ops.cpp — Ivy Bridge / Haswell (da implementare)
+- [ ] gen8_ops.cpp — Broadwell (ultimo con ring submission classico)
+- [ ] Auto-detect generazione da device_type.Generation() per selezione ops
 
 ---
 
