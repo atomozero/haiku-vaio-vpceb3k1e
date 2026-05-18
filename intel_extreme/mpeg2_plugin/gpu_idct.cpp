@@ -179,11 +179,24 @@ struct ring_writer {
 	uint32			count;
 };
 
+static uint32 sIdctRingPos = 0;
+static bool sIdctRingInited = false;
+
 static void
 rw_begin(ring_writer* rw)
 {
 	rw->ring = &sCtx.shared_info->primary_ring_buffer;
 	rw->count = 0;
+
+	if (!sIdctRingInited) {
+		// First use: sync with hardware TAIL
+		uint32 hwTail = read32(rw->ring->register_base + RING_BUFFER_TAIL)
+			& (rw->ring->size - 1);
+		sIdctRingPos = hwTail;
+		sIdctRingInited = true;
+	}
+
+	rw->ring->position = sIdctRingPos;
 	acquire_lock(&rw->ring->lock);
 }
 
@@ -205,25 +218,35 @@ rw_end(ring_writer* rw)
 	if (rw->ring->position & 0x07)
 		rw_write(rw, MI_NOOP);
 
-	// Flush and update TAIL
-	int32 flush = 0;
-	atomic_add(&flush, 1);
-	write32(rw->ring->register_base + RING_BUFFER_TAIL, rw->ring->position);
+	// Flush CPU writes
+	asm volatile("mfence" ::: "memory");
+
+	// Kick GPU via kernel ioctl (userspace MMIO writes don't work)
+	intel_ring_tail tail_data;
+	tail_data.magic = INTEL_PRIVATE_DATA_MAGIC;
+	tail_data.tail_value = rw->ring->position;
+	ioctl(sCtx.device_fd, INTEL_RING_WRITE_TAIL, &tail_data,
+		sizeof(tail_data));
+
+	sIdctRingPos = rw->ring->position;
 	release_lock(&rw->ring->lock);
 }
 
 // Wait for ring to drain (HEAD catches up to TAIL).
+// After completion, sync sIdctRingPos with HEAD for ring reuse.
 static bool
 ring_wait(uint32 timeout_us)
 {
+	ring_buffer& ring = sCtx.shared_info->primary_ring_buffer;
 	bigtime_t deadline = system_time() + timeout_us;
-	uint32 tail = sCtx.shared_info->primary_ring_buffer.position;
+	uint32 tail = ring.position;
 	while (system_time() < deadline) {
-		uint32 head = read32(
-			sCtx.shared_info->primary_ring_buffer.register_base
-			+ RING_BUFFER_HEAD) & 0x001FFFFC;
-		if (head == tail)
+		uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
+			& 0x001FFFFC;
+		if (head == tail) {
+			sIdctRingPos = head;
 			return true;
+		}
 		snooze(10);
 	}
 	return false;
@@ -362,6 +385,15 @@ gpu_idct_init(void)
 
 	sCtx.graphics_memory = (uint8*)sCtx.shared_info->graphics_memory;
 
+	// Sync ring position with hardware TAIL (don't reset — kills CS)
+	{
+		ring_buffer& ring = sCtx.shared_info->primary_ring_buffer;
+		uint32 hwTail = read32(ring.register_base + RING_BUFFER_TAIL)
+			& (ring.size - 1);
+		ring.position = hwTail;
+		ring.space_left = ring.size - 64;
+	}
+
 	// Allocate GTT buffers
 	#define ALLOC_OR_FAIL(name, size, align) \
 		if (gpu_alloc(size, align, sCtx.name) != B_OK) { \
@@ -440,79 +472,75 @@ gpu_idct_process(const int16 blocks[][64], int16 output[][64], uint32 count)
 	// Memory fence before GPU reads
 	asm volatile("mfence" ::: "memory");
 
-	// Submit batch: 10-command preamble + N MEDIA_OBJECTs
-	ring_writer rw;
-	rw_begin(&rw);
+	ring_buffer& ring = sCtx.shared_info->primary_ring_buffer;
 
-	// 1. MI_FLUSH
-	rw_write(&rw, MI_FLUSH);
+	// Build batch in a GTT buffer (not the ring) to avoid ring space issues.
+	// The ring only gets MI_BATCH_BUFFER_START (2 DW per submission).
+	uint32* batch = (uint32*)gtt_ptr(sCtx.input_base
+		+ GPU_IDCT_MAX_BATCH * 128);  // use space after input data
+	uint32 bp = 0;
 
-	// 2. 3DSTATE_DEPTH_BUFFER (NULL)
-	rw_write(&rw, CMD_3DSTATE_DEPTH_BUFFER);
-	rw_write(&rw, (7 << 29) | (1 << 18));  // D32_FLOAT, SURFACE_NULL
-	rw_write(&rw, 0);
-	rw_write(&rw, 0);
-	rw_write(&rw, 0);
-	rw_write(&rw, 0);
+	// Preamble
+	batch[bp++] = MI_FLUSH;
+	batch[bp++] = CMD_3DSTATE_DEPTH_BUFFER;
+	batch[bp++] = (7 << 29) | (1 << 18);
+	batch[bp++] = 0; batch[bp++] = 0; batch[bp++] = 0; batch[bp++] = 0;
+	batch[bp++] = CMD_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA;
+	batch[bp++] = CMD_STATE_BASE_ADDRESS | 6;
+	for (int j = 0; j < 7; j++) batch[bp++] = BASE_ADDRESS_MODIFY;
 
-	// 3. PIPELINE_SELECT (media)
-	rw_write(&rw, CMD_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA);
-
-	// 4. STATE_BASE_ADDRESS (Ironlake, 8 DWORDs)
-	rw_write(&rw, CMD_STATE_BASE_ADDRESS | 6);
-	rw_write(&rw, BASE_ADDRESS_MODIFY);
-	rw_write(&rw, BASE_ADDRESS_MODIFY);
-	rw_write(&rw, BASE_ADDRESS_MODIFY);
-	rw_write(&rw, BASE_ADDRESS_MODIFY);
-	rw_write(&rw, BASE_ADDRESS_MODIFY);
-	rw_write(&rw, BASE_ADDRESS_MODIFY);
-	rw_write(&rw, BASE_ADDRESS_MODIFY);
-
-	// 5. URB_FENCE
 	uint32 vfe_entries = (count > 48) ? 48 : count;
-	uint32 vfe_fence = vfe_entries;
-	uint32 cs_fence = vfe_fence + 16;
-	rw_write(&rw, CMD_URB_FENCE | UF0_VFE_REALLOC | UF0_CS_REALLOC | 1);
-	rw_write(&rw, 0);
-	rw_write(&rw, (vfe_fence << 10) | (cs_fence << 20));
+	batch[bp++] = CMD_URB_FENCE | UF0_VFE_REALLOC | UF0_CS_REALLOC | 1;
+	batch[bp++] = 0;
+	batch[bp++] = (vfe_entries << 10) | ((vfe_entries + 16) << 20);
+	batch[bp++] = CMD_MEDIA_STATE_POINTERS | 1;
+	batch[bp++] = 0;
+	batch[bp++] = gtt_offset(sCtx.vfe_state_base);
+	batch[bp++] = CMD_CS_URB_STATE | 0;
+	batch[bp++] = ((16 - 1) << 4) | 1;
+	batch[bp++] = CMD_CONSTANT_BUFFER | (1u << 8) | 0;
+	batch[bp++] = gtt_offset(sCtx.curbe_base) | ((10 - 1) & 0x1f);
 
-	// 6. MEDIA_STATE_POINTERS
-	rw_write(&rw, CMD_MEDIA_STATE_POINTERS | 1);
-	rw_write(&rw, 0);  // no extended state
-	rw_write(&rw, gtt_offset(sCtx.vfe_state_base));
-
-	// 7. CS_URB_STATE
-	rw_write(&rw, CMD_CS_URB_STATE | 0);
-	rw_write(&rw, ((16 - 1) << 4) | 1);
-
-	// 8. CONSTANT_BUFFER (10 units = 640 bytes for 20 GRFs)
-	rw_write(&rw, CMD_CONSTANT_BUFFER | (1u << 8) | 0);
-	rw_write(&rw, gtt_offset(sCtx.curbe_base) | ((10 - 1) & 0x1f));
-
-	// 9. MEDIA_OBJECTs — one per block, each with byte offset in inline data
+	// MEDIA_OBJECTs
 	for (uint32 i = 0; i < count; i++) {
 		uint32 byte_offset = i * 128;
-		// 20 DWORDs: header(4) + inline(16) to fill one URB entry
-		rw_write(&rw, CMD_MEDIA_OBJECT | 18);
-		rw_write(&rw, 0);  // interface descriptor 0
-		rw_write(&rw, 0);  // indirect data length
-		rw_write(&rw, 0);  // indirect data pointer
-		// Inline data: DW4 = input byte offset, DW5 = output byte offset
-		rw_write(&rw, byte_offset);  // input offset
-		rw_write(&rw, byte_offset);  // output offset
-		// Pad remaining 14 DWORDs
-		for (int p = 2; p < 16; p++)
-			rw_write(&rw, 0);
+		batch[bp++] = CMD_MEDIA_OBJECT | 18;
+		batch[bp++] = 0; batch[bp++] = 0; batch[bp++] = 0;
+		batch[bp++] = byte_offset;
+		batch[bp++] = byte_offset;
+		for (int p = 2; p < 16; p++) batch[bp++] = 0;
 	}
 
-	// 10. MI_FLUSH
-	rw_write(&rw, MI_FLUSH);
+	batch[bp++] = MI_FLUSH;
+	batch[bp++] = (0x0A << 23);  // MI_BATCH_BUFFER_END
+	if (bp & 1) batch[bp++] = MI_NOOP;
 
+	asm volatile("mfence" ::: "memory");
+
+	// Submit from ring: MI_BATCH_BUFFER_START → batch GTT addr
+	uint32 batch_gtt = gtt_offset(sCtx.input_base) + GPU_IDCT_MAX_BATCH * 128;
+
+	// Ensure ring has space for 4 DW (BBS + padding)
+	if (sIdctRingPos + 16 > ring.size) {
+		ring_wait(500000);
+		sIdctRingPos = 0;
+	}
+
+	ring_writer rw;
+	rw_begin(&rw);
+	rw_write(&rw, (0x31 << 23));  // MI_BATCH_BUFFER_START
+	rw_write(&rw, batch_gtt);
 	rw_end(&rw);
 
 	// Wait for completion
 	if (!ring_wait(500000)) {
-		LOG("GPU timeout after %u blocks\n", count);
+		uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
+			& 0x001FFFFC;
+		uint32 tail = read32(ring.register_base + RING_BUFFER_TAIL)
+			& (ring.size - 1);
+		LOG("GPU timeout after %u blocks: HEAD=0x%x TAIL=0x%x "
+			"ringPos=0x%x sIdctRingPos=0x%x ringSize=%u\n",
+			count, head, tail, ring.position, sIdctRingPos, ring.size);
 		return B_TIMED_OUT;
 	}
 

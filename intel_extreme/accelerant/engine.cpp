@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "intel_extreme.h"
 #include "accelerant.h"
 #include "accelerant_protos.h"
 #include "commands.h"
@@ -74,7 +75,19 @@ QueueCommands::~QueueCommands()
 	int32 flush = 0;
 	atomic_add(&flush, 1);
 
-	write32(fRingBuffer.register_base + RING_BUFFER_TAIL, fRingBuffer.position);
+	// Write TAIL register: try kernel ioctl first (userspace MMIO is
+	// read-only on Ironlake), fall back to direct MMIO for other gens.
+	if (gInfo != NULL && gInfo->device >= 0
+		&& gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK)) {
+		intel_ring_tail tailData;
+		tailData.magic = INTEL_PRIVATE_DATA_MAGIC;
+		tailData.tail_value = fRingBuffer.position;
+		ioctl(gInfo->device, INTEL_RING_WRITE_TAIL, &tailData,
+			sizeof(tailData));
+	} else {
+		write32(fRingBuffer.register_base + RING_BUFFER_TAIL,
+			fRingBuffer.position);
+	}
 
 	release_lock(&fRingBuffer.lock);
 }
@@ -488,14 +501,14 @@ check_render_mode()
 		return;
 
 	bool isILK = gInfo->shared_info->device_type.InGroup(INTEL_GROUP_ILK);
-	int fileOK = access("/boot/home/Desktop/render_test", F_OK);
+	int fileOK = access("/boot/home/config/settings/render_test", F_OK);
 	_sPrintf("intel_extreme: check_render_mode: ILK=%d, file=%d\n",
 		isILK, fileOK);
 
 	if (isILK && fileOK == 0) {
 		sRenderMode = 1;
 		_sPrintf("intel_extreme: 3D render engine ENABLED for fills "
-			"(delete /boot/home/Desktop/render_test to disable)\n");
+			"(delete /boot/home/config/settings/render_test to disable)\n");
 	} else {
 		sRenderMode = 0;
 	}

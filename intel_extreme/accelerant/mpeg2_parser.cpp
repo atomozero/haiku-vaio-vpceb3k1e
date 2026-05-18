@@ -1084,16 +1084,8 @@ decode_intra_block(mpeg2_bits* bs, const mpeg2_decoder* dec,
 		}
 
 		idx += rl.run;
-		if (idx >= 64) {
-			// Run overflows the block. The VLC bits were already consumed.
-			// An EOB STILL follows in the bitstream (MPEG-2 §7.2.2.4
-			// always includes EOB after the last coded coefficient,
-			// even at index 63). Consume it to maintain alignment.
-			run_level eob = use_b15 ? decode_ac_coeff_b15(bs)
-			                        : decode_ac_coeff_b14(bs, false);
-			(void)eob;
-			break;
-		}
+		if (idx >= 64)
+			break;	// overflow — trailing EOB consumed below
 
 		int j = scan[idx];
 
@@ -1374,34 +1366,43 @@ mpeg2_decode_intra_macroblock(mpeg2_bits* bs,
 static int
 decode_macroblock_type_p(mpeg2_bits* bs, uint8* mb_type)
 {
-	if (mpeg2_bits_peek(bs, 1) == 1) {
+	// ISO 13818-2 Table B-3: P-picture macroblock type (7 entries)
+	// Verified against ffmpeg table_mb_ptype[7] + ptype2mb_type[7]
+	uint32 bits = mpeg2_bits_peek(bs, 6);
+
+	if ((bits >> 5) == 0x1) {		// 1 → MC + pattern (most common)
 		mpeg2_bits_skip(bs, 1);
-		*mb_type = MB_MOTION_FORWARD;	// MC, not coded
-		return 0;
-	}
-	if (mpeg2_bits_peek(bs, 2) == 0b01) {
-		mpeg2_bits_skip(bs, 2);
 		*mb_type = MB_MOTION_FORWARD | MB_PATTERN;
 		return 0;
 	}
-	if (mpeg2_bits_peek(bs, 3) == 0b001) {
+	if ((bits >> 4) == 0x1) {		// 01 → MC only (no pattern, no quant)
+		mpeg2_bits_skip(bs, 2);
+		*mb_type = MB_MOTION_FORWARD;
+		return 0;
+	}
+	if ((bits >> 3) == 0x1) {		// 001 → MC with MV, no pattern
 		mpeg2_bits_skip(bs, 3);
+		*mb_type = MB_MOTION_FORWARD;
+		return 0;
+	}
+	if ((bits >> 1) == 0x3) {		// 00011 → intra
+		mpeg2_bits_skip(bs, 5);
 		*mb_type = MB_INTRA;
 		return 0;
 	}
-	if (mpeg2_bits_peek(bs, 5) == 0b00011) {
+	if ((bits >> 1) == 0x2) {		// 00010 → quant + MC + pattern
 		mpeg2_bits_skip(bs, 5);
-		*mb_type = MB_MOTION_FORWARD | MB_PATTERN | MB_QUANT;
+		*mb_type = MB_QUANT | MB_MOTION_FORWARD | MB_PATTERN;
 		return 0;
 	}
-	if (mpeg2_bits_peek(bs, 5) == 0b00010) {
+	if ((bits >> 1) == 0x1) {		// 00001 → quant + MC only
 		mpeg2_bits_skip(bs, 5);
-		*mb_type = MB_INTRA | MB_QUANT;
+		*mb_type = MB_QUANT | MB_MOTION_FORWARD;
 		return 0;
 	}
-	if (mpeg2_bits_peek(bs, 5) == 0b00001) {
-		mpeg2_bits_skip(bs, 5);
-		*mb_type = MB_MOTION_FORWARD;
+	if (bits == 0x1) {				// 000001 → quant + intra
+		mpeg2_bits_skip(bs, 6);
+		*mb_type = MB_QUANT | MB_INTRA;
 		return 0;
 	}
 	return -1;
@@ -1668,12 +1669,8 @@ decode_non_intra_block(mpeg2_bits* bs, const mpeg2_decoder* dec,
 			break;
 
 		idx += rl.run;
-		if (idx >= 64) {
-			// Consume trailing EOB (always present per MPEG-2 spec)
-			run_level eob = decode_ac_coeff_b14(bs, false);
-			(void)eob;
-			break;
-		}
+		if (idx >= 64)
+			break;	// overflow — trailing EOB consumed below
 
 		// Apply inverse quantization (§7.4.2.2 for non-intra blocks):
 		//   F''[v][u] = ((2 * level + Sign(level)) * W[w][v][u]
@@ -1721,30 +1718,17 @@ mpeg2_decode_p_macroblock(mpeg2_bits* bs,
 	mb->coded_block_pattern = 0;
 
 	// 1. Macroblock address increment
-	mpeg2_bits saved_bs = *bs;
 	int addr_inc = decode_macroblock_address_increment(bs);
-	if (addr_inc < 0) {
-		// Try resync
-		*bs = saved_bs;
-		bool found = false;
-		for (int d = 0; d <= 8 && mpeg2_bits_available(bs, 3); d++) {
-			mpeg2_bits try_bs = saved_bs;
-			if (d > 0) mpeg2_bits_skip(&try_bs, d);
-			if (mpeg2_bits_peek(&try_bs, 1) == 1) {
-				*bs = saved_bs;
-				mpeg2_bits_skip(bs, d);
-				addr_inc = 1;
-				found = true;
-				break;
-			}
-		}
-		if (!found) return B_BAD_DATA;
-	}
+	if (addr_inc == -2)
+		return B_ENTRY_NOT_FOUND;	// end of slice — not an error
+	if (addr_inc < 0)
+		return B_BAD_DATA;
 	mb->address_increment = (uint8)addr_inc;
 
 	// 2. Macroblock type (Table B-3)
 	if (decode_macroblock_type_p(bs, &mb->mb_type) < 0) {
-		// Resync
+		// Resync attempt
+		mpeg2_bits saved_bs = *bs;
 		bool found = false;
 		for (int d = -4; d <= 6; d++) {
 			int target = (int)mpeg2_bits_offset(&saved_bs) + d;

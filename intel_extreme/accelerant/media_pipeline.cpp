@@ -244,24 +244,38 @@ bw_emit_marker(batch_writer* w, const media_pipeline_context* ctx,
 
 static uint32 sRingPos = 0;
 
+// After a batch completes (marker received), sync sRingPos with HEAD.
+// The GPU has caught up, so we can reuse ring space from HEAD onwards.
+static void
+ring_sync_after_completion(void)
+{
+	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
+	uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
+		& INTEL_RING_BUFFER_HEAD_MASK;
+	sRingPos = head;
+}
+
 static status_t
 ring_submit_ioctl(const batch_writer* w)
 {
 	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
-
-	// Check if commands fit before ring end (leave margin for alignment).
-	// On wrap, sync with hardware HEAD to find free space.
 	uint32 bytes_needed = w->count * sizeof(uint32);
+
+	// If commands don't fit before ring end, sync with HEAD and retry.
+	// After a completed batch, HEAD == our last TAIL, so space is available.
 	if (sRingPos + bytes_needed + 64 > ring.size) {
-		// Wait for GPU to drain, then wrap to position 0
+		// Wait for GPU to finish everything
 		bigtime_t deadline = system_time() + 500000;
 		while (system_time() < deadline) {
 			uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
 				& INTEL_RING_BUFFER_HEAD_MASK;
-			if (head >= sRingPos || head == 0)
+			uint32 tail = read32(ring.register_base + RING_BUFFER_TAIL)
+				& (ring.size - 1);
+			if (head == tail)
 				break;
 			snooze(100);
 		}
+		// HEAD caught up — reuse ring from position 0
 		sRingPos = 0;
 	}
 
@@ -4122,7 +4136,10 @@ submit_blocks_batch_gpu(media_pipeline_context* ctx,
 	volatile uint32* slot = (volatile uint32*)(ctx->marker_bo.cpu_addr
 		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
 	uint32 timeout = 500000 + count * 5000;	// base + ~5ms per block headroom
-	return gpu_debug_wait_value(slot, tag, timeout) ? B_OK : B_TIMED_OUT;
+	bool ok = gpu_debug_wait_value(slot, tag, timeout);
+	if (ok && gInfo->is_clone)
+		ring_sync_after_completion();
+	return ok ? B_OK : B_TIMED_OUT;
 }
 
 
@@ -4423,6 +4440,8 @@ submit_tile_fill_batch(media_pipeline_context* ctx,
 		if (system_time() > deadline)
 			return B_TIMED_OUT;
 	}
+	if (gInfo->is_clone)
+		ring_sync_after_completion();
 	return B_OK;
 }
 

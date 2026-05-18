@@ -1,15 +1,74 @@
+# Build artifacts
 *.o
 *.a
+*.so
 *.accelerant
 *.accelerant.backup
 *.hpkg
+
+# IDE / editor
 .claude/
-bench/bench_2d
+.pluto/
+
+# Haiku driver packaging
+gpu_pkg/
+
+# HDA audio driver build
 hda/hda
 hda/kernel_debug_config.h
 hda/tracing_config.h
 hda/pkg_build/
 hda/hda_codec.cpp.new
-intel_extreme/intel_extreme.accelerant.pre_tiling
-gpu_pkg/
+
+# Bench tool
+bench/bench_2d
 bench/README.md
+
+# Accelerant backup binaries
+intel_extreme/*.pre_*
+
+# Test binaries (rebuild from source, keep .cpp/.m2v sources)
+intel_extreme/accelerant/tests/gpu_*[!.]*
+intel_extreme/accelerant/tests/test_*[!.]*
+!intel_extreme/accelerant/tests/*.cpp
+!intel_extreme/accelerant/tests/*.m2v
+intel_extreme/accelerant/tests/trace_*
+intel_extreme/accelerant/tests/vlc_trace*
+intel_extreme/accelerant/tests/block_trace
+intel_extreme/accelerant/tests/check_ext
+intel_extreme/accelerant/tests/dc_debug
+intel_extreme/accelerant/tests/dump_y
+intel_extreme/accelerant/tests/gl_test
+intel_extreme/accelerant/tests/iq_intra_ref_test
+intel_extreme/accelerant/tests/mb_bits_trace
+intel_extreme/accelerant/tests/mpeg2_viewer
+intel_extreme/accelerant/tests/poke_test
+intel_extreme/accelerant/tests/slice_stats
+intel_extreme/accelerant/tests/_ring_check
+intel_extreme/accelerant/tests/_tri_test
+
+# DRM shim binaries
+intel_extreme/drm_shim/test_drm_shim
+intel_extreme/drm_shim/test_execbuf
+intel_extreme/drm_shim/libdrm_shim.so
+intel_extreme/drm_shim/pkgconfig/
+
+# MPEG-2 plugin binaries
+intel_extreme/mpeg2_plugin/mpeg2_decoder.so
+intel_extreme/mpeg2_plugin/mpeg2_viewer
+intel_extreme/mpeg2_plugin/test_plugin
+
+# Crocus addon binaries (keep sources, exclude 200MB+ ELF)
+intel_extreme/crocus_addon/Crocus Pipe*
+intel_extreme/crocus_addon/intel_extreme
+intel_extreme/crocus_addon/*.so
+
+# External reference trees (download separately if needed)
+gen5_docs/igt/
+gen5_docs/libva_intel/
+gen5_docs/linux_i915_refs/
+gen5_docs/mesa_crocus/
+gen5_docs/mesa_refs/
+gen5_docs/prm_ironlake/
+gen5_docs/xf86_video_intel/
+mesa-22.0.5/

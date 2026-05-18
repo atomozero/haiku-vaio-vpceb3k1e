@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
         }
     }
     printf("Decoded %u/%u MBs, writing Y-only PGM\n",mbt,dec.mb_count);
-    f=fopen("/boot/home/Desktop/y_only.pgm","wb");
+    f=fopen("/tmp/y_only.pgm","wb");
     fprintf(f,"P5\n%u %u\n255\n",w,h);
     fwrite(y,1,w*h,f); fclose(f);
     // Also print first MB's Y values

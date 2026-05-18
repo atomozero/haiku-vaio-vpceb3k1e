@@ -512,7 +512,7 @@ intel_set_display_mode(display_mode* mode)
 	// Quick 3D render test — CPU pixel readback only, no file I/O.
 	// Safe: uses only syslog for output, no risky pointer math.
 	if (sharedInfo.device_type.InGroup(INTEL_GROUP_ILK)
-		&& access("/boot/home/Desktop/render_test", F_OK) == 0) {
+		&& access("/boot/home/config/settings/render_test", F_OK) == 0) {
 		snooze(50000);
 
 		uint32* fb = (uint32*)sharedInfo.frame_buffer;

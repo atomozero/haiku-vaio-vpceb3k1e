@@ -421,7 +421,7 @@ frame_to_bitmap(const frame_planes* f, BBitmap* bitmap)
 int main(int argc, char** argv)
 {
 	const char* path = (argc > 1) ? argv[1]
-		: "/boot/home/Desktop/test_mediaplayer.m2v";
+		: "test.m2v";
 
 	// Initialize GPU IDCT (falls back to CPU if unavailable)
 	if (gpu_idct_init() == B_OK)

@@ -475,7 +475,7 @@ decode_picture(mpeg2_bits* bs, mpeg2_decoder* dec,
 int main(int argc, char** argv)
 {
 	const char* inpath = (argc > 1) ? argv[1] : "test_ip.m2v";
-	const char* outdir = (argc > 2) ? argv[2] : "/boot/home/Desktop";
+	const char* outdir = (argc > 2) ? argv[2] : "/tmp";
 
 	FILE* f = fopen(inpath, "rb");
 	if (!f) { printf("Cannot open %s\n", inpath); return 1; }

@@ -5,7 +5,7 @@
 #include <MediaTrack.h>
 
 int main(int argc, char** argv) {
-    const char* path = (argc > 1) ? argv[1] : "/boot/home/Desktop/test_mediaplayer.m2v";
+    const char* path = (argc > 1) ? argv[1] : "test.m2v";
     
     printf("Opening %s...\n", path);
     

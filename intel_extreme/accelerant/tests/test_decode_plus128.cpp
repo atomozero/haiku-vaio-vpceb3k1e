@@ -55,7 +55,7 @@ int main(int argc, char** argv)
 {
 	const char* inpath = (argc > 1) ? argv[1] : "test_gray_q31.m2v";
 	const char* outpath = (argc > 2) ? argv[2]
-		: "/boot/home/Desktop/decoded_frame.ppm";
+		: "/tmp/decoded_frame.ppm";
 
 	FILE* f = fopen(inpath, "rb");
 	if (!f) { printf("Cannot open %s\n", inpath); return 1; }
