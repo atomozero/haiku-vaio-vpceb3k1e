@@ -18,6 +18,7 @@
 /* Haiku intel_extreme headers */
 #include "intel_extreme.h"
 #include "lock.h"
+#include "gpu_ring.h"
 
 /* MI commands for ring submission */
 #define MI_BATCH_BUFFER_START_CMD ((0x31 << 23) | (2 << 6))  /* Gen4/5 GGTT (MI_BATCH_GTT) */
@@ -75,11 +76,9 @@ static struct {
 	uint32_t     marker_gtt;   /* GTT offset of marker DWORD */
 	volatile uint32_t* marker_cpu; /* CPU pointer to marker DWORD */
 	uint32_t     marker_seq;   /* monotonic sequence number */
-	/* Our own ring position — independent of app_server's ring.position.
-	 * Tracks the hardware TAIL as written by our ioctl kicks. */
-	uint32_t     ring_pos;
-	uint32_t     ring_size;
-	addr_t       ring_base;   /* CPU address of ring buffer memory */
+	/* Generic ring submission layer (via kernel ioctl) */
+	gpu_ring     ring;
+	bool         ring_ready;
 } sShim;
 
 
@@ -473,56 +472,30 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 			|| batch_cmds[batch_dw_count - 1] == 0))
 		batch_dw_count--;
 
-	/* Use sShim.ring_pos (our own tracking, not shared ring.position) */
-	uint32_t rpos = sShim.ring_pos;
-	uint32_t total_bytes = (batch_dw_count + 6) * 4;  /* batch + marker(4) + pad(2) */
-
-	/* Wrap ring if needed */
-	if (rpos + total_bytes + 64 > sShim.ring_size)
-		rpos = 0;
-
-	/* Write batch commands + marker into ring memory */
-	uint32_t* rb = (uint32_t*)(sShim.ring_base + rpos);
-	uint32_t pos = 0;
+	/* Submit via gpu_ring: batch commands + completion marker */
+	uint32_t total_dw = batch_dw_count + (sShim.marker_cpu ? 4 : 0);
+	gpu_ring_begin(&sShim.ring, total_dw);
 
 	for (uint32_t i = 0; i < batch_dw_count; i++)
-		rb[pos++] = batch_cmds[i];
+		gpu_ring_emit(&sShim.ring, batch_cmds[i]);
 
-	/* Completion marker via MI_STORE_DATA_IMM */
 	if (sShim.marker_cpu) {
-		rb[pos++] = MI_STORE_DATA_IMM_GGTT;
-		rb[pos++] = 0;
-		rb[pos++] = sShim.marker_gtt;
-		rb[pos++] = seq;
+		gpu_ring_emit(&sShim.ring, MI_STORE_DATA_IMM_GGTT);
+		gpu_ring_emit(&sShim.ring, 0);
+		gpu_ring_emit(&sShim.ring, sShim.marker_gtt);
+		gpu_ring_emit(&sShim.ring, seq);
 	}
 
-	/* QWord align */
-	if (pos & 1)
-		rb[pos++] = MI_NOOP_CMD;
-
-	uint32_t new_rpos = (rpos + pos * 4) & (sShim.ring_size - 1);
-	sShim.ring_pos = new_rpos;
-
-	/* Sync shared ring position + flush WC + kick */
-	{
-		ring_buffer& ring = sShim.shared->primary_ring_buffer;
-		ring.position = new_rpos;
-		ring.space_left = ring.size - 64;
-	}
-	clflush_range((uint8_t*)sShim.ring_base + rpos, pos * 4);
-	ring_kick_tail(new_rpos);
+	gpu_ring_advance(&sShim.ring);
 
 	/* Debug */
 	static uint32_t sExecCount = 0;
 	sExecCount++;
-	uint32_t head_pre = ring_read32(
-		sShim.shared->primary_ring_buffer.register_base
-		+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
 	if (sExecCount <= 20) {
-		printf("[drm] EXECBUF2 #%u: %u DW inlined @0x%x, "
-			"HEAD=0x%x TAIL→0x%x\n",
-			sExecCount, batch_dw_count, rpos,
-			head_pre, new_rpos);
+		uint32_t head = gpu_ring_read_head(&sShim.ring);
+		printf("[drm] EXECBUF2 #%u: %u DW inlined, "
+			"HEAD=0x%x pos=0x%x\n",
+			sExecCount, batch_dw_count, head, sShim.ring.pos);
 	}
 
 	/* --- Step 4: Wait for completion --- */
@@ -538,7 +511,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 				printf("[drm] EXECBUF2: TIMEOUT seq %u (got 0x%x) "
 					"HEAD=0x%x TAIL=0x%x rpos=0x%x\n",
 					seq, *sShim.marker_cpu, head, tail,
-					sShim.ring_pos);
+					sShim.ring.pos);
 				/* Dump GPU debug registers */
 				printf("[drm]   IPEHR=0x%08x IPEIR=0x%08x\n",
 					ring_read32(0x2068), ring_read32(0x2064));
@@ -548,8 +521,8 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 					ring_read32(0x20B0), ring_read32(0x20B8));
 				/* Dump ring content around HEAD */
 				{
-					uint32_t* rbd = (uint32_t*)sShim.ring_base;
-					uint32_t hmask = (sShim.ring_size/4) - 1;
+					uint32_t* rbd = (uint32_t*)(addr_t)sShim.ring.base;
+					uint32_t hmask = (sShim.ring.size/4) - 1;
 					uint32_t hp = (head / 4);
 					printf("[drm]   Ring @HEAD=0x%x:", head);
 					for (int d = -2; d < 10; d++)
@@ -584,7 +557,7 @@ gem_execbuffer2(struct drm_i915_gem_execbuffer2* args)
 				sShim.shared->primary_ring_buffer.register_base
 				+ RING_BUFFER_HEAD) & INTEL_RING_BUFFER_HEAD_MASK;
 			printf("[drm] EXECBUF2 #%u: OK seq=%u HEAD→0x%x rpos=0x%x\n",
-				sExecCount, seq, head_post, sShim.ring_pos);
+				sExecCount, seq, head_post, sShim.ring.pos);
 		}
 	}
 	if (sExecCount <= 5) {
@@ -669,88 +642,33 @@ haiku_drm_open(void)
 			printf("[drm] WARNING: INTEL_RING_INIT_3D failed!\n");
 	}
 
-	/* Sync our OWN ring position with hardware TAIL.
-	 * We use sShim.ring_pos, NOT ring.position (app_server modifies that).
-	 * This prevents app_server's ghost commands from being executed. */
-	{
-		ring_buffer& ring = sShim.shared->primary_ring_buffer;
-		uint32_t hwTail = ring_read32(ring.register_base + RING_BUFFER_TAIL)
-			& (ring.size - 1);
-		uint32_t hwHead = ring_read32(ring.register_base + RING_BUFFER_HEAD)
-			& INTEL_RING_BUFFER_HEAD_MASK;
-		sShim.ring_pos = hwTail;
-		sShim.ring_size = ring.size;
-		sShim.ring_base = (addr_t)ring.base;
-		printf("[drm] Ring sync: HEAD=0x%x TAIL=0x%x mypos=%u size=%u\n",
-			hwHead, hwTail, sShim.ring_pos, sShim.ring_size);
+	/* Init generic ring layer (syncs with hardware TAIL, no reset) */
+	if (gpu_ring_init(&sShim.ring, sShim.fd) == B_OK) {
+		sShim.ring_ready = true;
+		printf("[drm] Ring init: pos=%u size=%u\n",
+			sShim.ring.pos, sShim.ring.size);
+	} else {
+		printf("[drm] Ring init FAILED\n");
 	}
 
-	/* Ring test: MI_STORE_DATA_IMM via ioctl TAIL kick */
-	if (sShim.marker_cpu) {
+	/* Ring test: MI_STORE_DATA_IMM via gpu_ring */
+	if (sShim.ring_ready && sShim.marker_cpu) {
 		*sShim.marker_cpu = 0;
 		asm volatile("mfence" ::: "memory");
 
-		uint32_t* rb = (uint32_t*)sShim.ring_base;
-		uint32_t pos = sShim.ring_pos / 4;
-		uint32_t mask = (sShim.ring_size / 4) - 1;
-
-		rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
-		rb[pos & mask] = 0; pos++;
-		rb[pos & mask] = sShim.marker_gtt; pos++;
-		rb[pos & mask] = 0xBEEF0001; pos++;
-		if (pos & 1) { rb[pos & mask] = 0; pos++; }
-
-		sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
-		/* Sync shared position so app_server doesn't overwrite us */
-		{
-			ring_buffer& r = sShim.shared->primary_ring_buffer;
-			r.position = sShim.ring_pos;
-			r.space_left = r.size - 64;
-		}
-		/* clflush WC ring memory before kicking TAIL (mfence alone
-		 * does NOT flush WC combining buffers — Expert 4 bug fix) */
-		{
-			uint32_t write_start = sShim.ring_pos > 20
-				? sShim.ring_pos - 20 : 0;
-			clflush_range((uint8_t*)sShim.ring_base + write_start,
-				sShim.ring_pos - write_start + 64);
-		}
-		ring_kick_tail(sShim.ring_pos);
+		uint32_t test_cmds[6];
+		test_cmds[0] = MI_STORE_DATA_IMM_GGTT;
+		test_cmds[1] = 0;
+		test_cmds[2] = sShim.marker_gtt;
+		test_cmds[3] = 0xBEEF0001;
+		test_cmds[4] = 0;  // padding for QWord align
+		test_cmds[5] = 0;
+		gpu_ring_submit(&sShim.ring, test_cmds, 4);
 
 		snooze(10000);
-		ring_buffer& ring = sShim.shared->primary_ring_buffer;
-		uint32_t head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
-
-		bool ring_ok = (*sShim.marker_cpu == 0xBEEF0001);
-		printf("[drm] Ring test: marker=0x%08x HEAD=0x%x → %s\n",
-			*sShim.marker_cpu, head_post,
-			ring_ok ? "GPU WORKS!" : "FAILED");
-
-		if (!ring_ok) {
-			/* Ring hung — attempt GPU engine reset via ILK_GDSR + ring reinit */
-			printf("[drm] Ring hung (HEAD=0x%x), attempting engine reset...\n",
-				head_post);
-			ring_reset_ioctl();
-			snooze(5000);
-			/* Re-test */
-			*sShim.marker_cpu = 0;
-			pos = sShim.ring_pos / 4;
-			rb[pos & mask] = MI_STORE_DATA_IMM_GGTT; pos++;
-			rb[pos & mask] = 0; pos++;
-			rb[pos & mask] = sShim.marker_gtt; pos++;
-			rb[pos & mask] = 0xBEEF0002; pos++;
-			if (pos & 1) { rb[pos & mask] = 0; pos++; }
-			sShim.ring_pos = (pos * 4) & (sShim.ring_size - 1);
-			sShim.shared->primary_ring_buffer.position = sShim.ring_pos;
-			clflush_range((uint8_t*)sShim.ring_base, sShim.ring_pos + 64);
-			ring_kick_tail(sShim.ring_pos);
-			snooze(10000);
-			head_post = ring_read32(ring.register_base + 4) & 0x1FFFFC;
-			ring_ok = (*sShim.marker_cpu == 0xBEEF0002);
-			printf("[drm] After reset: marker=0x%08x HEAD=0x%x → %s\n",
-				*sShim.marker_cpu, head_post,
-				ring_ok ? "GPU RECOVERED!" : "STILL DEAD");
-		}
+		printf("[drm] Ring test: marker=0x%08x → %s\n",
+			*sShim.marker_cpu,
+			*sShim.marker_cpu == 0xBEEF0001 ? "GPU WORKS!" : "FAILED");
 	}
 
 	printf("[drm] Haiku DRM shim opened: chipset=0x%04x\n",

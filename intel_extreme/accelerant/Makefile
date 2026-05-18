@@ -44,8 +44,9 @@ KERNEL_BINS = $(KERNEL_SRCS:.g4a=.g4b.gen5)
 
 # Accelerant source files
 ACCEL_SRCS = accelerant.cpp bench.cpp cursor.cpp dpms.cpp engine.cpp \
-	gpu_bo.cpp gpu_debug.cpp hooks.cpp media_pipeline.cpp memory.cpp \
-	mode.cpp mpeg2_parser.cpp overlay.cpp pll.cpp render.cpp \
+	gpu_bo.cpp gpu_debug.cpp gpu_ring.cpp gen5_ops.cpp \
+	hooks.cpp media_pipeline.cpp \
+	memory.cpp mode.cpp mpeg2_parser.cpp overlay.cpp pll.cpp render.cpp \
 	FlexibleDisplayInterface.cpp PanelFitter.cpp Ports.cpp Pipes.cpp \
 	TigerLakePLL.cpp
 

@@ -14,7 +14,9 @@
 #include "accelerant.h"
 #include "bench.h"
 #include "commands.h"
+#include "gen_ops.h"
 #include "gpu_debug.h"
+#include "gpu_ring.h"
 #include "idct_ref.h"
 #include "intel_extreme.h"
 #include "mpeg2_parser.h"
@@ -193,32 +195,7 @@ static const uint32 kIqOnlyV3Kernel[][4] = {
 // pattern already proven working by render.cpp's 3D marker diagnostics.
 // ---------------------------------------------------------------------------
 
-#define BATCH_CAPACITY_DW 8192
-
-struct batch_writer {
-	uint32	dwords[BATCH_CAPACITY_DW];
-	uint32	count;
-	bool	overflow;
-};
-
-
-static void
-bw_init(batch_writer* w)
-{
-	w->count = 0;
-	w->overflow = false;
-}
-
-
-static void
-bw_emit(batch_writer* w, uint32 dword)
-{
-	if (w->count >= BATCH_CAPACITY_DW) {
-		w->overflow = true;
-		return;
-	}
-	w->dwords[w->count++] = dword;
-}
+// batch_writer, bw_init, bw_emit are defined in gen_ops.h
 
 
 // Emit an MI_STORE_DATA_IMM marker that writes the tag for the given
@@ -236,71 +213,21 @@ bw_emit_marker(batch_writer* w, const media_pipeline_context* ctx,
 
 
 // ---------------------------------------------------------------------------
-// Ring submit via kernel ioctl.
-// Writes batch_writer DWORDs directly to ring memory, then kicks GPU
-// via INTEL_RING_WRITE_TAIL ioctl. Returns new ring position.
-// Falls back to QueueCommands if ioctl is not available.
+// Ring submission via gpu_ring layer (kernel ioctl for TAIL writes).
 // ---------------------------------------------------------------------------
 
-static uint32 sRingPos = 0;
-
-// After a batch completes (marker received), sync sRingPos with HEAD.
-// The GPU has caught up, so we can reuse ring space from HEAD onwards.
-static void
-ring_sync_after_completion(void)
-{
-	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
-	uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
-		& INTEL_RING_BUFFER_HEAD_MASK;
-	sRingPos = head;
-}
+static gpu_ring sMediaRing;
+static bool sMediaRingInit = false;
 
 static status_t
-ring_submit_ioctl(const batch_writer* w)
+ring_submit_via_gpu_ring(const batch_writer* w)
 {
-	ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
-	uint32 bytes_needed = w->count * sizeof(uint32);
-
-	// If commands don't fit before ring end, sync with HEAD and retry.
-	// After a completed batch, HEAD == our last TAIL, so space is available.
-	if (sRingPos + bytes_needed + 64 > ring.size) {
-		// Wait for GPU to finish everything
-		bigtime_t deadline = system_time() + 500000;
-		while (system_time() < deadline) {
-			uint32 head = read32(ring.register_base + RING_BUFFER_HEAD)
-				& INTEL_RING_BUFFER_HEAD_MASK;
-			uint32 tail = read32(ring.register_base + RING_BUFFER_TAIL)
-				& (ring.size - 1);
-			if (head == tail)
-				break;
-			snooze(100);
-		}
-		// HEAD caught up — reuse ring from position 0
-		sRingPos = 0;
+	if (!sMediaRingInit) {
+		if (gpu_ring_init(&sMediaRing, gInfo->device) != B_OK)
+			return B_NOT_INITIALIZED;
+		sMediaRingInit = true;
 	}
-
-	// Write commands to ring memory
-	uint32* dst = (uint32*)(ring.base + sRingPos);
-	memcpy(dst, w->dwords, bytes_needed);
-
-	// Pad to 8-byte alignment
-	uint32 new_pos = sRingPos + bytes_needed;
-	if (new_pos & 0x07) {
-		*(uint32*)(ring.base + new_pos) = 0;  // MI_NOOP
-		new_pos += 4;
-	}
-	asm volatile("mfence" ::: "memory");
-
-	// Kick GPU via ioctl
-	intel_ring_tail tailData;
-	tailData.magic = INTEL_PRIVATE_DATA_MAGIC;
-	tailData.tail_value = new_pos;
-	if (ioctl(gInfo->device, INTEL_RING_WRITE_TAIL, &tailData,
-			sizeof(tailData)) != 0)
-		return B_ERROR;
-
-	sRingPos = new_pos;
-	return B_OK;
+	return gpu_ring_submit(&sMediaRing, w->dwords, w->count);
 }
 
 
@@ -840,16 +767,12 @@ media_pipeline_init(media_pipeline_context* ctx)
 	ctx->initialized = true;
 
 	// Sync ring position with hardware TAIL for clone contexts.
-	// Don't reset the ring — disable+re-enable kills the CS.
+	// Init gpu_ring for clone contexts (kernel ioctl for TAIL writes).
 	if (gInfo->is_clone) {
-		ring_buffer &ring = gInfo->shared_info->primary_ring_buffer;
-		uint32 hwTail = read32(ring.register_base + RING_BUFFER_TAIL)
-			& (ring.size - 1);
-		ring.position = hwTail;
-		ring.space_left = ring.size - 64;
-		sRingPos = hwTail;
-		LOG("init: ring synced pos=%u (hwTail=0x%x)\n",
-			ring.position, hwTail);
+		if (gpu_ring_init(&sMediaRing, gInfo->device) == B_OK) {
+			sMediaRingInit = true;
+			LOG("init: gpu_ring synced pos=%u\n", sMediaRing.pos);
+		}
 	}
 	LOG("init: ok, 11 BOs allocated (%u bytes total)\n",
 		(unsigned)(BATCH_BO_SIZE + KERNEL_BO_SIZE + VFE_STATE_BO_SIZE
@@ -4121,7 +4044,7 @@ submit_blocks_batch_gpu(media_pipeline_context* ctx,
 
 	// 5. Submit to ring via ioctl (kernel writes TAIL register).
 	gpu_bo_flush_cpu_writes();
-	status_t submit_st = ring_submit_ioctl(&w);
+	status_t submit_st = ring_submit_via_gpu_ring(&w);
 	if (submit_st != B_OK) {
 		// Fallback: direct QueueCommands (works only if MMIO is writable)
 		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
@@ -4138,7 +4061,7 @@ submit_blocks_batch_gpu(media_pipeline_context* ctx,
 	uint32 timeout = 500000 + count * 5000;	// base + ~5ms per block headroom
 	bool ok = gpu_debug_wait_value(slot, tag, timeout);
 	if (ok && gInfo->is_clone)
-		ring_sync_after_completion();
+		// gpu_ring handles position tracking internally
 	return ok ? B_OK : B_TIMED_OUT;
 }
 
@@ -4423,7 +4346,7 @@ submit_tile_fill_batch(media_pipeline_context* ctx,
 		return B_NO_MEMORY;
 
 	gpu_bo_flush_cpu_writes();
-	status_t submit_st = ring_submit_ioctl(&w);
+	status_t submit_st = ring_submit_via_gpu_ring(&w);
 	if (submit_st != B_OK) {
 		ring_buffer& ring = gInfo->shared_info->primary_ring_buffer;
 		QueueCommands queue(ring);
@@ -4441,7 +4364,7 @@ submit_tile_fill_batch(media_pipeline_context* ctx,
 			return B_TIMED_OUT;
 	}
 	if (gInfo->is_clone)
-		ring_sync_after_completion();
+		// gpu_ring handles position tracking internally
 	return B_OK;
 }
 

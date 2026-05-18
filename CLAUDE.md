@@ -38,11 +38,18 @@ make && make install    # kernel driver, requires reboot
 ## Architecture
 
 ### intel_extreme/accelerant/ — GPU accelerant (userspace, loaded by app_server)
-- **engine.cpp** — Ring buffer command submission, 2D BLT engine, HWS sync.
+
+#### Generic layer (generation-independent)
+- **gpu_ring.cpp / gpu_ring.h** — Ring buffer submission via kernel ioctl. Handles position tracking, TAIL kicks, idle waits. Works on any Intel gen where the kernel provides `INTEL_RING_WRITE_TAIL` ioctl.
+- **gen_ops.h** — Generation abstraction: `gen_ops` vtable with function pointers for gen-specific command emission (pipeline select, state base address, URB fence, BLT, markers). `batch_writer` DWORD accumulator.
+- **gpu_bo.cpp / gpu_bo.h** — GPU buffer object allocator (GTT-mapped). Generation-independent.
+- **gpu_debug.cpp / gpu_debug.h** — GPU register dumps (INSTDONE, IPEHR, ACTHD, EIR). Marker helpers are generic, register decode is Gen5-specific.
+
+#### Gen5 (Ironlake) specific
+- **gen5_ops.cpp** — Gen5 implementation of `gen_ops`: command encodings (CMD_GFX macro), ILK state base address (8 DWORDs), URB fence, CS URB state, BLT (XY_SRC_COPY_BLT), MI_STORE_DATA_IMM markers.
+- **engine.cpp** — Ring buffer command submission (QueueCommands), 2D BLT engine, HWS sync.
 - **render.cpp / render.h** — 3D render engine (Gen5 solid fills via RECTLIST, TRILIST triangles). `render_init_clone()` for userspace access.
-- **media_pipeline.cpp / media_pipeline.h** — Gen5 media pipeline: EU kernel dispatch via MEDIA_OBJECT, compute tests, MPEG-2 decode path.
-- **gpu_bo.cpp / gpu_bo.h** — GPU buffer object allocator (GTT-mapped).
-- **gpu_debug.cpp / gpu_debug.h** — GPU register dumps (INSTDONE, IPEHR, ACTHD, EIR).
+- **media_pipeline.cpp / media_pipeline.h** — Gen5 media pipeline: EU kernel dispatch via MEDIA_OBJECT, compute tests, MPEG-2 decode path. Uses `gpu_ring` for ioctl-based submission.
 - **idct_ref.h** — CPU reference for IDCT (cosine table + 2-pass algorithm).
 - **iq_intra_ref.h** — CPU reference for MPEG-2 inverse quantization.
 - **mpeg2_parser.cpp / mpeg2_parser.h** — MPEG-2 bitstream parser (sequence/picture/slice headers, VLC coefficient decode, macroblock decode).
