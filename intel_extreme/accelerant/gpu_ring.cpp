@@ -79,20 +79,39 @@ gpu_ring_init(gpu_ring* ring, int device_fd)
 status_t
 gpu_ring_begin(gpu_ring* ring, uint32 dwords)
 {
-	uint32 bytes_needed = (dwords + 1) * sizeof(uint32);
+	uint32 bytes_needed = (dwords + 2) * sizeof(uint32);  // +2 for alignment
 
-	if (ring->pos + bytes_needed + 64 > ring->size) {
+	// If command won't fit before end of ring, wrap to position 0.
+	// Wait for HEAD to be past our write zone (not necessarily idle).
+	if (ring->pos + bytes_needed > ring->size - 64) {
 		bigtime_t deadline = system_time() + 500000;
 		while (system_time() < deadline) {
 			uint32 head = ring_reg_read(ring, RING_BUFFER_HEAD)
 				& INTEL_RING_BUFFER_HEAD_MASK;
+			// Safe to wrap if: HEAD is past our pos (already consumed),
+			// or HEAD is at 0 (idle after wrap), or GPU fully idle
+			if (head >= ring->pos || head == 0)
+				break;
 			uint32 tail = ring_reg_read(ring, RING_BUFFER_TAIL)
 				& (ring->size - 1);
 			if (head == tail)
-				break;
-			snooze(100);
+				break;  // GPU idle — always safe
+			snooze(50);
 		}
 		ring->pos = 0;
+	}
+
+	// Ensure HEAD is not in our write region [pos, pos+bytes_needed]
+	{
+		bigtime_t deadline = system_time() + 500000;
+		while (system_time() < deadline) {
+			uint32 head = ring_reg_read(ring, RING_BUFFER_HEAD)
+				& INTEL_RING_BUFFER_HEAD_MASK;
+			// Safe if HEAD is outside our write zone
+			if (head <= ring->pos || head > ring->pos + bytes_needed)
+				break;
+			snooze(50);
+		}
 	}
 
 	ring->emit_start = ring->pos;
