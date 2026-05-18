@@ -6,7 +6,7 @@
 **Direzione strategica:** Video decode hardware (MPEG-2 → H.264) come obiettivo primario,
 compute/LLM come fase successiva. Vedi `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md`.
 
-**Ultimo aggiornamento:** 2026-05-17 (architettura modulare, Gen6 SNB ops, refactoring gpu_ring/gen_ops)
+**Ultimo aggiornamento:** 2026-05-18 (BLT 60fps, media 3.5x, EXECBUF2 test OK, ring health/test tools)
 
 ---
 
