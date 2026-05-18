@@ -583,6 +583,12 @@ void
 intel_get_accelerant_clone_info(void* info)
 {
 	CALLED();
+	if (gInfo == NULL || gInfo->shared_info == NULL) {
+		// Not yet initialized — return empty string to avoid crash
+		if (info != NULL)
+			((char*)info)[0] = '\0';
+		return;
+	}
 	ioctl(gInfo->device, INTEL_GET_DEVICE_NAME, info, B_PATH_NAME_LENGTH);
 }
 
