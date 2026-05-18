@@ -249,6 +249,20 @@ sudo make revert-test                 # rollback if needed
 
 Each test phase has its own `media_pipeline_run_*_test()` function called from `accelerant.cpp`. Change which test runs by editing the call site (around line 554).
 
+## Project Tools
+
+### Ring Health Monitor
+```sh
+tools/ring_health.sh
+```
+Diagnoses GPU ring buffer state. Checks syslog errors, runs `test_ring_ioctl`, reports: HEALTHY / DEAD / RESET DAMAGE / DRIVER NOT LOADED. Run after reboot or when GPU tests fail.
+
+### Test & Regression Runner
+```sh
+tools/test_suite.sh
+```
+Builds and runs the full GPU test suite (6 tests): accelerant build, ring ioctl, IDCT benchmark, 3D cube, DRM shim, EXECBUFFER2. Reports pass/fail vs baselines, detects regressions. Run after code changes.
+
 ## Documentation
 
 - `TODO_INTEL_GPU_HAIKU.md` — Master TODO with milestone tracking
