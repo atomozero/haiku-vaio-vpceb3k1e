@@ -23,11 +23,12 @@ LIBS_PLUGIN = -lbe -lmedia -lstdc++
 LIBS_VIEWER = -lbe -lstdc++
 
 PARSER_SRC = ../accelerant/mpeg2_parser.cpp
+GPU_RING_SRC = ../accelerant/gpu_ring.cpp
 
-PLUGIN_SOURCES = mpeg2_decoder_plugin.cpp gpu_idct.cpp $(PARSER_SRC)
+PLUGIN_SOURCES = mpeg2_decoder_plugin.cpp gpu_idct.cpp $(GPU_RING_SRC) $(PARSER_SRC)
 PLUGIN_TARGET = mpeg2_decoder.so
 
-VIEWER_SOURCES = mpeg2_viewer.cpp gpu_idct.cpp $(PARSER_SRC)
+VIEWER_SOURCES = mpeg2_viewer.cpp gpu_idct.cpp $(GPU_RING_SRC) $(PARSER_SRC)
 VIEWER_TARGET = mpeg2_viewer
 
 INSTALL_DIR = /boot/home/config/non-packaged/add-ons/media/plugins

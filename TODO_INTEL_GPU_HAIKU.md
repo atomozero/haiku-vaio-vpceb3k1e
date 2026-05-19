@@ -211,7 +211,9 @@ scritture TAIL/HEAD/CTL. Questo è il prerequisito assoluto per:
 - [x] **Media pipeline via ioctl** — FUNZIONANTE (GPU IDCT 3.5x, 400 blocchi)
       ring_submit_ioctl() in media_pipeline.cpp, fallback a QueueCommands.
       Ring reset via ioctl in media_pipeline_init per cloni.
-- [ ] GPU IDCT nel plugin (sostituire compute_idct_reference con GPU dispatch)
+- [x] GPU IDCT nel plugin (_FlushBatch usa gpu_idct_process con CPU fallback)
+      Fix: buffer overflow batch — allocato batch_base GTT dedicato (64KB).
+      Rimossi macro ridefiniti (RING_BUFFER_*, MI_FLUSH già in intel_extreme.h).
 - [ ] GPU MC+IDCT combinato per P-frame decode completo su GPU
 - [ ] Gouraud shading WM kernel (interpolazione colore per vertice)
 - [ ] IDCT IEEE 1180 (sostituire cosine table)

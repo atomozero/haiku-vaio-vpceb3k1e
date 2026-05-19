@@ -1,5 +1,5 @@
 # Differenze rispetto ai driver originali Haiku
-# Sony Vaio VPCEB3K1E — 5 Aprile 2026 (aggiornato)
+# Sony Vaio VPCEB3K1E — 19 Maggio 2026 (aggiornato)
 
 Questo documento elenca tutte le modifiche apportate ai driver
 `intel_extreme` (GPU) e `hda` (audio) rispetto alla versione
@@ -138,6 +138,75 @@ Aggiunti campi `frame_buffer_tiled` e `fence_register_index` alla
 struct `accelerant_info` (privata dell'accelerant, NON in `intel_shared_info`
 per evitare ABI break con il kernel driver).
 
+### 1.14 media_pipeline.cpp/h — Media Pipeline & EU Kernel Dispatch
+
+Implementata infrastruttura completa per il compute engine Gen5 via
+MEDIA_OBJECT command:
+- **gpu_bo allocator** (gpu_bo.cpp/h): buffer GTT con alloc/free/write/clear
+- **Batch writer** (batch_writer in gen_ops.h): accumula comandi DWORD
+  in array statico, poi sottomette via ring
+- **10-command preamble**: MI_FLUSH → DEPTH_BUFFER_NULL → PIPELINE_SELECT →
+  URB_FENCE → STATE_BASE_ADDRESS → MEDIA_STATE_POINTERS → CS_URB_STATE →
+  CONSTANT_BUFFER → N × MEDIA_OBJECT → MI_FLUSH
+- **Surface state**: SURFTYPE_BUFFER per OWord R/W, SURFTYPE_2D per Media Block
+- **CURBE**: fino a 30 GRF push-to-thread via CONSTANT_BUFFER
+- **Marker system**: MI_STORE_DATA_IMM scrive tag in marker_bo per debug/sync
+- **Kernel dispatch**: fino a 48 EU thread paralleli, URB recycling
+
+**EU kernels implementati** (kernels/):
+- `idct_single.g4a` — IDCT standalone S16→S16 (109 istruzioni)
+- `idct_to_u8.g4a` — IDCT + clamp + Media Block Write U8
+- `iq_idct_intra.g4a` — IQ + IDCT combinato per I-frame
+- `mc_forward.g4a` — P-frame forward MC (Media Block Read/Write)
+
+**Benchmark**: GPU IDCT 4× piu veloce della CPU su 400 blocchi 8×8.
+
+### 1.15 gpu_ring.cpp/h — Ring Submission via Kernel Ioctl
+
+Layer di ring submission indipendente dalla generazione. Gestisce:
+- Apertura device, clone shared_info e registri
+- Sync con TAIL hardware (mai RING_RESET — uccide il CS)
+- `gpu_ring_begin/emit/advance`: scrittura comandi + TAIL kick via
+  `INTEL_RING_WRITE_TAIL` ioctl (unico modo per scrivere MMIO da userspace)
+- `gpu_ring_submit`: sottomette array di comandi pre-costruito
+- `gpu_ring_wait_idle`: attende che HEAD raggiunga TAIL
+
+Usato da media_pipeline.cpp, test standalone, e gpu_idct nel plugin.
+
+### 1.16 gen_ops.h, gen5/6/7_ops.cpp — Astrazione Multi-Generazione
+
+Vtable `gen_ops` con function pointer per emissione comandi
+generazione-specifica:
+- `emit_pipeline_select_media/3d`, `emit_state_base_address`,
+  `emit_urb_fence`, `emit_mi_flush`, `emit_constant_buffer`,
+  `emit_media_state_pointers`, `emit_cs_urb_state`, markers
+- `init_gen_ops(ops, generation)` seleziona automaticamente
+- **Gen5** (Ironlake): testato, STATE_BASE_ADDRESS 8DW, MI_FLUSH
+- **Gen6** (Sandy Bridge): non testato, STATE_BASE_ADDRESS 10DW, PIPE_CONTROL
+- **Gen7** (Ivy Bridge/Haswell): non testato
+
+Guida contributor: `PORTING.md`.
+
+### 1.17 gpu_debug.cpp/h — Diagnostica GPU
+
+- Dump registri: INSTDONE, IPEHR, ACTHD, EIR, ESR
+- `gpu_debug_wait_value()`: busy-wait su indirizzo GTT per marker sync
+- Ring health check: confronto HEAD/TAIL, detect stall
+
+### 1.18 DRM Shim per Mesa crocus
+
+Libreria `libdrm_shim.so` che traduce ioctl DRM Linux in ioctl
+intel_extreme Haiku:
+- **GEM**: CREATE/CLOSE/MMAP/BUSY/WAIT, SET_DOMAIN, MADVISE
+- **GEM_EXECBUFFER2**: inline batch nel ring + MI_STORE_DATA_IMM marker +
+  TAIL ioctl. Relocation patching, EXEC_HANDLE_LUT, EXEC_BATCH_FIRST.
+- **GETPARAM/GET_APERTURE**: chipset_id=0x0046, aperture size
+- **SET_TILING/GET_TILING**: tiling mode tracking
+- **CONTEXT**: CREATE/DESTROY stub, GETPARAM/SETPARAM
+
+Mesa 25.3.3 compilata con driver crocus (Gallium), CrocusRenderer addon
+per Haiku GL stack. OpenGL 2.1, GLSL 1.20.
+
 ### Prestazioni GPU vs driver originale
 
 | Test | Originale | Patchato | Differenza |
@@ -203,12 +272,89 @@ case 0x10ec0269:
 
 ---
 
-## 3. File aggiunti (non presenti nell'originale)
+## 3. MPEG-2 Decoder Plugin (media_kit)
+
+Plugin `mpeg2_decoder.so` per il media_kit di Haiku. Decodifica video
+MPEG-2 con accelerazione GPU opzionale.
+
+Installato in: `~/config/non-packaged/add-ons/media/plugins/`
+
+### 3.1 mpeg2_decoder_plugin.cpp — Plugin DecoderPlugin
+
+- Registra formato `B_MPEG_2_VIDEO` via BMediaFormats
+- Output `B_YCbCr420` (Y + Cb + Cr planes separati)
+- Decode I, P e B frame con motion compensation half-pel
+- **Batch IDCT**: accumula blocchi 8×8, flush via GPU (fallback CPU)
+- Reference frame management: I/P → forward ref, shift a backward
+
+### 3.2 gpu_idct.cpp/h — GPU IDCT per il Plugin
+
+Reimplementazione standalone della pipeline media per uso dal plugin:
+- Apre `/dev/graphics/intel_extreme_000200`, clona shared_info e registri
+- Alloca buffer GTT: kernel, CURBE, input (S16 coeff), output (S16 IDCT),
+  batch (comandi), VFE state, IDRT, surface state, binding table
+- Batch GPU: preamble 10 comandi + N MEDIA_OBJECT, sottomesso via
+  MI_BATCH_BUFFER_START nel ring + TAIL ioctl
+- Kernel EU `idct_single.g4b.gen5`: IDCT 2-pass dp4, output S16
+- Fallback CPU automatico se GPU non disponibile
+- Thread-safe: usa benaphore del ring buffer (condiviso con app_server)
+
+### 3.3 mpeg2_parser.cpp/h — Parser Bitstream MPEG-2
+
+Parser completo ISO/IEC 13818-2:
+- Sequence header, picture header, picture coding extension, slice header
+- DC VLC (Table B-12/B-13), AC VLC (Table B-14 completa, 112 entries)
+- Table B-15 (intra_vlc_format=1), Table B-9 CBP (64 entries)
+- Macroblock decode: I, P, B frame (Table B-2/B-3/B-4)
+- Motion vector decode (Table B-10 + f_code expansion)
+- IQ inline, mismatch control, error recovery (skip+continue)
+
+### 3.4 mpeg2_viewer — Viewer Standalone
+
+Viewer BWindow per file .m2v. Decode I+P frame, YCbCr→RGB32 (BT.601).
+
+---
+
+## 4. File aggiunti (non presenti nell'originale)
 
 | File | Descrizione |
 |------|-------------|
+| **Accelerant — Render Engine** | |
 | `intel_extreme/accelerant/render.h` | Header render engine 3D per 2D |
 | `intel_extreme/accelerant/render.cpp` | Infrastruttura render engine |
+| **Accelerant — Media Pipeline & Compute** | |
+| `intel_extreme/accelerant/media_pipeline.cpp/h` | Media pipeline: EU dispatch, IDCT, compute |
+| `intel_extreme/accelerant/gpu_bo.cpp/h` | GPU buffer object allocator (GTT) |
+| `intel_extreme/accelerant/gpu_ring.cpp/h` | Ring submission via kernel ioctl |
+| `intel_extreme/accelerant/gpu_debug.cpp/h` | Diagnostica GPU (registri, marker) |
+| `intel_extreme/accelerant/gen_ops.h` | Vtable multi-generazione |
+| `intel_extreme/accelerant/gen5_ops.cpp` | Implementazione Gen5 (testata) |
+| `intel_extreme/accelerant/gen6_ops.cpp` | Implementazione Gen6 (non testata) |
+| `intel_extreme/accelerant/gen7_ops.cpp` | Implementazione Gen7 (non testata) |
+| `intel_extreme/accelerant/idct_ref.h` | IDCT CPU reference + cosine table GPU |
+| `intel_extreme/accelerant/iq_intra_ref.h` | IQ CPU reference per MPEG-2 |
+| `intel_extreme/accelerant/mpeg2_parser.cpp/h` | Parser MPEG-2 bitstream |
+| `intel_extreme/accelerant/commands.h` | Definizioni comandi HW (MI, 3D, MEDIA) |
+| **Accelerant — EU Kernels** | |
+| `intel_extreme/accelerant/kernels/idct_single.g4a` | IDCT standalone S16→S16 |
+| `intel_extreme/accelerant/kernels/idct_to_u8.g4a` | IDCT + clamp → U8 |
+| `intel_extreme/accelerant/kernels/iq_idct_intra.g4a` | IQ + IDCT combinato |
+| `intel_extreme/accelerant/kernels/mc_forward.g4a` | MC forward (half-pel) |
+| **MPEG-2 Plugin** | |
+| `intel_extreme/mpeg2_plugin/mpeg2_decoder_plugin.cpp` | Plugin media_kit I+P+B |
+| `intel_extreme/mpeg2_plugin/gpu_idct.cpp/h` | GPU IDCT standalone per plugin |
+| `intel_extreme/mpeg2_plugin/mpeg2_viewer.cpp` | Viewer standalone .m2v |
+| **Test & Tools** | |
+| `intel_extreme/accelerant/tests/gpu_idct_bench.cpp` | Benchmark GPU vs CPU IDCT |
+| `intel_extreme/accelerant/tests/gpu_plasma_demo.cpp` | Plasma animato via GPU IDCT |
+| `intel_extreme/accelerant/tests/gpu_triangle.cpp` | 3D TRILIST + BLT demo |
+| `intel_extreme/accelerant/tests/test_mc_decode.cpp` | Multi-frame I+P decoder |
+| `intel_extreme/tools/gen4asm/` | Port gen4asm assembler EU |
+| `tools/ring_health.sh` | Diagnostica ring buffer GPU |
+| `tools/test_suite.sh` | Test suite & regression runner |
+| **DRM Shim / Mesa** | |
+| `intel_extreme/accelerant/libdrm_shim.cpp` | Shim DRM ioctl per Mesa crocus |
+| **Documentazione** | |
 | `intel_extreme/ANALISI_TECNICA_DRIVER.md` | Analisi comparativa Haiku vs Linux |
 | `intel_extreme/ANALISI_RENDER_ENGINE_2D.md` | Piano render engine via shader |
 | `intel_extreme/PIANO_ACCELERAZIONE_2D.md` | Piano ottimizzazione BLT |
@@ -218,11 +364,13 @@ case 0x10ec0269:
 | `bench/bench_2d.cpp` | Benchmark 2D (7 test) |
 | `VPCEB3K1E_Haiku_Driver_Report.md` | Report compatibilita hardware |
 | `REPORT_RENDER_ENGINE.md` | Report render engine 3D Gen5 |
+| `TODO_INTEL_GPU_HAIKU.md` | Master TODO con milestone tracking |
+| `PORTING.md` | Guida: aggiungere supporto nuova generazione GPU |
 | `DIFFERENZE_DRIVER.md` | Questo documento |
 
 ---
 
-## 4. Lavoro X-Tiling (non completato)
+## 5. Lavoro X-Tiling (non completato)
 
 L'X-Tiling e stato tentato e documentato ma non completato:
 - Fence register a 0x03000 funziona (read/write verificato)
@@ -235,7 +383,7 @@ L'X-Tiling e stato tentato e documentato ma non completato:
 
 ---
 
-## 5. Come ripristinare i driver originali
+## 6. Come ripristinare i driver originali
 
 ### GPU
 ```bash
