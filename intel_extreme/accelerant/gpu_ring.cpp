@@ -76,42 +76,99 @@ gpu_ring_init(gpu_ring* ring, int device_fd)
 }
 
 
+// Check if GPU is idle (HEAD == TAIL from hardware registers).
+static inline bool
+ring_is_idle(gpu_ring* ring)
+{
+	uint32 head = ring_reg_read(ring, RING_BUFFER_HEAD)
+		& INTEL_RING_BUFFER_HEAD_MASK;
+	uint32 tail = ring_reg_read(ring, RING_BUFFER_TAIL)
+		& (ring->size - 1);
+	return head == tail;
+}
+
+
 status_t
 gpu_ring_begin(gpu_ring* ring, uint32 dwords)
 {
 	uint32 bytes_needed = (dwords + 2) * sizeof(uint32);  // +2 for alignment
 
-	// If command won't fit before end of ring, wrap to position 0.
-	// Wait for HEAD to be past our write zone (not necessarily idle).
+	if (bytes_needed > ring->size - 64)
+		return B_NO_MEMORY;  // command too large for ring
+
+	// If command won't fit before end of ring, we need to wrap.
 	if (ring->pos + bytes_needed > ring->size - 64) {
+		uint32 wrap_start = ring->pos;
+
+		// Step 1: Pad [pos, size) with MI_NOOP so the GPU doesn't
+		// parse stale data when it reaches this region.
+		uint32 noop_dwords = (ring->size - ring->pos) / sizeof(uint32);
+		uint32 ring_dwords = ring->size / sizeof(uint32);
+		for (uint32 i = 0; i < noop_dwords; i++)
+			ring->base[(wrap_start / sizeof(uint32) + i) % ring_dwords] = 0;
+
+		asm volatile("mfence" ::: "memory");
+
+		// Step 2: Wait until HEAD has passed our wrap zone OR is idle.
+		// HEAD must not be in [wrap_start, size) — we just overwrote that.
+		// Safe when: HEAD < wrap_start (behind us, not in NOOP zone),
+		// or HEAD == TAIL (GPU idle, already processed everything).
 		bigtime_t deadline = system_time() + 500000;
+		bool safe = false;
 		while (system_time() < deadline) {
 			uint32 head = ring_reg_read(ring, RING_BUFFER_HEAD)
 				& INTEL_RING_BUFFER_HEAD_MASK;
-			// Safe to wrap if: HEAD is past our pos (already consumed),
-			// or HEAD is at 0 (idle after wrap), or GPU fully idle
-			if (head >= ring->pos || head == 0)
+			if (ring_is_idle(ring)) {
+				safe = true;
 				break;
-			uint32 tail = ring_reg_read(ring, RING_BUFFER_TAIL)
-				& (ring->size - 1);
-			if (head == tail)
-				break;  // GPU idle — always safe
+			}
+			if (head < wrap_start) {
+				safe = true;
+				break;  // HEAD is before our NOOPs, safe
+			}
 			snooze(50);
 		}
+		if (!safe)
+			return B_TIMED_OUT;
+
+		// Step 3: Wrap position to start of ring.
 		ring->pos = 0;
 	}
 
-	// Ensure HEAD is not in our write region [pos, pos+bytes_needed]
+	// Ensure HEAD is not in our write region [pos, pos + bytes_needed).
+	// After wrap, pos=0, so we need HEAD to be past bytes_needed or idle.
 	{
 		bigtime_t deadline = system_time() + 500000;
+		bool safe = false;
 		while (system_time() < deadline) {
 			uint32 head = ring_reg_read(ring, RING_BUFFER_HEAD)
 				& INTEL_RING_BUFFER_HEAD_MASK;
-			// Safe if HEAD is outside our write zone
-			if (head <= ring->pos || head > ring->pos + bytes_needed)
+
+			if (ring_is_idle(ring)) {
+				safe = true;
 				break;
+			}
+
+			// HEAD is outside [pos, pos + bytes_needed)
+			bool outside;
+			if (ring->pos + bytes_needed <= ring->size) {
+				// Normal case: write zone doesn't wrap
+				outside = (head < ring->pos)
+					|| (head >= ring->pos + bytes_needed);
+			} else {
+				// Write zone wraps (shouldn't happen after our wrap above)
+				outside = (head >= ring->pos + bytes_needed - ring->size)
+					&& (head < ring->pos);
+			}
+
+			if (outside) {
+				safe = true;
+				break;
+			}
 			snooze(50);
 		}
+		if (!safe)
+			return B_TIMED_OUT;
 	}
 
 	ring->emit_start = ring->pos;

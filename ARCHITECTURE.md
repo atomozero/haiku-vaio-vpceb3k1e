@@ -2,7 +2,12 @@
 
 **Target hardware:** Intel HD Graphics Gen5 (Ironlake) through Gen8 (Broadwell)
 **OS:** Haiku R1~beta5 (hrev59506+)
-**Status:** Phase 0 planning
+**Status:** Phase 0 in progress (ring wrap done, media pipeline debug)
+
+**Test machines:**
+- **Primary (Gen5):** Sony Vaio VPCEB3K1E — HD Graphics 0x0046 (Ironlake), LVDS 1366x768, ALC269
+- **Secondary (Gen8):** Broadwell laptop — HD Graphics 5500 0x1616, eDP 1920x1080, ALC269
+  Known issue: PLL registers read 0xFFFFFFFF (FORCEWAKE not asserted in stock driver)
 
 ---
 

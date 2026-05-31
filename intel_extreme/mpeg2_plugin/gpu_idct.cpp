@@ -240,29 +240,51 @@ setup_curbe(void)
 }
 
 static void
+write_buffer_surface(addr_t ss_base, uint32 ss_offset,
+	uint32 buffer_gtt, uint32 buffer_bytes)
+{
+	// Match the EXACT encoding from media_pipeline.cpp's
+	// write_linear_surface_state_at(). The surface size is expressed
+	// as num_entries of 16 bytes (OWord = 128 bits = 16 bytes).
+	if (buffer_bytes < 16)
+		buffer_bytes = 16;
+	uint32 num_entries = buffer_bytes / 16;
+	uint32 ne_m1 = num_entries - 1;
+
+	// DW0: SURFTYPE_BUFFER + SURFACEFORMAT_RAW
+	uint32 ss0 = (4u << 29) | (0x1FFu << 18);  // I965_SURFACEFORMAT_RAW = 0x1FF
+	gtt_write32(ss_base, ss_offset + 0, ss0);
+
+	// DW1: base address (GTT offset)
+	gtt_write32(ss_base, ss_offset + 4, buffer_gtt);
+
+	// DW2: Width [12:6] = ne_m1[6:0], Height [31:19] = ne_m1[19:7]
+	uint32 width_bits  = ne_m1 & 0x7Fu;
+	uint32 height_bits = (ne_m1 >> 7) & 0x1FFFu;
+	uint32 ss2 = (width_bits << 6) | (height_bits << 19);
+	gtt_write32(ss_base, ss_offset + 8, ss2);
+
+	// DW3: Depth [27:21] = ne_m1[26:20], Surface Pitch [19:3] = 15
+	uint32 depth_bits = (ne_m1 >> 20) & 0x7Fu;
+	uint32 ss3 = (depth_bits << 21) | (15u << 3);
+	gtt_write32(ss_base, ss_offset + 12, ss3);
+}
+
+static void
 setup_surfaces(void)
 {
 	gtt_clear(sCtx.surface_state_base, 256);
 
 	uint32 ss_off = gtt_offset(sCtx.surface_state_base);
+	uint32 buf_size = GPU_IDCT_MAX_BATCH * 128;
 
-	// Surface 0 (BTI 0): input buffer (SURFTYPE_BUFFER for OWord read)
-	uint32 in_gtt = gtt_offset(sCtx.input_base);
-	uint32 in_size = GPU_IDCT_MAX_BATCH * 128;
-	gtt_write32(sCtx.surface_state_base, 0, (4 << 29));  // SURFTYPE_BUFFER
-	gtt_write32(sCtx.surface_state_base, 4, in_gtt);
-	gtt_write32(sCtx.surface_state_base, 8,
-		((in_size - 1) & 0x7f) | (((in_size - 1) >> 7) << 10));
-	gtt_write32(sCtx.surface_state_base, 12, (in_size - 1) >> 21);
+	// Surface 0 (BTI 0): input buffer (OWord Block Read)
+	write_buffer_surface(sCtx.surface_state_base, 0,
+		gtt_offset(sCtx.input_base), buf_size);
 
-	// Surface 1 (BTI 1): output buffer (SURFTYPE_BUFFER for OWord write)
-	uint32 out_gtt = gtt_offset(sCtx.output_base);
-	uint32 out_size = GPU_IDCT_MAX_BATCH * 128;
-	gtt_write32(sCtx.surface_state_base, 32, (4 << 29));
-	gtt_write32(sCtx.surface_state_base, 36, out_gtt);
-	gtt_write32(sCtx.surface_state_base, 40,
-		((out_size - 1) & 0x7f) | (((out_size - 1) >> 7) << 10));
-	gtt_write32(sCtx.surface_state_base, 44, (out_size - 1) >> 21);
+	// Surface 1 (BTI 1): output buffer (OWord Block Write)
+	write_buffer_surface(sCtx.surface_state_base, 32,
+		gtt_offset(sCtx.output_base), buf_size);
 
 	// Binding table: BTI 0 → surface 0, BTI 1 → surface 1
 	gtt_clear(sCtx.binding_table_base, 64);
@@ -460,6 +482,19 @@ gpu_idct_init(void)
 
 	sCtx.graphics_memory = (uint8*)sCtx.shared_info->graphics_memory;
 
+	// Apply Gen5 workarounds (MI_MODE, CACHE_MODE_0, _3D_CHICKEN2).
+	// CRITICAL: Without WaDisableRenderCachePipelinedFlush, MI_FLUSH
+	// after media dispatch hangs the Command Streamer permanently.
+	{
+		intel_get_private_data init3d;
+		init3d.magic = INTEL_PRIVATE_DATA_MAGIC;
+		if (ioctl(sCtx.device_fd, INTEL_RING_INIT_3D, &init3d,
+				sizeof(init3d)) == 0)
+			LOG("3D workarounds applied (MI_MODE, CACHE_MODE_0)\n");
+		else
+			LOG("WARNING: INTEL_RING_INIT_3D failed\n");
+	}
+
 	// Phase 1: Init gpu_ring (syncs with HW TAIL, no reset)
 	status_t st = gpu_ring_init(&sCtx.ring, sCtx.device_fd);
 	if (st != B_OK) {
@@ -469,6 +504,20 @@ gpu_idct_init(void)
 		return B_ERROR;
 	}
 	LOG("gpu_ring: pos=0x%x size=%u\n", sCtx.ring.pos, sCtx.ring.size);
+
+	// Wait for ring to be idle before starting — previous users
+	// (test tools, app_server) may have left pending commands.
+	if (!gpu_ring_wait_idle(&sCtx.ring, 100000)) {
+		uint32 head = gpu_ring_read_head(&sCtx.ring);
+		LOG("ring not idle at init: HEAD=0x%x pos=0x%x (waiting...)\n",
+			head, sCtx.ring.pos);
+		// Try harder
+		if (!gpu_ring_wait_idle(&sCtx.ring, 500000)) {
+			LOG("ring stuck, syncing pos to HEAD\n");
+			// Sync our pos to where HEAD actually is
+			sCtx.ring.pos = gpu_ring_read_head(&sCtx.ring);
+		}
+	}
 
 	// Allocate GTT buffers
 	#define ALLOC_OR_FAIL(name, sz, align) \
@@ -489,13 +538,46 @@ gpu_idct_init(void)
 	ALLOC_OR_FAIL(marker_base, 64, 64);  // QWord-aligned for MI_STORE_DATA_IMM
 	#undef ALLOC_OR_FAIL
 
+	// Upload kernel + setup state BEFORE ring test (for diagnostics)
+	gtt_clear(sCtx.kernel_base, 4096);
+	gtt_write(sCtx.kernel_base, 0, kIdctKernel, sizeof(kIdctKernel));
+	setup_curbe();
+	setup_surfaces();
+	setup_vfe_state(1);
+	setup_idrt(20);
+
+	// Dump GTT diagnostics always (even if ring is dead)
+	LOG("GTT offsets: kernel=0x%x curbe=0x%x input=0x%x output=0x%x\n",
+		gtt_offset(sCtx.kernel_base), gtt_offset(sCtx.curbe_base),
+		gtt_offset(sCtx.input_base), gtt_offset(sCtx.output_base));
+	LOG("GTT offsets: vfe=0x%x idrt=0x%x ss=0x%x bt=0x%x marker=0x%x\n",
+		gtt_offset(sCtx.vfe_state_base), gtt_offset(sCtx.idrt_base),
+		gtt_offset(sCtx.surface_state_base), gtt_offset(sCtx.binding_table_base),
+		gtt_offset(sCtx.marker_base));
+	// Dump VFE state contents
+	uint32* vfe = (uint32*)gtt_cpu(sCtx.vfe_state_base);
+	LOG("VFE state: DW0=0x%x DW1=0x%x DW2=0x%x\n", vfe[0], vfe[1], vfe[2]);
+	// Dump IDRT contents
+	uint32* idrt = (uint32*)gtt_cpu(sCtx.idrt_base);
+	LOG("IDRT: DW0=0x%x DW1=0x%x DW2=0x%x DW3=0x%x\n",
+		idrt[0], idrt[1], idrt[2], idrt[3]);
+	// Dump binding table
+	uint32* bt = (uint32*)gtt_cpu(sCtx.binding_table_base);
+	LOG("BT: [0]=0x%x [1]=0x%x\n", bt[0], bt[1]);
+	// Dump surface state 0 (input)
+	uint32* ss0 = (uint32*)gtt_cpu(sCtx.surface_state_base);
+	LOG("SS0 (input):  DW0=0x%x DW1=0x%x DW2=0x%x DW3=0x%x\n",
+		ss0[0], ss0[1], ss0[2], ss0[3]);
+	uint32* ss1 = (uint32*)(gtt_cpu(sCtx.surface_state_base) + 32);
+	LOG("SS1 (output): DW0=0x%x DW1=0x%x DW2=0x%x DW3=0x%x\n",
+		ss1[0], ss1[1], ss1[2], ss1[3]);
+
 	// Phase 1: Ring test
 	if (!test_ring()) {
 		LOG("PHASE 1 FAILED: ring is dead, GPU IDCT disabled\n");
 		gpu_idct_uninit();
 		return B_ERROR;
 	}
-	sCtx.ring_tested = true;
 
 	// Phase 2: Marker test
 	if (!test_marker()) {
@@ -503,17 +585,6 @@ gpu_idct_init(void)
 		gpu_idct_uninit();
 		return B_ERROR;
 	}
-	sCtx.marker_tested = true;
-
-	// Upload IDCT kernel
-	gtt_clear(sCtx.kernel_base, 4096);
-	gtt_write(sCtx.kernel_base, 0, kIdctKernel, sizeof(kIdctKernel));
-
-	// Setup GPU state
-	setup_curbe();
-	setup_surfaces();
-	setup_vfe_state(GPU_IDCT_MAX_BATCH > 48 ? 48 : GPU_IDCT_MAX_BATCH);
-	setup_idrt(20);  // curbe_read_len=20 → g1-g20 pushed to kernel
 
 	sCtx.initialized = true;
 	LOG("initialized: kernel=%u bytes, max_batch=%d, ring OK, markers OK\n",
@@ -570,18 +641,83 @@ gpu_idct_process(const int16 blocks[][64], int16 output[][64], uint32 count)
 	*(volatile uint32*)gtt_cpu(sCtx.marker_base) = MARKER_SENTINEL;
 	asm volatile("mfence" ::: "memory");
 
-	// Build batch in GTT buffer
-	build_batch(count);
+	// Reconfigure VFE state + IDRT to match actual block count.
+	// MUST be done every submission — VFE num_urb_entries must match
+	// URB_FENCE allocation, otherwise EU threads stall.
+	uint32 max_threads = (count > 48) ? 48 : count;
+	setup_vfe_state(max_threads);
+	setup_idrt(20);
+	asm volatile("mfence" ::: "memory");
 
-	// Submit via gpu_ring: MI_BATCH_BUFFER_START → batch GTT addr
-	uint32 batch_gtt = gtt_offset(sCtx.batch_base);
-	status_t st = gpu_ring_begin(&sCtx.ring, 4);
+	// Calculate ring space needed:
+	// Preamble: ~30 DW, per-block: 20 DW, postamble: ~10 DW
+	uint32 ring_dwords = 40 + count * 20 + 10;
+	status_t st = gpu_ring_begin(&sCtx.ring, ring_dwords);
 	if (st != B_OK)
 		return st;
 
-	gpu_ring_emit(&sCtx.ring, (0x31 << 23));  // MI_BATCH_BUFFER_START
-	gpu_ring_emit(&sCtx.ring, batch_gtt);
+	// --- Media preamble (directly in ring, NOT in batch buffer) ---
+	// This matches the working media_pipeline.cpp:submit_blocks_batch_gpu()
 
+	gpu_ring_emit(&sCtx.ring, MI_FLUSH);
+
+	// 3DSTATE_DEPTH_BUFFER null (6 DW)
+	gpu_ring_emit(&sCtx.ring, CMD_3DSTATE_DEPTH_BUFFER);
+	gpu_ring_emit(&sCtx.ring, (7 << 29) | (1 << 18));
+	gpu_ring_emit(&sCtx.ring, 0);
+	gpu_ring_emit(&sCtx.ring, 0);
+	gpu_ring_emit(&sCtx.ring, 0);
+	gpu_ring_emit(&sCtx.ring, 0);
+
+	// PIPELINE_SELECT media
+	gpu_ring_emit(&sCtx.ring, CMD_PIPELINE_SELECT | PIPELINE_SELECT_MEDIA);
+
+	// STATE_BASE_ADDRESS Ironlake (8 DW)
+	gpu_ring_emit(&sCtx.ring, CMD_STATE_BASE_ADDRESS | 6);
+	for (int j = 0; j < 7; j++)
+		gpu_ring_emit(&sCtx.ring, BASE_ADDRESS_MODIFY);
+
+	// URB_FENCE (must match VFE num_urb_entries = max_threads)
+	gpu_ring_emit(&sCtx.ring, CMD_URB_FENCE | UF0_VFE_REALLOC | UF0_CS_REALLOC | 1);
+	gpu_ring_emit(&sCtx.ring, 0);
+	gpu_ring_emit(&sCtx.ring, (max_threads << 10) | ((max_threads + 16) << 20));
+
+	// MEDIA_STATE_POINTERS
+	gpu_ring_emit(&sCtx.ring, CMD_MEDIA_STATE_POINTERS | 1);
+	gpu_ring_emit(&sCtx.ring, 0);
+	gpu_ring_emit(&sCtx.ring, gtt_offset(sCtx.vfe_state_base));
+
+	// CS_URB_STATE
+	gpu_ring_emit(&sCtx.ring, CMD_CS_URB_STATE | 0);
+	gpu_ring_emit(&sCtx.ring, ((16 - 1) << 4) | 1);
+
+	// CONSTANT_BUFFER: 10 units of 64 bytes = 640 bytes = 20 GRFs
+	gpu_ring_emit(&sCtx.ring, CMD_CONSTANT_BUFFER | (1u << 8) | 0);
+	gpu_ring_emit(&sCtx.ring, gtt_offset(sCtx.curbe_base) | ((10 - 1) & 0x1f));
+
+	// --- N x MEDIA_OBJECT (20 DW each) ---
+	for (uint32 i = 0; i < count; i++) {
+		uint32 byte_offset = i * 128;
+		gpu_ring_emit(&sCtx.ring, CMD_MEDIA_OBJECT | 18);
+		gpu_ring_emit(&sCtx.ring, 0);  // interface descriptor index
+		gpu_ring_emit(&sCtx.ring, 0);  // indirect data length
+		gpu_ring_emit(&sCtx.ring, 0);  // indirect data pointer
+		gpu_ring_emit(&sCtx.ring, byte_offset);  // inline DW0: input offset
+		gpu_ring_emit(&sCtx.ring, byte_offset);  // inline DW1: output offset
+		for (int p = 2; p < 16; p++)
+			gpu_ring_emit(&sCtx.ring, 0);
+	}
+
+	// --- Completion marker ---
+	gpu_ring_emit(&sCtx.ring, MI_STORE_DATA_IMM_GGTT);
+	gpu_ring_emit(&sCtx.ring, 0);
+	gpu_ring_emit(&sCtx.ring, gtt_offset(sCtx.marker_base));
+	gpu_ring_emit(&sCtx.ring, MARKER_TAG);
+
+	// Final flush
+	gpu_ring_emit(&sCtx.ring, MI_FLUSH);
+
+	// Kick TAIL — single submission, all commands at once
 	st = gpu_ring_advance(&sCtx.ring);
 	if (st != B_OK)
 		return st;
