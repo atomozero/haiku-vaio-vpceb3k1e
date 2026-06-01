@@ -29,6 +29,40 @@ static phys_addr_t sArgbCursorPhysical = 0;	// physical address
 #define ILK_CURSOR_MODE_64_2COLOR	0x06
 #define ILK_CURSOR_MODE_64_ARGB		0x27
 
+// Cursor registers are per-pipe. Pipe B is at offset +0x1000 from Pipe A.
+// The stock Haiku code hard-codes Pipe A. We detect the active pipe.
+static uint32
+cursor_pipe_offset(void)
+{
+	// Check which pipe is active by reading pipe control registers.
+	// LVDS on Ironlake is typically on Pipe B (offset 0x1000).
+	uint32 pipeA = read32(INTEL_DISPLAY_A_PIPE_CONTROL) & (1 << 31);
+	uint32 pipeB = read32(INTEL_DISPLAY_B_PIPE_CONTROL) & (1 << 31);
+
+	if (pipeB && !pipeA)
+		return 0x1000;	// Pipe B only — common for LVDS on ILK
+
+	return 0;	// Pipe A (default)
+}
+
+// Cached pipe offset — computed once on first cursor call.
+static int32 sCursorPipeOffset = -1;
+
+static uint32
+get_cursor_offset(void)
+{
+	if (sCursorPipeOffset < 0)
+		sCursorPipeOffset = cursor_pipe_offset();
+	return (uint32)sCursorPipeOffset;
+}
+
+// Cursor register accessors with pipe offset
+#define CUR_CTRL	(INTEL_CURSOR_CONTROL + get_cursor_offset())
+#define CUR_BASE	(INTEL_CURSOR_BASE + get_cursor_offset())
+#define CUR_POS		(INTEL_CURSOR_POSITION + get_cursor_offset())
+#define CUR_PAL		(INTEL_CURSOR_PALETTE + get_cursor_offset())
+#define CUR_SIZE	(INTEL_CURSOR_SIZE + get_cursor_offset())
+
 
 status_t
 intel_set_cursor_shape(uint16 width, uint16 height, uint16 hotX, uint16 hotY,
@@ -37,7 +71,7 @@ intel_set_cursor_shape(uint16 width, uint16 height, uint16 hotX, uint16 hotY,
 	if (width > 64 || height > 64)
 		return B_BAD_VALUE;
 
-	write32(INTEL_CURSOR_CONTROL, 0);
+	write32(CUR_CTRL, 0);
 		// disable cursor
 
 	// In two-color mode, the data is ordered as follows (always 64 bit per
@@ -62,20 +96,20 @@ intel_set_cursor_shape(uint16 width, uint16 height, uint16 hotX, uint16 hotY,
 	}
 
 	// set palette entries to white/black
-	write32(INTEL_CURSOR_PALETTE + 0, 0x00ffffff);
-	write32(INTEL_CURSOR_PALETTE + 4, 0);
+	write32(CUR_PAL + 0, 0x00ffffff);
+	write32(CUR_PAL + 4, 0);
 
 	if (gInfo->shared_info->device_type.Generation() >= 5) {
 		gInfo->shared_info->cursor_format = ILK_CURSOR_MODE_64_2COLOR;
-		write32(INTEL_CURSOR_CONTROL, ILK_CURSOR_MODE_64_2COLOR);
+		write32(CUR_CTRL, ILK_CURSOR_MODE_64_2COLOR);
 	} else {
 		gInfo->shared_info->cursor_format = CURSOR_FORMAT_2_COLORS;
-		write32(INTEL_CURSOR_CONTROL,
+		write32(CUR_CTRL,
 			CURSOR_ENABLED | gInfo->shared_info->cursor_format);
 	}
-	write32(INTEL_CURSOR_SIZE, height << 12 | width);
+	write32(CUR_SIZE, height << 12 | width);
 
-	write32(INTEL_CURSOR_BASE,
+	write32(CUR_BASE,
 		(uint32)gInfo->shared_info->physical_graphics_memory
 		+ gInfo->shared_info->cursor_buffer_offset);
 
@@ -83,7 +117,7 @@ intel_set_cursor_shape(uint16 width, uint16 height, uint16 hotX, uint16 hotY,
 
 	if (hotX != gInfo->shared_info->cursor_hot_x
 		|| hotY != gInfo->shared_info->cursor_hot_y) {
-		int32 x = read32(INTEL_CURSOR_POSITION);
+		int32 x = read32(CUR_POS);
 		int32 y = x >> 16;
 		x &= 0xffff;
 		
@@ -141,7 +175,7 @@ intel_set_cursor_bitmap(uint16 width, uint16 height, uint16 hotX,
 			+ sArgbCursorOffset;
 	}
 
-	write32(INTEL_CURSOR_CONTROL, 0);
+	write32(CUR_CTRL, 0);
 
 	// Clear to transparent, then copy source bitmap.
 	// Hardware expects 64x64 ARGB (premultiplied alpha).
@@ -157,22 +191,24 @@ intel_set_cursor_bitmap(uint16 width, uint16 height, uint16 hotX,
 
 	if (gInfo->shared_info->device_type.Generation() >= 5) {
 		gInfo->shared_info->cursor_format = ILK_CURSOR_MODE_64_ARGB;
-		write32(INTEL_CURSOR_CONTROL, ILK_CURSOR_MODE_64_ARGB);
+		write32(CUR_CTRL, ILK_CURSOR_MODE_64_ARGB);
 	} else {
 		gInfo->shared_info->cursor_format = CURSOR_FORMAT_ARGB;
-		write32(INTEL_CURSOR_CONTROL,
+		write32(CUR_CTRL,
 			CURSOR_ENABLED | gInfo->shared_info->cursor_format);
 	}
-	write32(INTEL_CURSOR_SIZE, (64 << 12) | 64);
-	write32(INTEL_CURSOR_BASE, (uint32)sArgbCursorPhysical);
+	write32(CUR_SIZE, (64 << 12) | 64);
+	write32(CUR_BASE, (uint32)sArgbCursorPhysical);
 
-	_sPrintf("intel_extreme cursor: ARGB enabled, base=0x%x ctl=0x%x\n",
-		(uint32)sArgbCursorPhysical, read32(INTEL_CURSOR_CONTROL));
+	gInfo->shared_info->cursor_visible = true;
+
+	_sPrintf("intel_extreme cursor: ARGB enabled, base=0x%x ctl=0x%x pipe_off=0x%x\n",
+		(uint32)sArgbCursorPhysical, read32(CUR_CTRL), get_cursor_offset());
 
 	// Update hot spot
 	if (hotX != gInfo->shared_info->cursor_hot_x
 		|| hotY != gInfo->shared_info->cursor_hot_y) {
-		int32 x = read32(INTEL_CURSOR_POSITION);
+		int32 x = read32(CUR_POS);
 		int32 y = x >> 16;
 		x &= 0xffff;
 
@@ -200,6 +236,13 @@ intel_set_cursor_bitmap(uint16 width, uint16 height, uint16 hotX,
 void
 intel_move_cursor(uint16 _x, uint16 _y)
 {
+	static int32 sMoveCount = 0;
+	if (sMoveCount < 5) {
+		_sPrintf("intel_extreme cursor: move(%u,%u) pipe_off=0x%x\n",
+			_x, _y, get_cursor_offset());
+		sMoveCount++;
+	}
+
 	int32 x = (int32)_x - gInfo->shared_info->cursor_hot_x;
 	int32 y = (int32)_y - gInfo->shared_info->cursor_hot_y;
 
@@ -208,32 +251,35 @@ intel_move_cursor(uint16 _x, uint16 _y)
 	if (y < 0)
 		y = -y | CURSOR_POSITION_NEGATIVE;
 
-	write32(INTEL_CURSOR_POSITION, (y << 16) | x);
+	write32(CUR_POS, (y << 16) | x);
 }
 
 
 void
 intel_show_cursor(bool isVisible)
 {
+	_sPrintf("intel_extreme cursor: show(%d) fmt=0x%x pipe_off=0x%x\n",
+		isVisible, gInfo->shared_info->cursor_format, get_cursor_offset());
+
 	if (gInfo->shared_info->cursor_visible == isVisible)
 		return;
 
 	if (gInfo->shared_info->device_type.Generation() >= 5) {
 		// Gen5+: cursor mode in bits [5:0], 0 = disabled
-		write32(INTEL_CURSOR_CONTROL,
+		write32(CUR_CTRL,
 			isVisible ? gInfo->shared_info->cursor_format
 				: ILK_CURSOR_MODE_DISABLE);
 	} else {
-		write32(INTEL_CURSOR_CONTROL, (isVisible ? CURSOR_ENABLED : 0)
+		write32(CUR_CTRL, (isVisible ? CURSOR_ENABLED : 0)
 			| gInfo->shared_info->cursor_format);
 	}
 
 	// Set cursor base — use ARGB buffer if in ARGB mode, else kernel buffer
 	if (sArgbCursorBuffer != NULL
 		&& gInfo->shared_info->cursor_format == ILK_CURSOR_MODE_64_ARGB) {
-		write32(INTEL_CURSOR_BASE, (uint32)sArgbCursorPhysical);
+		write32(CUR_BASE, (uint32)sArgbCursorPhysical);
 	} else {
-		write32(INTEL_CURSOR_BASE,
+		write32(CUR_BASE,
 			(uint32)gInfo->shared_info->physical_graphics_memory
 			+ gInfo->shared_info->cursor_buffer_offset);
 	}
