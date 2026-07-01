@@ -1363,6 +1363,37 @@ err:
 //	#pragma mark -
 
 
+// Config default connectivity field: 0 = Jack, 1 = None, 2 = Fixed, 3 = Dual.
+#define CONF_CONNECTIVITY_FIXED	2
+
+
+/*! Follow an audio input converter's active input path down to the terminal
+	pin complex and report whether it lands on a built-in (Fixed) microphone.
+	Used to pick the internal mic as the default capture converter. */
+static bool
+hda_adc_reaches_fixed_mic(hda_audio_group* audioGroup, uint32 adcNodeID)
+{
+	hda_widget* widget = hda_audio_group_get_widget(audioGroup, adcNodeID);
+
+	for (uint32 depth = 0; widget != NULL && depth < 16; depth++) {
+		if (widget->type == WT_PIN_COMPLEX) {
+			return CONF_DEFAULT_DEVICE(widget->d.pin.config) == PIN_DEV_MIC_IN
+				&& CONF_DEFAULT_CONNECTIVITY(widget->d.pin.config)
+					== CONF_CONNECTIVITY_FIXED;
+		}
+
+		if (widget->num_inputs == 0 || widget->active_input < 0
+			|| (uint32)widget->active_input >= widget->num_inputs)
+			return false;
+
+		widget = hda_audio_group_get_widget(audioGroup,
+			widget->inputs[widget->active_input]);
+	}
+
+	return false;
+}
+
+
 status_t
 hda_audio_group_get_widgets(hda_audio_group* audioGroup, hda_stream* stream)
 {
@@ -1461,6 +1492,26 @@ hda_audio_group_get_widgets(hda_audio_group* audioGroup, hda_stream* stream)
 		}
 
 		stream->io_widgets[count++] = widget.node_id;
+	}
+
+	// A record stream must drive a single capture converter: binding several
+	// ADCs to the same stream tag and channel makes them collide on the HDA
+	// serial link, corrupting or silencing the captured audio. When more than
+	// one ADC is available, keep the one whose active input path reaches the
+	// built-in (Fixed) microphone so the internal mic records by default; the
+	// mixer input-source selector can still switch to the other inputs.
+	if (stream->type == STREAM_RECORD && count > 1) {
+		uint32 best = stream->io_widgets[0];
+		for (uint32 i = 0; i < count; i++) {
+			if (hda_adc_reaches_fixed_mic(audioGroup, stream->io_widgets[i])) {
+				best = stream->io_widgets[i];
+				break;
+			}
+		}
+		TRACE("record: using single capture converter %" B_PRIu32 " of %"
+			B_PRIu32 "\n", best, count);
+		stream->io_widgets[0] = best;
+		count = 1;
 	}
 
 	if (count == 0)

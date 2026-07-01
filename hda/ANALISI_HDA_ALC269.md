@@ -17,7 +17,12 @@
 - Stream playback: 192kHz/24bit, 2 canali
 
 ### Cosa NON funziona
-- **Registrazione (microfono):** `build input tree failed` nel syslog
+- **Registrazione (microfono):** l'input tree dell'ALC269 ORA si costruisce
+  correttamente (fix selector, commit 7bd9965). Il `build input tree failed`
+  ancora presente nel syslog appartiene al codec **HDMI Intel** (function group
+  senza microfono), non all'ALC269. Il bug residuo era nel binding dello stream
+  di cattura: entrambi gli ADC (7 e 8) venivano legati allo stesso stream tag e
+  canale 0, collidendo sul link seriale HDA. Vedi sezione 4. FIXATO.
 - **Jack detection cuffie:** nessun automute speaker quando si inseriscono cuffie
 - **HDMI audio:** `Failed to setup new audio function group` (secondo function group)
 - **VREF pin 0x19:** configurato erroneamente (VREF_80 invece di VREF_GRD)
@@ -107,10 +112,35 @@ aggiungere il supporto per verb di inizializzazione specifici per codec.
 
 ---
 
-## 4. BUG: INPUT TREE FALLITO (MICROFONO NON FUNZIONANTE)
+## 4. BUG: MICROFONO NON FUNZIONANTE (collisione ADC su stream di cattura)
 
-### Il problema
-Il syslog mostra:
+### Aggiornamento diagnosi (dal syslog reale)
+L'input tree dell'ALC269 si costruisce correttamente dopo il fix selector:
+```
+build input tree
+  look at input widget 7 -> selector 36 -> input pin 24 (mic esterno)
+  look at input widget 8 -> selector 35 -> input pin 18 (mic interno)
+build tree!
+```
+Il `build input tree failed` residuo nel syslog e del codec HDMI Intel
+(function group senza ingressi), non dell'ALC269.
+
+### Il bug vero
+Il record stream lega ENTRAMBI gli ADC (7 e 8) allo stesso stream tag e
+canale 0 (`hda_stream_start`, `channelNum += 2` commentato). Due convertitori
+di input sullo stesso (tag, canale) collidono sul link seriale HDA ->
+cattura corrotta/muta. Inoltre l'ADC 7 (usato per primo) instrada solo il mic
+esterno (selector 36 non contiene il pin 18): il mic interno non veniva mai
+catturato.
+
+### Fix applicato
+In `hda_audio_group_get_widgets`, per gli stream di record si usa un SINGOLO
+convertitore, preferendo l'ADC il cui percorso di input attivo termina su un
+mic Fixed (interno). Cosi il mic interno registra di default; il MUX del mixer
+(selector 35: ingressi 24 25 26 27 29 18 11) permette di passare al jack.
+
+### Il problema (storico)
+Il syslog mostrava:
 ```
 hda: build input tree
 hda: build input tree failed
