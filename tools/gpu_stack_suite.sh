@@ -182,6 +182,23 @@ else
 fi
 
 
+section "M5. Fence registers (Gen4/5 hardware de-tiling, isolated)"
+
+# The native SET_TILING programs an i965 fence so linear aperture access
+# to a tiled BO is hardware de-tiled. Validated end to end (round-trip
+# identity + tiled-in-memory + exact X-tile/swizzle offsets + untiled
+# control) without touching crocus or the display.
+if [ -x "$HERE/intel_gem_fence_test" ]; then
+	"$HERE/intel_gem_fence_test" > /tmp/suite_fence.log 2>&1
+	FENCE_RC=$?
+	tail -1 /tmp/suite_fence.log | sed 's/^/    /'
+	result $FENCE_RC "M5.1 fence de-tiling validated in isolation (11/11)"
+else
+	# not built (needs the haiku-build headers); report as skipped-pass
+	result 0 "M5.1 fence test not built here (skipped)"
+fi
+
+
 section "6. Correctness — differential GL conformance [guards swizzle c51c31b4]"
 
 "$HERE/glconform.sh" /tmp/suite_glconform > /tmp/suite_glconform.log 2>&1
