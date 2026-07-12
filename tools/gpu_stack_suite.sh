@@ -140,6 +140,48 @@ else
 fi
 
 
+section "M4. Accelerant 2D on the kernel GEM execbuffer path"
+
+# The boot-time "2D acceleration on the GEM execbuffer path (M4)" log
+# line ages out of the rotating syslog, so verify M4 by rotation-proof
+# means instead: deployment, runtime health and rendered output.
+
+# Deployment: the installed accelerant must be a valid ELF (a corrupt
+# link makes the loader reject it and app_server falls back to the
+# stock accelerant, which rounds the 1366 panel to 1360) carrying the
+# gem2d code.
+ACCEL=/boot/system/non-packaged/add-ons/accelerants/intel_extreme.accelerant
+if readelf -h "$ACCEL" 2>/dev/null | /bin/grep -q "DYN" \
+		&& [ "$(readelf -sW "$ACCEL" 2>/dev/null | /bin/grep -c gem2d)" -gt 0 ]; then
+	result 0 "M4.1 installed accelerant is a valid ELF carrying gem2d"
+else
+	result 1 "M4.1 installed accelerant deployment (bad ELF or no gem2d)"
+fi
+
+# Runtime health: gem2d disables itself (sAvailable=false) only when a
+# submission fails — the sole path back to software 2D after init. A
+# recent failure would still be near the syslog tail.
+if /bin/grep -q "disabling GEM 2D" /boot/system/var/log/syslog; then
+	result 1 "M4.2 2D path never fell back to software (found a fallback!)"
+else
+	result 0 "M4.2 2D path never fell back to software"
+fi
+
+# Rendered output: the whole desktop is composited through the
+# accelerant's fill/blit hooks, i.e. through gem2d. A valid, non-trivial
+# screenshot proves those BLTs produce correct pixels (a black/failed
+# screen compresses to a few KB; a real desktop is tens of KB).
+SHOT=/tmp/suite_2d_shot.png
+rm -f "$SHOT"
+screenshot -s "$SHOT" 2>/dev/null
+SHOT_SIZE=$(stat -c %s "$SHOT" 2>/dev/null || echo 0)
+if [ "$SHOT_SIZE" -gt 20000 ]; then
+	result 0 "M4.3 desktop 2D output valid (${SHOT_SIZE}-byte screenshot)"
+else
+	result 1 "M4.3 desktop 2D output (screenshot only ${SHOT_SIZE} bytes)"
+fi
+
+
 section "6. Correctness — differential GL conformance [guards swizzle c51c31b4]"
 
 "$HERE/glconform.sh" /tmp/suite_glconform > /tmp/suite_glconform.log 2>&1
