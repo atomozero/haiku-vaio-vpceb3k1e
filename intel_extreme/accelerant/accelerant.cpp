@@ -29,6 +29,8 @@
 #include <AGP.h>
 #include <AutoDeleterOS.h>
 
+#include "gem2d.h"
+
 
 #undef TRACE
 #define TRACE_ACCELERANT
@@ -514,6 +516,10 @@ intel_init_accelerant(int device)
 	// Allocate batch buffer for faster 2D command submission
 	init_batch_buffer();
 
+	// M4: route 2D through the kernel GEM execbuffer when the kernel
+	// has GEM enabled (falls back to the legacy ring path otherwise)
+	gem2d_init();
+
 	// Initialize render engine (3D pipeline for 2D ops)
 	render_init();
 
@@ -649,6 +655,7 @@ intel_uninit_accelerant(void)
 		uninit_lock(&info.accelerant_lock);
 		uninit_lock(&info.engine_lock);
 		render_uninit();
+		gem2d_uninit();
 		uninit_batch_buffer();
 		uninit_ring_buffer(info.primary_ring_buffer);
 	}

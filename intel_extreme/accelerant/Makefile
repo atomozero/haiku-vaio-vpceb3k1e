@@ -44,6 +44,7 @@ KERNEL_BINS = $(KERNEL_SRCS:.g4a=.g4b.gen5)
 
 # Accelerant source files
 ACCEL_SRCS = accelerant.cpp bench.cpp cursor.cpp dpms.cpp engine.cpp \
+	gem2d.cpp \
 	gpu_bo.cpp gpu_debug.cpp gpu_ring.cpp gen5_ops.cpp gen6_ops.cpp gen7_ops.cpp \
 	hooks.cpp media_pipeline.cpp \
 	memory.cpp mode.cpp mpeg2_parser.cpp overlay.cpp pll.cpp render.cpp \

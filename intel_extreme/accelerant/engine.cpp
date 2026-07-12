@@ -15,6 +15,7 @@
 #include "accelerant.h"
 #include "accelerant_protos.h"
 #include "commands.h"
+#include "gem2d.h"
 #include "render.h"
 
 
@@ -388,6 +389,11 @@ intel_wait_engine_idle(void)
 		return;
 	}
 
+	// M4: 2D work goes through GEM fences; wait those first. The legacy
+	// checks below still cover ring users left on the bridge (overlay).
+	if (gem2d_available())
+		gem2d_wait_idle();
+
 	// Fast path: check sequence number in Hardware Status Page.
 	// The seq is only updated every 8th submission to reduce overhead,
 	// so we round target down to the nearest multiple of 8.
@@ -454,8 +460,9 @@ void
 intel_screen_to_screen_blit(engine_token* token, blit_params* params,
 	uint32 count)
 {
-	if (false && batch_buffer_available()) {
-		BatchCommands batch(gInfo->shared_info->primary_ring_buffer);
+	if (gem2d_available()) {
+		// M4: submit through the kernel GEM execbuffer instead of the ring
+		gem2d_begin();
 		xy_source_blit_command blit;
 		for (uint32 i = 0; i < count; i++) {
 			blit.source_left = params[i].src_left;
@@ -464,8 +471,9 @@ intel_screen_to_screen_blit(engine_token* token, blit_params* params,
 			blit.dest_top = params[i].dest_top;
 			blit.dest_right = params[i].dest_left + params[i].width + 1;
 			blit.dest_bottom = params[i].dest_top + params[i].height + 1;
-			batch.Put(blit, sizeof(blit));
+			gem2d_add(blit.Data(), sizeof(blit));
 		}
+		gem2d_end();
 		return;
 	}
 
@@ -538,8 +546,8 @@ intel_fill_rectangle(engine_token* token, uint32 color,
 		return;
 	}
 
-	if (false && batch_buffer_available()) {
-		BatchCommands batch(gInfo->shared_info->primary_ring_buffer);
+	if (gem2d_available()) {
+		gem2d_begin();
 		xy_color_blit_command blit(false);
 		blit.color = color;
 		for (uint32 i = 0; i < count; i++) {
@@ -547,8 +555,9 @@ intel_fill_rectangle(engine_token* token, uint32 color,
 			blit.dest_top = params[i].top;
 			blit.dest_right = params[i].right + 1;
 			blit.dest_bottom = params[i].bottom + 1;
-			batch.Put(blit, sizeof(blit));
+			gem2d_add(blit.Data(), sizeof(blit));
 		}
+		gem2d_end();
 		return;
 	}
 
@@ -569,8 +578,8 @@ void
 intel_invert_rectangle(engine_token* token, fill_rect_params* params,
 	uint32 count)
 {
-	if (false && batch_buffer_available()) {
-		BatchCommands batch(gInfo->shared_info->primary_ring_buffer);
+	if (gem2d_available()) {
+		gem2d_begin();
 		xy_color_blit_command blit(true);
 		blit.color = 0xffffffff;
 		for (uint32 i = 0; i < count; i++) {
@@ -578,8 +587,9 @@ intel_invert_rectangle(engine_token* token, fill_rect_params* params,
 			blit.dest_top = params[i].top;
 			blit.dest_right = params[i].right + 1;
 			blit.dest_bottom = params[i].bottom + 1;
-			batch.Put(blit, sizeof(blit));
+			gem2d_add(blit.Data(), sizeof(blit));
 		}
+		gem2d_end();
 		return;
 	}
 
@@ -605,6 +615,31 @@ intel_fill_span(engine_token* token, uint32 color, uint16* _params,
 		uint16	left;
 		uint16	right;
 	} *params = (struct params*)_params;
+
+	if (gem2d_available()) {
+		// The scanline blits depend on the preceding setup command, so
+		// emit them in chunks that are guaranteed to share one batch.
+		xy_setup_mono_pattern_command setup;
+		setup.background_color = color;
+		setup.pattern = 0;
+
+		const uint32 kChunk = 1024;
+		for (uint32 base = 0; base < count; base += kChunk) {
+			uint32 chunkEnd = base + kChunk < count ? base + kChunk : count;
+			gem2d_begin();
+			gem2d_add(setup.Data(), sizeof(setup));
+			xy_scanline_blit_command blit;
+			for (uint32 i = base; i < chunkEnd; i++) {
+				blit.dest_left = params[i].left;
+				blit.dest_top = params[i].top;
+				blit.dest_right = params[i].right;
+				blit.dest_bottom = params[i].top;
+				gem2d_add(blit.Data(), sizeof(blit));
+			}
+			gem2d_end();
+		}
+		return;
+	}
 
 	QueueCommands queue(gInfo->shared_info->primary_ring_buffer);
 
