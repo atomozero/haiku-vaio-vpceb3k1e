@@ -39,6 +39,26 @@ static int sCurrent = 0;
 static size_t sPosition = 0;
 static bool sOpen = false;
 
+// Perf-comparison toggle: when the file below exists, 2D reverts to the
+// legacy ring path (pre-M4 behaviour) so the two submission mechanisms
+// can be A/B benchmarked in a single boot. Re-checked at most every
+// 200 ms to keep the hot path free of a stat() per drawing op.
+static const char* kLegacyToggle =
+	"/boot/home/config/settings/intel_2d_legacy";
+static bigtime_t sToggleChecked = 0;
+static bool sForceLegacy = false;
+
+static bool
+force_legacy()
+{
+	bigtime_t now = system_time();
+	if (now - sToggleChecked > 200000) {
+		sForceLegacy = access(kLegacyToggle, F_OK) == 0;
+		sToggleChecked = now;
+	}
+	return sForceLegacy;
+}
+
 
 static status_t
 gem_ioctl(uint32 op, void* buffer, size_t size)
@@ -118,7 +138,7 @@ gem2d_uninit()
 bool
 gem2d_available()
 {
-	return sAvailable;
+	return sAvailable && !force_legacy();
 }
 
 
