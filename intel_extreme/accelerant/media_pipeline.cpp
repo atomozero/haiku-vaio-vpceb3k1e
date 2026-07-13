@@ -187,7 +187,7 @@ static const uint32 kIqOnlyV3Kernel[][4] = {
 #define MARKER_BO_SIZE		256		// 32 DWORDs of marker slots
 #define SURFACE_STATE_BO_SIZE	256	// up to 8 surface states × 32 bytes stride
 #define BINDING_TABLE_BO_SIZE	64	// 1 DWORD per entry, 32-byte aligned
-#define INPUT_BO_SIZE			524288	// GEMV W (256x256 fp32 = 256KB) + x; SAXPY x/y
+#define INPUT_BO_SIZE			2097152	// GEMV batched W (2048x256 fp32 = 2MB) + x
 
 
 // ---------------------------------------------------------------------------
@@ -1639,15 +1639,18 @@ media_pipeline_run_gemv_test(void)
 
 	// W in input_x_bo (bti 0), x in input_y_bo (bti 1), out in
 	// output_bo (bti 2). Small integers -> exact integer dot products.
+	// R_batch rows are filled so the batched benchmark below can dispatch
+	// up to R_batch/8 threads in a SINGLE submit (W stacks many GEMVs).
+	const uint32 R_batch = 1024;			// <= INPUT_BO / (N*4)
 	float* W = (float*)ctx.input_x_bo.cpu_addr;
 	float* xv = (float*)ctx.input_y_bo.cpu_addr;
 	float* out = (float*)ctx.output_bo.cpu_addr;
-	for (uint32 i = 0; i < D; i++)
+	for (uint32 i = 0; i < R_batch; i++)
 		for (uint32 j = 0; j < N; j++)
 			W[i * N + j] = (float)((int)((i * 7 + j * 3) % 5) - 2);
 	for (uint32 j = 0; j < N; j++)
 		xv[j] = (float)((int)(j % 3) - 1);
-	memset(out, 0, D * sizeof(float));
+	memset(out, 0, R_batch * sizeof(float));
 
 	bigtime_t t_start = bench_now_us();
 	status = submit_parallel_generic(&ctx, threads, 3);
@@ -1741,6 +1744,94 @@ media_pipeline_run_gemv_test(void)
 			cpu_iter_us > 0 ? (double)cpu_iter_us / (double)gpu_iter_us
 			: 0.0);
 		LOG("==================================================\n");
+	}
+
+	// --- BATCHING: many GEMVs per dispatch, to amortize submit overhead ---
+	// The kernel is per-thread (thread t -> rows [t*8..t*8+7]); stacking W
+	// to R_batch rows and dispatching R_batch/8 threads in ONE submit
+	// computes R_batch/D independent D-row GEMVs at once. We verify all
+	// rows, then compare that single big submit against the equivalent
+	// R_batch/D small submits — same total compute, different overhead.
+	if (correct == D) {
+		const uint32 threads_batch = R_batch / rows_per_thread;	// 128
+		const uint32 n_gemv = R_batch / D;			// 4 stacked GEMVs
+
+		memset(out, 0, R_batch * sizeof(float));
+		status = submit_parallel_generic(&ctx, threads_batch, 3);
+		bool bdone = status == B_OK
+			&& gpu_debug_wait_value(last_slot, expected_tag, 2000000);
+
+		uint32 bcorrect = 0;
+		if (bdone) {
+			for (uint32 i = 0; i < R_batch; i++) {
+				float acc = 0.0f;
+				for (uint32 j = 0; j < N; j++)
+					acc += W[i * N + j] * xv[j];
+				if (out[i] == acc)
+					bcorrect++;
+			}
+		}
+		LOG("  BATCHED SUBMIT: %u rows (%u GEMVs) in 1 dispatch, %u/%u "
+			"correct\n", R_batch, n_gemv, bcorrect, R_batch);
+
+		if (bcorrect == R_batch) {
+			const uint32 iters = 100;
+
+			// (A) batched: 1 submit of threads_batch computes all R_batch.
+			bigtime_t b0 = bench_now_us();
+			for (uint32 it = 0; it < iters; it++) {
+				if (submit_parallel_generic(&ctx, threads_batch, 3) != B_OK)
+					break;
+				gpu_debug_wait_value(last_slot, expected_tag, 2000000);
+			}
+			bigtime_t batched_us = (bench_now_us() - b0) / iters;
+
+			// (B) unbatched: n_gemv separate submits of `threads` (32) each
+			// — same R_batch rows, but one submit+drain per D-row GEMV.
+			bigtime_t u0 = bench_now_us();
+			for (uint32 it = 0; it < iters; it++) {
+				for (uint32 g = 0; g < n_gemv; g++) {
+					if (submit_parallel_generic(&ctx, threads, 3) != B_OK)
+						break;
+					gpu_debug_wait_value(last_slot, expected_tag, 2000000);
+				}
+			}
+			bigtime_t unbatched_us = (bench_now_us() - u0) / iters;
+
+			const double flops_all = 2.0 * (double)R_batch * (double)N;
+			LOG("  BATCH BENCH (%u iters, %u D=%u GEMVs = %.0f flops):\n",
+				iters, n_gemv, D, flops_all);
+			LOG("    %u small submits : %lld us  (%.3f GFLOP/s)\n",
+				n_gemv, (long long)unbatched_us,
+				unbatched_us > 0 ? flops_all / (unbatched_us * 1000.0) : 0.0);
+			LOG("    1 big submit     : %lld us  (%.3f GFLOP/s)\n",
+				(long long)batched_us,
+				batched_us > 0 ? flops_all / (batched_us * 1000.0) : 0.0);
+			LOG("    batching speedup : %.2fx  (overhead amortized over "
+				"%u threads/submit)\n",
+				batched_us > 0 ? (double)unbatched_us / (double)batched_us
+				: 0.0, threads_batch);
+
+			// CPU (1 thread) over the same R_batch rows, for scale.
+			volatile float sink = 0.0f;
+			bigtime_t c0 = bench_now_us();
+			for (uint32 it = 0; it < iters; it++)
+				for (uint32 i = 0; i < R_batch; i++) {
+					float acc = 0.0f;
+					for (uint32 j = 0; j < N; j++)
+						acc += W[i * N + j] * xv[j];
+					sink += acc;
+				}
+			bigtime_t cpu_all_us = (bench_now_us() - c0) / iters;
+			(void)sink;
+			LOG("    CPU 1-thread     : %lld us  (%.3f GFLOP/s)\n",
+				(long long)cpu_all_us,
+				cpu_all_us > 0 ? flops_all / (cpu_all_us * 1000.0) : 0.0);
+			LOG("    batched GPU vs 1-thread CPU: %.2fx\n",
+				batched_us > 0 ? (double)cpu_all_us / (double)batched_us
+				: 0.0);
+			LOG("==================================================\n");
+		}
 	}
 
 	media_pipeline_uninit(&ctx);
