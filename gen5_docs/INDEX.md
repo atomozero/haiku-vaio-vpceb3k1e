@@ -145,6 +145,7 @@ Use this as the canonical reference if we keep the BLT engine track alive for 2D
 
 Our own documentation:
 - `LLM_FEASIBILITY.md` — can a small LLM actually run on this GPU, and via which pipeline.
+- `LLM_MATMUL_ON_GEN5_RESULTS.md` — **✅ DONE + honest limit: `stories15M` matmuls run on the EUs end-to-end (decode + `forward_prefill`), byte-identical to CPU. NOT faster — root-caused to the per-thread MEDIA_OBJECT command overhead (no thread-grid dispatch on Gen5). 8 commits, full results & reproduction.**
 - `REFERENCE_PROJECTS.md` — external reference projects and clean-room license analysis.
 - `VIDEO_DECODE_PIVOT.md` — **strategic pivot: video decode as primary goal, LLM as phase 2.**
 - `MEDIA_PIPELINE_BRINGUP.md` — **concrete 10-step command sequence, DWORD-level details, and phase 1 plan extracted from libva-intel-driver.**
