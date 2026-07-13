@@ -17,6 +17,61 @@
 import sys, math
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 256
+
+# GEMM mode: gen_gemv.py N gemm P
+#   OUT_T(D,P) = W(D,N) @ X_T(N,P). One thread owns 8 rows and computes them
+#   for all P token columns via an outer-product tile (acc = 8 GRFs, one SIMD8
+#   row of P tokens each). W row chunks are loaded once per K-chunk and reused
+#   across all P columns -> compute-bound (the 12x regime), few threads (D/8).
+#   Layouts avoid in-kernel transpose:
+#     bti1 = X_T column-major: column k = P contiguous floats at byte k*P*4
+#     bti2 = OUT_T: row i's P tokens contiguous at byte i*P*4
+if len(sys.argv) > 2 and sys.argv[2] == "gemm":
+    P = int(sys.argv[3]) if len(sys.argv) > 3 else 8
+    assert P == 8, "this GEMM tile is SIMD8 (P=8 tokens); tile the prompt in 8s"
+    CHUNKS = N // 8
+    ROWBYTES = N * 4
+    BLOCKBYTES = 8 * ROWBYTES
+    XCOLBYTES = P * 4            # bytes per X_T column (P tokens)
+    OUTROWBYTES = P * 4          # bytes per OUT_T row (P tokens)
+    WT = 10                      # W tile g10..g17
+    XT = 20                      # X tile g20..g27
+    ACC = 40                     # acc g40..g47
+    TMP = 48
+    o = []
+    def ee(s): o.append(s)
+    ee("// AUTO-GENERATED gen_gemv.py gemm — N=%d P=%d. OUT_T=W@X_T." % (N, P))
+    ee("mov (8)  g3<1>UD    g0<8,8,1>UD                         { align1 };")
+    ee("mov (8)  g4<1>UD    g0<8,8,1>UD                         { align1 };")
+    ee("and (1)  g2<1>UD    g1<0,1,0>UD      0x3ffUD            { align1 };  // row_block r")
+    ee("mul (1)  g5<1>UD    g2<0,1,0>UD      %dUD               { align1 };  // W base = r*%d" % (BLOCKBYTES, BLOCKBYTES))
+    ee("mul (1)  g6<1>UD    g2<0,1,0>UD      %dUD               { align1 };  // OUT_T base = r*8*%d" % (8 * OUTROWBYTES, OUTROWBYTES))
+    for r in range(8):
+        ee("mov (8)  g%d<1>F     0.0F                                { align1 };  // acc row %d = 0" % (ACC + r, r))
+    for kc in range(CHUNKS):
+        ee("// ---- K-chunk %d ----" % kc)
+        for r in range(8):
+            ee("add (1)  g3.8<1>UD  g5<0,1,0>UD      0x%xUD             { align1 };" % (r * ROWBYTES + kc * 32))
+            ee("send (16) 0 g%d<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };" % (WT + r))
+        for kk in range(8):
+            ee("mov (1)  g4.8<1>UD  0x%xUD                              { align1 };" % ((kc * 8 + kk) * XCOLBYTES))
+            ee("send (16) 0 g%d<1>UW g4<8,8,1>UW read(1,0,2,0) mlen 1 rlen 1 { align1 };" % (XT + kk))
+        for kk in range(8):
+            for r in range(8):
+                ee("mul (8)  g%d<1>F    g%d<8,8,1>F      g%d.%d<0,1,0>F     { align1 };" % (TMP, XT + kk, WT + r, kk * 4))
+                ee("add (8)  g%d<1>F    g%d<8,8,1>F      g%d<8,8,1>F        { align1 };" % (ACC + r, ACC + r, TMP))
+    ee("// ---- write 8 rows x P tokens ----")
+    for r in range(8):
+        ee("add (1)  g3.8<1>UD  g6<0,1,0>UD      0x%xUD             { align1 };" % (r * OUTROWBYTES))
+        ee("mov (8)  m1<1>F     g%d<8,8,1>F                         { align1 };" % (ACC + r))
+        ee("send (16) 0 acc0<1>UW g3<8,8,1>UW write(2, 2, 0, 0) mlen 2 rlen 0 { align1 };")
+    ee("send (16) 0 acc0<1>UW g0<8,8,1>UW")
+    ee("\tthread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };")
+    open("gemm_n%d_p%d.g4a" % (N, P), "w").write("\n".join(o) + "\n")
+    print("wrote gemm_n%d_p%d.g4a: %d lines, ~%d instructions"
+          % (N, P, len(o), len([x for x in o if not x.startswith('//')])))
+    sys.exit(0)
+
 PACK = len(sys.argv) > 2 and sys.argv[2] == "pack"
 if PACK:
     RPAD = int(sys.argv[3])

@@ -118,6 +118,12 @@ static const uint32 kGemvKernel288Pack128[][4] = {
 #include "kernels/gemv_n288_pack128.g4b.gen5"
 };
 
+// Outer-product GEMM: one thread does 8 rows x P=8 token columns, reusing its
+// W row chunks across all columns (compute-bound). D/8 threads, no overflow.
+static const uint32 kGemmN288P8[][4] = {
+#include "kernels/gemm_n288_p8.g4b.gen5"
+};
+
 static const uint32 kSamplerReadKernel[][4] = {
 #include "kernels/sampler_read.g4b.gen5"
 };
@@ -1970,6 +1976,7 @@ media_pipeline_run_prefill_test(void)
 		// (C) token-in-index: T*RPAD threads, one thread per (token,row).
 		// More in-flight threads hide the OWord-read latency that starves
 		// the 36-thread kernels.
+		bigtime_t pack_us = 0;			// per-dispatch cost of token-in-index
 		const uint32 RPAD = 64;			// D/8=36 padded to a power of 2
 		const uint32 pack_threads = T * RPAD;	// 256
 		const uint32 pack_stride = RPAD * rows_per_thread;	// 512 out rows/tok
@@ -1995,7 +2002,7 @@ media_pipeline_run_prefill_test(void)
 				submit_parallel_generic(&ctx, pack_threads, 3);
 				gpu_debug_wait_value(slot, tag, 2000000);
 			}
-			bigtime_t pack_us = (bench_now_us() - c0) / iters;
+			pack_us = (bench_now_us() - c0) / iters;
 			LOG("    token-in-index dispatch: %lld us  (%lld us/token)\n",
 				(long long)pack_us, (long long)(pack_us / T));
 			LOG("    vs single dispatches: %.2fx, vs multi-token loop: %.2fx\n",
@@ -2018,6 +2025,60 @@ media_pipeline_run_prefill_test(void)
 			LOG("    CPU 1-thread: %lld us  (%lld us/token) -> GPU pack %.2fx\n",
 				(long long)cpu_us, (long long)(cpu_us / T),
 				pack_us > 0 ? (double)cpu_us / (double)pack_us : 0.0);
+		}
+
+		// (D) outer-product GEMM microkernel: 8 rows x 8 token columns per
+		// thread, W reused across columns. D/8 threads only, one dispatch.
+		const uint32 GP = 8;
+		float* XT = X;						// reuse input_y_bo as X_T
+		float* OT = OUT;					// reuse output_bo as OUT_T
+		for (uint32 k = 0; k < N; k++)
+			for (uint32 t = 0; t < GP; t++)
+				XT[k * GP + t] = (float)((int)((k + t * 2) % 3) - 1);
+		memset(OT, 0, (size_t)D * GP * sizeof(float));
+		media_pipeline_upload_kernel(&ctx,
+			(const uint32*)kGemmN288P8, sizeof(kGemmN288P8));
+		submit_parallel_generic(&ctx, D / rows_per_thread, 3);
+		gpu_debug_wait_value(slot, tag, 2000000);
+		uint32 gcorrect = 0;
+		for (uint32 i = 0; i < D; i++)
+			for (uint32 t = 0; t < GP; t++) {
+				float acc = 0.0f;
+				for (uint32 k = 0; k < N; k++)
+					acc += W[i * N + k] * XT[k * GP + t];
+				if (OT[i * GP + t] == acc)
+					gcorrect++;
+			}
+		LOG("  GEMM microkernel: %u/%u correct (%u threads, %u tokens)\n",
+			gcorrect, D * GP, D / rows_per_thread, GP);
+		if (gcorrect == D * GP) {
+			bigtime_t e0 = bench_now_us();
+			for (uint32 it = 0; it < iters; it++) {
+				submit_parallel_generic(&ctx, D / rows_per_thread, 3);
+				gpu_debug_wait_value(slot, tag, 2000000);
+			}
+			bigtime_t gemm_us = (bench_now_us() - e0) / iters;
+			volatile float gsink = 0.0f;
+			bigtime_t f0 = bench_now_us();
+			for (uint32 it = 0; it < iters; it++)
+				for (uint32 i = 0; i < D; i++)
+					for (uint32 t = 0; t < GP; t++) {
+						float acc = 0.0f;
+						for (uint32 k = 0; k < N; k++)
+							acc += W[i * N + k] * XT[k * GP + t];
+						gsink += acc;
+					}
+			bigtime_t gcpu_us = (bench_now_us() - f0) / iters;
+			(void)gsink;
+			LOG("  GEMM BENCH (%u iters, %u tokens, 1 dispatch):\n", iters, GP);
+			LOG("    GPU GEMM  : %lld us  (%lld us/token)\n",
+				(long long)gemm_us, (long long)(gemm_us / GP));
+			LOG("    CPU 1-thr : %lld us  (%lld us/token) -> GPU %.2fx\n",
+				(long long)gcpu_us, (long long)(gcpu_us / GP),
+				gemm_us > 0 ? (double)gcpu_us / (double)gemm_us : 0.0);
+			LOG("    per-token: GEMM %lld vs token-in-index %lld vs single %lld\n",
+				(long long)(gemm_us / GP), (long long)(pack_us / T),
+				(long long)(singles_us / T));
 		}
 		LOG("==================================================\n");
 	}
