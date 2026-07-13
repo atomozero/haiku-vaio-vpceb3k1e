@@ -86,6 +86,15 @@ static const uint32 kSaxpyKernel[][4] = {
 #include "kernels/saxpy_simd8.g4b.gen5"
 };
 
+static const uint32 kGemvKernel[][4] = {
+#include "kernels/gemv_n32.g4b.gen5"
+};
+
+// N=256 GEMV, x read once per thread from surface (LLM-relevant row width).
+static const uint32 kGemvKernel256[][4] = {
+#include "kernels/gemv_n256.g4b.gen5"
+};
+
 static const uint32 kSamplerReadKernel[][4] = {
 #include "kernels/sampler_read.g4b.gen5"
 };
@@ -170,7 +179,7 @@ static const uint32 kIqOnlyV3Kernel[][4] = {
 // ---------------------------------------------------------------------------
 
 #define BATCH_BO_SIZE		40960	// 40KB for up to 400-block batch via MI_BATCH_BUFFER_START
-#define KERNEL_BO_SIZE		4096	// up to ~256 instructions (idct_single is ~110)
+#define KERNEL_BO_SIZE		32768	// up to ~2048 instructions (gemv_n256 is ~1120)
 #define VFE_STATE_BO_SIZE	64		// struct i965_vfe_state = 24 bytes, pad to 64
 #define IDRT_BO_SIZE		64		// one interface descriptor = 16 bytes, pad
 #define CURBE_BO_SIZE		1024	// up to 30 GRFs (libva MPEG-2 ABI)
@@ -178,7 +187,7 @@ static const uint32 kIqOnlyV3Kernel[][4] = {
 #define MARKER_BO_SIZE		256		// 32 DWORDs of marker slots
 #define SURFACE_STATE_BO_SIZE	256	// up to 8 surface states × 32 bytes stride
 #define BINDING_TABLE_BO_SIZE	64	// 1 DWORD per entry, 32-byte aligned
-#define INPUT_BO_SIZE			65536	// SAXPY input buffers (x, y), up to 16K FP32
+#define INPUT_BO_SIZE			524288	// GEMV W (256x256 fp32 = 256KB) + x; SAXPY x/y
 
 
 // ---------------------------------------------------------------------------
@@ -498,7 +507,11 @@ write_interface_descriptor_ex(media_pipeline_context* ctx,
 	// caller requested any CURBE push, preserving the minimal
 	// allocation for non-CURBE kernels so those stay cheap. See libva
 	// i965_media_mpeg2.c:708.
-	uint32 grf_reg_blocks = (curbe_read_len > 0) ? 15u : 2u;
+	// GEMV N=256 keeps 32 x-chunks resident (g10..g41) plus scratch up to
+	// g47, i.e. 48 GRFs. grf_reg_blocks=6 gives (6+1)*8 = 56 regs, enough
+	// for it while still leaving room for concurrent threads; tiny kernels
+	// (saxpy g14, idct g20) just under-use their allocation.
+	uint32 grf_reg_blocks = (curbe_read_len > 0) ? 15u : 6u;
 	uint32 desc0 = grf_reg_blocks
 		| (ctx->kernel_bo.gtt_offset & ~0x3fu);
 	gpu_bo_write32(&ctx->idrt_bo, 0, desc0);
@@ -1575,6 +1588,163 @@ media_pipeline_run_saxpy_test(void)
 
 	media_pipeline_uninit(&ctx);
 	return (correct == MEDIA_SAXPY_ELEMENTS) ? B_OK : B_ERROR;
+}
+
+
+// Level 2 POC: GEMV (matrix x vector) on the Gen5 EUs — out[i] =
+// dot(W[i][0..N-1], x[0..N-1]). The gemv_n32 kernel fixes N=32 and
+// computes 8 output rows per thread. Integer-valued W and x keep every
+// dot product an exact fp32 integer so GPU (tree reduction) and CPU
+// (sequential) agree bit-exact.
+status_t
+media_pipeline_run_gemv_test(void)
+{
+	_sPrintf("intel_extreme media: *** gemv test entry reached ***\n");
+
+	if (gInfo == NULL || gInfo->shared_info == NULL
+		|| gInfo->shared_info->graphics_memory == NULL)
+		return B_NOT_INITIALIZED;
+
+	const uint32 N = 256;			// row length (kernel-fixed, LLM-scale)
+	const uint32 D = 256;			// output rows
+	const uint32 rows_per_thread = 8;	// kernel-fixed
+	const uint32 threads = D / rows_per_thread;	// 32 (<= 48)
+
+	LOG("==================================================\n");
+	LOG("  LEVEL 2 — GEMV ON THE EUs (N=%u, D=%u, %u threads)\n",
+		N, D, threads);
+	LOG("==================================================\n");
+
+	media_pipeline_context ctx;
+	status_t status = media_pipeline_init(&ctx);
+	if (status != B_OK) { LOG("gemv: init failed\n"); return status; }
+
+	status = media_pipeline_upload_kernel(&ctx,
+		(const uint32*)kGemvKernel256, sizeof(kGemvKernel256));
+	if (status != B_OK) {
+		LOG("gemv: kernel upload failed %s\n", strerror(status));
+		media_pipeline_uninit(&ctx);
+		return status;
+	}
+
+	// setup_saxpy_buffers writes the 3 linear surface states + binding
+	// table (sized to the whole BOs), which is exactly what we need;
+	// its x/y fill is overwritten below.
+	status = media_pipeline_setup_saxpy_buffers(&ctx, N);
+	if (status != B_OK) {
+		LOG("gemv: buffer setup failed %s\n", strerror(status));
+		media_pipeline_uninit(&ctx);
+		return status;
+	}
+
+	// W in input_x_bo (bti 0), x in input_y_bo (bti 1), out in
+	// output_bo (bti 2). Small integers -> exact integer dot products.
+	float* W = (float*)ctx.input_x_bo.cpu_addr;
+	float* xv = (float*)ctx.input_y_bo.cpu_addr;
+	float* out = (float*)ctx.output_bo.cpu_addr;
+	for (uint32 i = 0; i < D; i++)
+		for (uint32 j = 0; j < N; j++)
+			W[i * N + j] = (float)((int)((i * 7 + j * 3) % 5) - 2);
+	for (uint32 j = 0; j < N; j++)
+		xv[j] = (float)((int)(j % 3) - 1);
+	memset(out, 0, D * sizeof(float));
+
+	bigtime_t t_start = bench_now_us();
+	status = submit_parallel_generic(&ctx, threads, 3);
+	if (status != B_OK) {
+		LOG("gemv: submit failed %s\n", strerror(status));
+		media_pipeline_uninit(&ctx);
+		return status;
+	}
+	const uint32 expected_tag =
+		MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	volatile uint32* last_slot = (volatile uint32*)(ctx.marker_bo.cpu_addr
+		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
+	bool done = gpu_debug_wait_value(last_slot, expected_tag, 1000000);
+	bigtime_t gpu_us = bench_now_us() - t_start;
+
+	if (!done) {
+		LOG("gemv: TIMEOUT — pipeline did not drain\n");
+		gpu_debug_dump_registers("gemv post-timeout");
+		media_pipeline_uninit(&ctx);
+		return B_ERROR;
+	}
+
+	// CPU reference + compare (exact).
+	uint32 correct = 0;
+	uint32 first_bad = D;
+	for (uint32 i = 0; i < D; i++) {
+		float acc = 0.0f;
+		for (uint32 j = 0; j < N; j++)
+			acc += W[i * N + j] * xv[j];
+		if (out[i] == acc)
+			correct++;
+		else if (first_bad == D)
+			first_bad = i;
+	}
+
+	float cpu0 = 0.0f, cpu1 = 0.0f;
+	for (uint32 j = 0; j < N; j++) {
+		cpu0 += W[j] * xv[j];
+		cpu1 += W[N + j] * xv[j];
+	}
+	LOG("gemv: row0 GPU=%d CPU=%d, row1 GPU=%d CPU=%d\n",
+		(int)out[0], (int)cpu0, (int)out[1], (int)cpu1);
+	LOG("gemv: GPU wall %lld us, %u/%u rows correct",
+		(long long)gpu_us, correct, D);
+	if (correct != D)
+		LOG(", first mismatch row %u (GPU=%d)", first_bad,
+			(int)out[first_bad]);
+	LOG("\n");
+	LOG("==================================================\n");
+	LOG("  GEMV RESULT: %s\n", correct == D ? "PASSED — matrix x vector "
+		"on the Ironlake EUs, bit-exact vs CPU" : "FAILURE");
+	LOG("==================================================\n");
+
+	// --- fair-ish GPU-vs-CPU benchmark (only if the kernel is correct) ---
+	// Each GEMV is 2*D*N flops (mul + add per element). We time the GPU
+	// dispatch+drain and the same computation single-threaded on the i3.
+	if (correct == D) {
+		const uint32 iters = 200;
+		const double flops = 2.0 * (double)D * (double)N;
+
+		bigtime_t g0 = bench_now_us();
+		for (uint32 it = 0; it < iters; it++) {
+			if (submit_parallel_generic(&ctx, threads, 3) != B_OK)
+				break;
+			gpu_debug_wait_value(last_slot, expected_tag, 1000000);
+		}
+		bigtime_t gpu_iter_us = (bench_now_us() - g0) / iters;
+
+		volatile float sink = 0.0f;
+		bigtime_t c0 = bench_now_us();
+		for (uint32 it = 0; it < iters; it++) {
+			for (uint32 i = 0; i < D; i++) {
+				float acc = 0.0f;
+				for (uint32 j = 0; j < N; j++)
+					acc += W[i * N + j] * xv[j];
+				sink += acc;
+			}
+		}
+		bigtime_t cpu_iter_us = (bench_now_us() - c0) / iters;
+		(void)sink;
+
+		LOG("  BENCH (%u iters, %ux%u GEMV = %.0f flops each):\n",
+			iters, D, N, flops);
+		LOG("    GPU %lld us/iter  (%.3f GFLOP/s)\n",
+			(long long)gpu_iter_us,
+			gpu_iter_us > 0 ? flops / (gpu_iter_us * 1000.0) : 0.0);
+		LOG("    CPU %lld us/iter  (%.3f GFLOP/s)  [1 thread]\n",
+			(long long)cpu_iter_us,
+			cpu_iter_us > 0 ? flops / (cpu_iter_us * 1000.0) : 0.0);
+		LOG("    GPU speedup vs 1-thread CPU: %.2fx\n",
+			cpu_iter_us > 0 ? (double)cpu_iter_us / (double)gpu_iter_us
+			: 0.0);
+		LOG("==================================================\n");
+	}
+
+	media_pipeline_uninit(&ctx);
+	return correct == D ? B_OK : B_ERROR;
 }
 
 

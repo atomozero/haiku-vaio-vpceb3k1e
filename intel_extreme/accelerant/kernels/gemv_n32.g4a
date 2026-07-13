@@ -1,0 +1,227 @@
+/*
+ * Copyright 2026, Haiku, Inc. All Rights Reserved.
+ * Distributed under the terms of the MIT License.
+ *
+ * Gen5 GEMV kernel (Level 2 POC) — matrix x vector, the atom of LLM
+ * inference. Computes out[i] = dot(W[i][0..N-1], x[0..N-1]).
+ *
+ * Correctness-first version, built from the proven saxpy_simd8 read/
+ * write primitives plus a SIMD8 multiply-accumulate and a log-reduction
+ * horizontal sum. No CURBE yet (x is read from a surface, redundantly
+ * per thread) — that is the next optimization once this verifies.
+ *
+ * Fixed shape: N = 32 (row length), ROWS_PER_THREAD = 8. Each thread
+ * computes 8 consecutive output rows and writes them as 8 FP32 (one GRF,
+ * 2 OWords) exactly like saxpy's output, so D/8 threads cover D rows.
+ *
+ * Binding table (set up CPU-side):
+ *   [0] = W  surface  (D x N FP32, row-major)
+ *   [1] = x  surface  (N FP32)
+ *   [2] = out surface (D FP32)
+ *
+ * Inline thread index arrives at g1.0 (MEDIA_OBJECT), same as saxpy.
+ * N = 32 FP32 = 128 bytes/row = 4 OWord-pairs (4 reads of 8 FP32).
+ */
+
+// g3 = header for W reads, g4 = header for x reads. Both start as R0.
+mov (8)  g3<1>UD    g0<8,8,1>UD                         { align1 };
+mov (8)  g4<1>UD    g0<8,8,1>UD                         { align1 };
+
+// Thread index t (masked). Base output row = t*8. Base W byte offset =
+// (t*8) * (N*4) = t*8*128 = t*1024.  x base offset = 0 (shared).
+and (1)  g2<1>UD    g1<0,1,0>UD      0x3ffUD            { align1 };
+mul (1)  g5<1>UD    g2<0,1,0>UD      1024UD            { align1 };   // W row-block base
+
+// ---- read the shared x vector (N=32 = 4 chunks of 8 FP32) into g10..g13 ----
+mov (1)  g4.8<1>UD  0x0UD                               { align1 };
+send (16) 0  g10<1>UW  g4<8,8,1>UW  read(1, 0, 2, 0) mlen 1 rlen 1 { align1 };
+mov (1)  g4.8<1>UD  0x20UD                              { align1 };
+send (16) 0  g11<1>UW  g4<8,8,1>UW  read(1, 0, 2, 0) mlen 1 rlen 1 { align1 };
+mov (1)  g4.8<1>UD  0x40UD                              { align1 };
+send (16) 0  g12<1>UW  g4<8,8,1>UW  read(1, 0, 2, 0) mlen 1 rlen 1 { align1 };
+mov (1)  g4.8<1>UD  0x60UD                              { align1 };
+send (16) 0  g13<1>UW  g4<8,8,1>UW  read(1, 0, 2, 0) mlen 1 rlen 1 { align1 };
+
+// ================= ROW MACRO (repeated 8x, row r = 0..7) =================
+// For row r: W byte offset = g5 + r*128. Read 4 chunks into g14..g17,
+// accumulate g20 = sum(W_chunk * x_chunk), horizontal-sum g20 -> g30.<r*4>.
+//
+// Uses g6 as the running W byte offset (g5 + r*128).
+
+// ---- row 0 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      0UD                { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+// horizontal sum of g20[0..7] -> g30.0
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.0<1>F  g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- row 1 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      128UD              { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.4<1>F  g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- row 2 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      256UD              { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.8<1>F  g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- row 3 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      384UD              { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.12<1>F g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- row 4 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      512UD              { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.16<1>F g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- row 5 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      640UD              { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.20<1>F g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- row 6 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      768UD              { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.24<1>F g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- row 7 ----
+add (1)  g6<1>UD    g5<0,1,0>UD      896UD              { align1 };
+mov (1)  g3.8<1>UD  g6<0,1,0>UD                         { align1 };
+send (16) 0 g14<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x20UD             { align1 };
+send (16) 0 g15<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x40UD             { align1 };
+send (16) 0 g16<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+add (1)  g3.8<1>UD  g6<0,1,0>UD      0x60UD             { align1 };
+send (16) 0 g17<1>UW g3<8,8,1>UW read(0,0,2,0) mlen 1 rlen 1 { align1 };
+mul (8)  g20<1>F    g14<8,8,1>F      g10<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g15<8,8,1>F      g11<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g16<8,8,1>F      g12<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+mul (8)  g21<1>F    g17<8,8,1>F      g13<8,8,1>F        { align1 };
+add (8)  g20<1>F    g20<8,8,1>F      g21<8,8,1>F        { align1 };
+add (4)  g22<1>F    g20.0<4,4,1>F    g20.16<4,4,1>F     { align1 };
+add (2)  g22<1>F    g22.0<2,2,1>F    g22.8<2,2,1>F      { align1 };
+add (1)  g30.28<1>F g22.0<0,1,0>F    g22.4<0,1,0>F      { align1 };
+
+// ---- write the 8 output rows (8 FP32 = 2 OWords) to out[t*8..] ----
+mul (1)  g3.8<1>UD  g2<0,1,0>UD      32UD               { align1 };   // out byte off = t*32
+mov (8)  m1<1>F     g30<8,8,1>F                         { align1 };
+send (16) 0 acc0<1>UW g3<8,8,1>UW write(2, 2, 0, 0) mlen 2 rlen 0 { align1 };
+
+// EOT.
+send (16) 0 acc0<1>UW g0<8,8,1>UW
+	thread_spawner(0, 0, 0) mlen 1 rlen 0 { align1 EOT };

@@ -199,6 +199,9 @@ status_t media_pipeline_run_saxpy_bench_test(void);
 // A warmup dispatch is verified bit-exact before timing starts.
 status_t media_pipeline_run_saxpy_perf_test(void);
 
+// Level 2 POC: GEMV (matrix x vector) on the Gen5 EUs, verified vs CPU.
+status_t media_pipeline_run_gemv_test(void);
+
 // Phase 2.2: first kernel using the data port Media Block Read
 // message via sampler cache. Sets up a SURFTYPE_2D input surface
 // pre-filled with the pattern byte[i] = i & 0xff, a SURFTYPE_BUFFER
