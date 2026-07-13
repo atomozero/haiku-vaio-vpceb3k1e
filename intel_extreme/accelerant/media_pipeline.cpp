@@ -1885,6 +1885,32 @@ gemv_resident_weight(const float* w, int n, int d)
 	return &e->bo;
 }
 
+// Like gemv_resident_weight but concatenates `count` weights (each [d,n],
+// all sharing the same x) into one GTT buffer, keyed by w[0]. One dispatch
+// of count*d/8 threads then computes all `count` GEMVs at once.
+static gpu_bo*
+gemv_resident_stacked(const float* const* w, int count, int n, int d)
+{
+	for (uint32 i = 0; i < sGemvWCount; i++) {
+		if (sGemvWCache[i].w == w[0])
+			return &sGemvWCache[i].bo;
+	}
+	if (sGemvWCount >= GEMV_WCACHE_MAX)
+		return NULL;
+	gemv_wentry* e = &sGemvWCache[sGemvWCount];
+	uint32 rowbytes = (uint32)((size_t)d * (size_t)n * sizeof(float));
+	if (gpu_bo_alloc(&e->bo, "gemv:stacked",
+			rowbytes * (uint32)count, 0) != B_OK)
+		return NULL;
+	for (int j = 0; j < count; j++) {
+		memcpy((void*)(e->bo.cpu_addr + (addr_t)j * rowbytes), w[j],
+			rowbytes);
+	}
+	e->w = w[0];
+	sGemvWCount++;
+	return &e->bo;
+}
+
 status_t
 media_pipeline_gemv_open(void)
 {
@@ -1945,6 +1971,45 @@ media_pipeline_gemv(const float* w, const float* x, float* out, int n, int d)
 
 	memcpy(out, (const void*)sGemvCtx.output_bo.cpu_addr,
 		(size_t)d * sizeof(float));
+	return B_OK;
+}
+
+// Batched matmul: `count` weights (each [d,288], sharing x) in ONE dispatch
+// of count*d/8 EU threads. out[i][0..d) = w[i](d,288) @ x. This is the lever
+// that amortizes the per-dispatch overhead across a whole layer's Q/K/V or
+// gate/up matmuls.
+status_t
+media_pipeline_gemv_stacked(const float* const* w, int count, const float* x,
+	float* const* out, int n, int d)
+{
+	if (!sGemvReady || n != 288 || d <= 0 || (d & 7) != 0 || count < 1)
+		return B_BAD_VALUE;
+	uint32 total_threads = (uint32)count * (uint32)d / 8u;
+	if (total_threads > 1024)			// kernel masks index to 10 bits
+		return B_BAD_VALUE;
+	if ((size_t)count * (size_t)d * sizeof(float) > OUTPUT_BO_SIZE)
+		return B_BAD_VALUE;
+
+	gpu_bo* wbo = gemv_resident_stacked(w, count, n, d);
+	if (wbo == NULL)
+		return B_BAD_VALUE;
+	write_linear_surface_state_at(&sGemvCtx, 0, wbo->gtt_offset, wbo->size);
+	memcpy((void*)sGemvCtx.input_y_bo.cpu_addr, x,
+		(size_t)n * sizeof(float));
+
+	status_t s = submit_parallel_generic(&sGemvCtx, total_threads, 3);
+	if (s != B_OK)
+		return s;
+	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	volatile uint32* slot = (volatile uint32*)(sGemvCtx.marker_bo.cpu_addr
+		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
+	if (!gpu_debug_wait_value(slot, tag, 2000000))
+		return B_TIMED_OUT;
+
+	for (int j = 0; j < count; j++) {
+		memcpy(out[j], (const void*)(sGemvCtx.output_bo.cpu_addr
+			+ (addr_t)j * d * sizeof(float)), (size_t)d * sizeof(float));
+	}
 	return B_OK;
 }
 

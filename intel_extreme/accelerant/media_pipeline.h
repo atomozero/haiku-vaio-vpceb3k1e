@@ -207,6 +207,9 @@ status_t media_pipeline_run_gemv_test(void);
 status_t media_pipeline_gemv_open(void);
 status_t media_pipeline_gemv(const float* w, const float* x, float* out,
 	int n, int d);
+// Batched: `count` weights sharing x, in one dispatch. N=288, count*d/8<=1024.
+status_t media_pipeline_gemv_stacked(const float* const* w, int count,
+	const float* x, float* const* out, int n, int d);
 void media_pipeline_gemv_close(void);
 
 // Phase 2.2: first kernel using the data port Media Block Read
