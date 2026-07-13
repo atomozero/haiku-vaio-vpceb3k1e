@@ -90,7 +90,15 @@ capped by dispatch overhead and the limited thread count, not by compute.
 | Path | tok/s | vs CPU |
 |---|---|---|
 | Decode, GPU (batched forward) | 18.7 | CPU 26.9 → **GPU slower** |
-| Prefill (P=14), GPU | 52 | CPU 97 → **GPU slower** |
+| Prefill, GPU token-in-index (P=14) | 52 | CPU 97 → **GPU slower** |
+| Prefill, GPU **GEMM microkernel** (P=23) | 45.6 | CPU 82 → **GPU slower** |
+
+`forward_prefill` was wired to the outer-product GEMM microkernel end-to-end:
+output is **byte-identical** to the CPU (the GEMM accumulates K in sequential
+order, matching the CPU fp order exactly), and it never overflows the batch
+(d/8 = 36–96 threads). Still ~1.8× slower than CPU — a full prefill is ~108 GEMM
+dispatches, and each still pays the fixed dispatch cost at ~0.1% EU utilisation.
+The best possible kernel, integrated end-to-end, confirms the ceiling.
 
 ---
 
