@@ -1856,6 +1856,35 @@ media_pipeline_run_gemv_test(void)
 static media_pipeline_context sGemvCtx;
 static bool sGemvReady = false;
 
+// Resident weight cache: transformer weights are fixed, so each distinct W
+// pointer is uploaded to its own GTT buffer once and thereafter only the
+// binding-table[0] surface is repointed at it (6 DWORDs) — no per-call
+// re-upload of the (up to 864KB) weight. On cache-full or GTT OOM the call
+// degrades to a per-call upload into input_x_bo, still correct.
+#define GEMV_WCACHE_MAX 64
+struct gemv_wentry { const float* w; gpu_bo bo; };
+static gemv_wentry sGemvWCache[GEMV_WCACHE_MAX];
+static uint32 sGemvWCount = 0;
+
+static gpu_bo*
+gemv_resident_weight(const float* w, int n, int d)
+{
+	for (uint32 i = 0; i < sGemvWCount; i++) {
+		if (sGemvWCache[i].w == w)
+			return &sGemvWCache[i].bo;
+	}
+	if (sGemvWCount >= GEMV_WCACHE_MAX)
+		return NULL;
+	gemv_wentry* e = &sGemvWCache[sGemvWCount];
+	uint32 sz = (uint32)((size_t)d * (size_t)n * sizeof(float));
+	if (gpu_bo_alloc(&e->bo, "gemv:weight", sz, 0) != B_OK)
+		return NULL;
+	memcpy((void*)e->bo.cpu_addr, w, sz);
+	e->w = w;
+	sGemvWCount++;
+	return &e->bo;
+}
+
 status_t
 media_pipeline_gemv_open(void)
 {
@@ -1888,8 +1917,19 @@ media_pipeline_gemv(const float* w, const float* x, float* out, int n, int d)
 		|| (size_t)d * sizeof(float) > OUTPUT_BO_SIZE)
 		return B_BAD_VALUE;
 
-	memcpy((void*)sGemvCtx.input_x_bo.cpu_addr, w,
-		(size_t)d * n * sizeof(float));
+	// Point binding-table[0] (the W surface) at a resident copy of this
+	// weight; fall back to a one-off upload into input_x_bo if it isn't
+	// cacheable. Either way bti[0] describes wherever W now lives.
+	gpu_bo* wbo = gemv_resident_weight(w, n, d);
+	if (wbo != NULL) {
+		write_linear_surface_state_at(&sGemvCtx, 0, wbo->gtt_offset,
+			wbo->size);
+	} else {
+		memcpy((void*)sGemvCtx.input_x_bo.cpu_addr, w,
+			(size_t)d * n * sizeof(float));
+		write_linear_surface_state_at(&sGemvCtx, 0,
+			sGemvCtx.input_x_bo.gtt_offset, sGemvCtx.input_x_bo.size);
+	}
 	memcpy((void*)sGemvCtx.input_y_bo.cpu_addr, x,
 		(size_t)n * sizeof(float));
 
@@ -1912,6 +1952,9 @@ void
 media_pipeline_gemv_close(void)
 {
 	if (sGemvReady) {
+		for (uint32 i = 0; i < sGemvWCount; i++)
+			gpu_bo_free(&sGemvWCache[i].bo);
+		sGemvWCount = 0;
 		media_pipeline_uninit(&sGemvCtx);
 		sGemvReady = false;
 	}
