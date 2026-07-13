@@ -2102,7 +2102,7 @@ static bool sGemvReady = false;
 // Which kernel is currently resident in sGemvCtx.kernel_bo — decode uses the
 // single-token gemv_n288, prefill uses a token-in-index pack kernel. We only
 // re-upload when it actually changes.
-enum { KID_N288 = 0, KID_PACK64, KID_PACK128 };
+enum { KID_N288 = 0, KID_PACK64, KID_PACK128, KID_GEMM_P8 };
 static int sGemvKernelId = -1;
 
 static status_t
@@ -2117,6 +2117,8 @@ ensure_kernel(int id)
 			sz = sizeof(kGemvKernel288Pack64); break;
 		case KID_PACK128: k = (const uint32*)kGemvKernel288Pack128;
 			sz = sizeof(kGemvKernel288Pack128); break;
+		case KID_GEMM_P8: k = (const uint32*)kGemmN288P8;
+			sz = sizeof(kGemmN288P8); break;
 		default:          k = (const uint32*)kGemvKernel288;
 			sz = sizeof(kGemvKernel288); break;
 	}
@@ -2322,40 +2324,44 @@ media_pipeline_gemv_prefill(const float* w, const float* X, float* OUT,
 {
 	if (!sGemvReady || n != 288 || d <= 0 || (d & 7) != 0 || P < 1)
 		return B_BAD_VALUE;
-	int rblocks = d / 8;
-	int rpad, kid;
-	if (rblocks <= 64) { rpad = 64; kid = KID_PACK64; }
-	else if (rblocks <= 128) { rpad = 128; kid = KID_PACK128; }
-	else return B_BAD_VALUE;
-	uint32 pack_stride = (uint32)rpad * 8;			// out floats/token
-	uint32 threads = (uint32)P * (uint32)rpad;
-	if ((size_t)P * n * sizeof(float) > INPUT_BO_SIZE
-		|| (size_t)P * pack_stride * sizeof(float) > OUTPUT_BO_SIZE)
+	const int GP = 8;				// GEMM tile = SIMD8 tokens
+	if ((size_t)n * GP * sizeof(float) > INPUT_BO_SIZE
+		|| (size_t)d * GP * sizeof(float) > OUTPUT_BO_SIZE)
 		return B_BAD_VALUE;
 
 	gpu_bo* wbo = prefill_resident_weight(w, n, d);
 	if (wbo == NULL)
 		return B_BAD_VALUE;
-	if (ensure_kernel(kid) != B_OK)
+	if (ensure_kernel(KID_GEMM_P8) != B_OK)
 		return B_ERROR;
 	write_linear_surface_state_at(&sGemvCtx, 0, wbo->gtt_offset, wbo->size);
-	memcpy((void*)sGemvCtx.input_y_bo.cpu_addr, X,
-		(size_t)P * n * sizeof(float));
 
-	status_t s = submit_parallel_generic(&sGemvCtx, threads, 3);
-	if (s != B_OK)
-		return s;
 	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
 	volatile uint32* slot = (volatile uint32*)(sGemvCtx.marker_bo.cpu_addr
 		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
-	if (!gpu_debug_wait_value(slot, tag, 3000000))
-		return B_TIMED_OUT;
+	float* XT = (float*)sGemvCtx.input_y_bo.cpu_addr;	// X_T col-major
+	float* OT = (float*)sGemvCtx.output_bo.cpu_addr;	// OUT_T [i*GP + t]
 
-	for (int t = 0; t < P; t++)
-		memcpy(OUT + (size_t)t * d,
-			(const void*)(sGemvCtx.output_bo.cpu_addr
-				+ (addr_t)t * pack_stride * sizeof(float)),
-			(size_t)d * sizeof(float));
+	// Process the P tokens in tiles of 8 (last tile zero-padded). Each tile
+	// is one outer-product GEMM dispatch of d/8 threads (W reused across the
+	// 8 columns). X is transposed into column-major on the way in and the
+	// OUT_T tile transposed back to per-token rows on the way out.
+	for (int t0 = 0; t0 < P; t0 += GP) {
+		int nt = (P - t0 < GP) ? (P - t0) : GP;
+		for (int k = 0; k < n; k++)
+			for (int tt = 0; tt < GP; tt++)
+				XT[k * GP + tt] = (tt < nt)
+					? X[(size_t)(t0 + tt) * n + k] : 0.0f;
+
+		if (submit_parallel_generic(&sGemvCtx, (uint32)d / 8, 3) != B_OK)
+			return B_ERROR;
+		if (!gpu_debug_wait_value(slot, tag, 3000000))
+			return B_TIMED_OUT;
+
+		for (int tt = 0; tt < nt; tt++)
+			for (int i = 0; i < d; i++)
+				OUT[(size_t)(t0 + tt) * d + i] = OT[i * GP + tt];
+	}
 	return B_OK;
 }
 
