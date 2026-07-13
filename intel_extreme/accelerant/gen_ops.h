@@ -24,7 +24,7 @@
 // Generation-independent: any emitter can push DWORDs into it.
 // -------------------------------------------------------------------
 
-#define BATCH_CAPACITY_DW 8192
+#define BATCH_CAPACITY_DW 32768	// ~1600 MEDIA_OBJECTs (prefill token-in-index)
 
 struct batch_writer {
 	uint32	dwords[BATCH_CAPACITY_DW];

@@ -213,6 +213,10 @@ status_t media_pipeline_gemv(const float* w, const float* x, float* out,
 // Batched: `count` weights sharing x, in one dispatch. N=288, count*d/8<=1024.
 status_t media_pipeline_gemv_stacked(const float* const* w, int count,
 	const float* x, float* const* out, int n, int d);
+// Prefill GEMM: W @ X for P token columns (token-in-index), one dispatch.
+// X = P contiguous n-vectors, OUT = P contiguous d-vectors. N=288.
+status_t media_pipeline_gemv_prefill(const float* w, const float* X,
+	float* OUT, int n, int d, int P);
 void media_pipeline_gemv_close(void);
 
 // Phase 2.2: first kernel using the data port Media Block Read

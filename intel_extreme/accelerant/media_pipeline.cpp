@@ -113,6 +113,11 @@ static const uint32 kGemvKernel288Pack64[][4] = {
 #include "kernels/gemv_n288_pack64.g4b.gen5"
 };
 
+// Same, RPAD=128 (out token stride 1024) for the d=768 FFN gate/up matmuls.
+static const uint32 kGemvKernel288Pack128[][4] = {
+#include "kernels/gemv_n288_pack128.g4b.gen5"
+};
+
 static const uint32 kSamplerReadKernel[][4] = {
 #include "kernels/sampler_read.g4b.gen5"
 };
@@ -2033,6 +2038,33 @@ media_pipeline_run_prefill_test(void)
 static media_pipeline_context sGemvCtx;
 static bool sGemvReady = false;
 
+// Which kernel is currently resident in sGemvCtx.kernel_bo — decode uses the
+// single-token gemv_n288, prefill uses a token-in-index pack kernel. We only
+// re-upload when it actually changes.
+enum { KID_N288 = 0, KID_PACK64, KID_PACK128 };
+static int sGemvKernelId = -1;
+
+static status_t
+ensure_kernel(int id)
+{
+	if (id == sGemvKernelId)
+		return B_OK;
+	const uint32* k;
+	size_t sz;
+	switch (id) {
+		case KID_PACK64:  k = (const uint32*)kGemvKernel288Pack64;
+			sz = sizeof(kGemvKernel288Pack64); break;
+		case KID_PACK128: k = (const uint32*)kGemvKernel288Pack128;
+			sz = sizeof(kGemvKernel288Pack128); break;
+		default:          k = (const uint32*)kGemvKernel288;
+			sz = sizeof(kGemvKernel288); break;
+	}
+	status_t s = media_pipeline_upload_kernel(&sGemvCtx, k, sz);
+	if (s == B_OK)
+		sGemvKernelId = id;
+	return s;
+}
+
 // Resident weight cache: transformer weights are fixed, so each distinct W
 // pointer is uploaded to its own GTT buffer once and thereafter only the
 // binding-table[0] surface is repointed at it (6 DWORDs) — no per-call
@@ -2096,8 +2128,8 @@ media_pipeline_gemv_open(void)
 	status_t s = media_pipeline_init(&sGemvCtx);
 	if (s != B_OK)
 		return s;
-	s = media_pipeline_upload_kernel(&sGemvCtx,
-		(const uint32*)kGemvKernel288, sizeof(kGemvKernel288));
+	sGemvKernelId = -1;
+	s = ensure_kernel(KID_N288);
 	if (s == B_OK)
 		s = media_pipeline_setup_saxpy_buffers(&sGemvCtx, 288);
 	if (s != B_OK) {
@@ -2119,6 +2151,9 @@ media_pipeline_gemv(const float* w, const float* x, float* out, int n, int d)
 	if ((size_t)d * (size_t)n * sizeof(float) > INPUT_BO_SIZE
 		|| (size_t)d * sizeof(float) > OUTPUT_BO_SIZE)
 		return B_BAD_VALUE;
+
+	if (ensure_kernel(KID_N288) != B_OK)
+		return B_ERROR;
 
 	// Point binding-table[0] (the W surface) at a resident copy of this
 	// weight; fall back to a one-off upload into input_x_bo if it isn't
@@ -2166,6 +2201,8 @@ media_pipeline_gemv_stacked(const float* const* w, int count, const float* x,
 		return B_BAD_VALUE;
 	if ((size_t)count * (size_t)d * sizeof(float) > OUTPUT_BO_SIZE)
 		return B_BAD_VALUE;
+	if (ensure_kernel(KID_N288) != B_OK)
+		return B_ERROR;
 
 	gpu_bo* wbo = gemv_resident_stacked(w, count, n, d);
 	if (wbo == NULL)
@@ -2190,6 +2227,77 @@ media_pipeline_gemv_stacked(const float* const* w, int count, const float* x,
 	return B_OK;
 }
 
+// Prefill uses its OWN weight cache: the same W pointer (e.g. wq) is cached
+// as a single matrix here but as a stacked qkv block in the decode cache, so
+// they must not share keys.
+static gemv_wentry sPrefillWCache[GEMV_WCACHE_MAX];
+static uint32 sPrefillWCount = 0;
+
+static gpu_bo*
+prefill_resident_weight(const float* w, int n, int d)
+{
+	for (uint32 i = 0; i < sPrefillWCount; i++) {
+		if (sPrefillWCache[i].w == w)
+			return &sPrefillWCache[i].bo;
+	}
+	if (sPrefillWCount >= GEMV_WCACHE_MAX)
+		return NULL;
+	gemv_wentry* e = &sPrefillWCache[sPrefillWCount];
+	uint32 sz = (uint32)((size_t)d * (size_t)n * sizeof(float));
+	if (gpu_bo_alloc(&e->bo, "prefill:weight", sz, 0) != B_OK)
+		return NULL;
+	memcpy((void*)e->bo.cpu_addr, w, sz);
+	e->w = w;
+	sPrefillWCount++;
+	return &e->bo;
+}
+
+// Prefill GEMM: OUT[t][0..d) = W(d,288) @ X[t](288) for t=0..P-1, in ONE
+// token-in-index dispatch of P*RPAD threads. X is P contiguous 288-vectors,
+// OUT is P contiguous d-vectors (caller buffer). N=288; d in {..512, ..1024}.
+status_t
+media_pipeline_gemv_prefill(const float* w, const float* X, float* OUT,
+	int n, int d, int P)
+{
+	if (!sGemvReady || n != 288 || d <= 0 || (d & 7) != 0 || P < 1)
+		return B_BAD_VALUE;
+	int rblocks = d / 8;
+	int rpad, kid;
+	if (rblocks <= 64) { rpad = 64; kid = KID_PACK64; }
+	else if (rblocks <= 128) { rpad = 128; kid = KID_PACK128; }
+	else return B_BAD_VALUE;
+	uint32 pack_stride = (uint32)rpad * 8;			// out floats/token
+	uint32 threads = (uint32)P * (uint32)rpad;
+	if ((size_t)P * n * sizeof(float) > INPUT_BO_SIZE
+		|| (size_t)P * pack_stride * sizeof(float) > OUTPUT_BO_SIZE)
+		return B_BAD_VALUE;
+
+	gpu_bo* wbo = prefill_resident_weight(w, n, d);
+	if (wbo == NULL)
+		return B_BAD_VALUE;
+	if (ensure_kernel(kid) != B_OK)
+		return B_ERROR;
+	write_linear_surface_state_at(&sGemvCtx, 0, wbo->gtt_offset, wbo->size);
+	memcpy((void*)sGemvCtx.input_y_bo.cpu_addr, X,
+		(size_t)P * n * sizeof(float));
+
+	status_t s = submit_parallel_generic(&sGemvCtx, threads, 3);
+	if (s != B_OK)
+		return s;
+	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	volatile uint32* slot = (volatile uint32*)(sGemvCtx.marker_bo.cpu_addr
+		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
+	if (!gpu_debug_wait_value(slot, tag, 3000000))
+		return B_TIMED_OUT;
+
+	for (int t = 0; t < P; t++)
+		memcpy(OUT + (size_t)t * d,
+			(const void*)(sGemvCtx.output_bo.cpu_addr
+				+ (addr_t)t * pack_stride * sizeof(float)),
+			(size_t)d * sizeof(float));
+	return B_OK;
+}
+
 void
 media_pipeline_gemv_close(void)
 {
@@ -2197,6 +2305,9 @@ media_pipeline_gemv_close(void)
 		for (uint32 i = 0; i < sGemvWCount; i++)
 			gpu_bo_free(&sGemvWCache[i].bo);
 		sGemvWCount = 0;
+		for (uint32 i = 0; i < sPrefillWCount; i++)
+			gpu_bo_free(&sPrefillWCache[i].bo);
+		sPrefillWCount = 0;
 		media_pipeline_uninit(&sGemvCtx);
 		sGemvReady = false;
 	}
