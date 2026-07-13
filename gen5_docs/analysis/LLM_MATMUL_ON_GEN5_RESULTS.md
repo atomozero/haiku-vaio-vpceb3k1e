@@ -67,11 +67,24 @@ the same tokens — the EU kernels are numerically exact for these inputs).
 |---|---|---|---|
 | Single 256×256 GEMV | 0.032 GFLOP/s | 0.019 | overhead-bound |
 | **Batched 1024 rows, 1 dispatch** | **0.399 GFLOP/s** | 0.019 | **12.4× over per-GEMV submits, 20.6× vs CPU** |
-| Prefill, 4 single dispatches | 1282 µs/token | — | |
+| Prefill, 4 single dispatches | 1283 µs/token | — | |
 | Prefill, multi-token loop | 1028 µs/token | — | 1.23× |
-| **Prefill, token-in-index (256 threads)** | **630 µs/token** | 7929 µs/token* | **2.0× over single, 12.6× vs CPU\*** |
+| Prefill, token-in-index (256 threads) | 614 µs/token | — | 2.0× over single |
+| **Prefill, outer-product GEMM (W-reuse, 36 threads)** | **381 µs/token** | ~384 µs/token† | **3.4× over single, 1.6× over token-in-index** |
 
-\* CPU baseline here is a naive `-O2` loop with a `volatile` sink — pessimistic.
+The **outer-product GEMM microkernel** (`gemm_n288_p8`) is the right shape for
+the "12× regime": each thread owns 8 rows and computes them for all 8 token
+columns, loading each W row chunk once and reusing it across the columns
+(compute-bound, no horizontal-sum), with only D/8=36 threads so it never
+overflows the MEDIA_OBJECT batch. It is the fastest GPU kernel and reaches
+**rough parity with the −O3 CPU** (~384 µs/token, from the measured 432 MFLOP/s
+decode throughput) for a 288×288 matmul — but parity, not a win.
+
+† Isolated benchmarks print an 85× vs a naive `-O2` column-major CPU loop; that
+number is meaningless (cache-thrashing baseline). The honest comparison is the
+GPU-internal ladder (1283 → 614 → 381 µs/token) and parity with the real −O3 CPU.
+Note the GEMM kernel still runs at ~0.1% of the Gen5 EU peak — utilization is
+capped by dispatch overhead and the limited thread count, not by compute.
 
 ### End-to-end `stories15M` (`run_gpu`)
 | Path | tok/s | vs CPU |
@@ -172,6 +185,7 @@ c89ae9a  media_pipeline_gemv_stacked — batched per-layer matmuls
 c42ecd5  multi-token GEMM prefill POC + root-cause of the matmul cost
 386e943  token-in-index GEMM kernel — the prefill win (2x, bit-exact)
 6ad6335  end-to-end batched prefill (forward_prefill) + honest limit
+190f1c1  outer-product GEMM microkernel — parity per-matmul (3.4x over naive)
 ```
 
 ---
@@ -182,8 +196,14 @@ c42ecd5  multi-token GEMM prefill POC + root-cause of the matmul cost
   end-to-end, byte-identical to CPU. Done.
 - **Performance:** the GPU does not beat the CPU for autoregressive LLM
   inference. The limit is architectural — the per-thread `MEDIA_OBJECT` command
-  model with no thread-grid dispatch — not the compute, the numerics, or our
-  kernels. It is not fixable on Ironlake without `MEDIA_OBJECT_WALKER` (Gen6+).
+  model with no thread-grid dispatch — not the numerics or (as we proved) our
+  kernels. The **outer-product GEMM microkernel** is the correct "12× regime"
+  design (W-reuse, compute-bound, few threads) and it *does* close the gap: from
+  3.4× slower than CPU (naive single-dispatch) to **parity** (381 vs ~384
+  µs/token). But parity is the ceiling here — the practical EU utilisation stays
+  at ~0.1% of peak because dispatch overhead and the MEDIA_OBJECT thread cap
+  prevent the kernel from ever becoming truly compute-bound. Not fixable on
+  Ironlake without `MEDIA_OBJECT_WALKER` (Gen6+).
 - **The map is complete:** we know *what* works on this silicon (heavily-batched
   compute — video IDCT, large one-shot GEMV/GEMM), *what* doesn't (token-by-token
   small matmul), and *why* (dispatch-command overhead vs arithmetic intensity).
