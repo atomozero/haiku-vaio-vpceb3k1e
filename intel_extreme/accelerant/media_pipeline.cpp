@@ -107,6 +107,12 @@ static const uint32 kGemvKernel288T4[][4] = {
 #include "kernels/gemv_n288_t4.g4b.gen5"
 };
 
+// N=288 token-in-index GEMM: one thread per (token,row-block), RPAD=64.
+// Dispatch T*64 threads to hide OWord-read latency; out token stride = 512.
+static const uint32 kGemvKernel288Pack64[][4] = {
+#include "kernels/gemv_n288_pack64.g4b.gen5"
+};
+
 static const uint32 kSamplerReadKernel[][4] = {
 #include "kernels/sampler_read.g4b.gen5"
 };
@@ -1955,6 +1961,59 @@ media_pipeline_run_prefill_test(void)
 		LOG("    prefill speedup: %.2fx\n",
 			multitoken_us > 0 ? (double)singles_us / (double)multitoken_us
 			: 0.0);
+
+		// (C) token-in-index: T*RPAD threads, one thread per (token,row).
+		// More in-flight threads hide the OWord-read latency that starves
+		// the 36-thread kernels.
+		const uint32 RPAD = 64;			// D/8=36 padded to a power of 2
+		const uint32 pack_threads = T * RPAD;	// 256
+		const uint32 pack_stride = RPAD * rows_per_thread;	// 512 out rows/tok
+		media_pipeline_upload_kernel(&ctx,
+			(const uint32*)kGemvKernel288Pack64, sizeof(kGemvKernel288Pack64));
+		memset(OUT, 0, (size_t)T * pack_stride * sizeof(float));
+		submit_parallel_generic(&ctx, pack_threads, 3);
+		gpu_debug_wait_value(slot, tag, 2000000);
+		uint32 pcorrect = 0;
+		for (uint32 t = 0; t < T; t++)
+			for (uint32 i = 0; i < D; i++) {
+				float acc = 0.0f;
+				for (uint32 j = 0; j < N; j++)
+					acc += W[i * N + j] * X[t * N + j];
+				if (OUT[t * pack_stride + i] == acc)
+					pcorrect++;
+			}
+		LOG("  token-in-index: %u/%u correct (%u threads)\n",
+			pcorrect, T * D, pack_threads);
+		if (pcorrect == T * D) {
+			bigtime_t c0 = bench_now_us();
+			for (uint32 it = 0; it < iters; it++) {
+				submit_parallel_generic(&ctx, pack_threads, 3);
+				gpu_debug_wait_value(slot, tag, 2000000);
+			}
+			bigtime_t pack_us = (bench_now_us() - c0) / iters;
+			LOG("    token-in-index dispatch: %lld us  (%lld us/token)\n",
+				(long long)pack_us, (long long)(pack_us / T));
+			LOG("    vs single dispatches: %.2fx, vs multi-token loop: %.2fx\n",
+				pack_us > 0 ? (double)singles_us / (double)pack_us : 0.0,
+				pack_us > 0 ? (double)multitoken_us / (double)pack_us : 0.0);
+
+			// Same T-token GEMM on the CPU (1 thread), for the real verdict.
+			volatile float sink = 0.0f;
+			bigtime_t d0 = bench_now_us();
+			for (uint32 it = 0; it < iters; it++)
+				for (uint32 t = 0; t < T; t++)
+					for (uint32 i = 0; i < D; i++) {
+						float acc = 0.0f;
+						for (uint32 j = 0; j < N; j++)
+							acc += W[i * N + j] * X[t * N + j];
+						sink += acc;
+					}
+			bigtime_t cpu_us = (bench_now_us() - d0) / iters;
+			(void)sink;
+			LOG("    CPU 1-thread: %lld us  (%lld us/token) -> GPU pack %.2fx\n",
+				(long long)cpu_us, (long long)(cpu_us / T),
+				pack_us > 0 ? (double)cpu_us / (double)pack_us : 0.0);
+		}
 		LOG("==================================================\n");
 	}
 
