@@ -202,6 +202,13 @@ status_t media_pipeline_run_saxpy_perf_test(void);
 // Level 2 POC: GEMV (matrix x vector) on the Gen5 EUs, verified vs CPU.
 status_t media_pipeline_run_gemv_test(void);
 
+// Public persistent GEMV (LLM matmul). N=288 only; d must be a multiple
+// of 8. Caller falls back to CPU on B_BAD_VALUE.
+status_t media_pipeline_gemv_open(void);
+status_t media_pipeline_gemv(const float* w, const float* x, float* out,
+	int n, int d);
+void media_pipeline_gemv_close(void);
+
 // Phase 2.2: first kernel using the data port Media Block Read
 // message via sampler cache. Sets up a SURFTYPE_2D input surface
 // pre-filled with the pattern byte[i] = i & 0xff, a SURFTYPE_BUFFER

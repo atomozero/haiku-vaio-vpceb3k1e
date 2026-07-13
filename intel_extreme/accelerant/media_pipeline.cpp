@@ -95,6 +95,12 @@ static const uint32 kGemvKernel256[][4] = {
 #include "kernels/gemv_n256.g4b.gen5"
 };
 
+// N=288 GEMV — the llama2.c stories model row width (dim=288). Used by the
+// public media_pipeline_gemv() path that run.c calls for its matmuls.
+static const uint32 kGemvKernel288[][4] = {
+#include "kernels/gemv_n288.g4b.gen5"
+};
+
 static const uint32 kSamplerReadKernel[][4] = {
 #include "kernels/sampler_read.g4b.gen5"
 };
@@ -1836,6 +1842,79 @@ media_pipeline_run_gemv_test(void)
 
 	media_pipeline_uninit(&ctx);
 	return correct == D ? B_OK : B_ERROR;
+}
+
+
+// ---------------------------------------------------------------------------
+// Public persistent GEMV — the LLM matmul path. External callers (run.c)
+// keep one context alive, upload W and x per call, and get a batched
+// dispatch of d/8 threads (one MEDIA_OBJECT per 8-row block, all in a
+// single submit). Fixed to the N=288 kernel (llama2.c stories dim); other
+// widths must fall back to the CPU.
+// ---------------------------------------------------------------------------
+
+static media_pipeline_context sGemvCtx;
+static bool sGemvReady = false;
+
+status_t
+media_pipeline_gemv_open(void)
+{
+	if (sGemvReady)
+		return B_OK;
+	status_t s = media_pipeline_init(&sGemvCtx);
+	if (s != B_OK)
+		return s;
+	s = media_pipeline_upload_kernel(&sGemvCtx,
+		(const uint32*)kGemvKernel288, sizeof(kGemvKernel288));
+	if (s == B_OK)
+		s = media_pipeline_setup_saxpy_buffers(&sGemvCtx, 288);
+	if (s != B_OK) {
+		media_pipeline_uninit(&sGemvCtx);
+		return s;
+	}
+	sGemvReady = true;
+	return B_OK;
+}
+
+// out[0..d) = W(d,288) @ x(288). W row-major, d must be a multiple of 8.
+// Returns B_BAD_VALUE if this path can't serve the request (caller then
+// uses its CPU matmul), B_OK on success.
+status_t
+media_pipeline_gemv(const float* w, const float* x, float* out, int n, int d)
+{
+	if (!sGemvReady || n != 288 || d <= 0 || (d & 7) != 0)
+		return B_BAD_VALUE;
+	if ((size_t)d * (size_t)n * sizeof(float) > INPUT_BO_SIZE
+		|| (size_t)d * sizeof(float) > OUTPUT_BO_SIZE)
+		return B_BAD_VALUE;
+
+	memcpy((void*)sGemvCtx.input_x_bo.cpu_addr, w,
+		(size_t)d * n * sizeof(float));
+	memcpy((void*)sGemvCtx.input_y_bo.cpu_addr, x,
+		(size_t)n * sizeof(float));
+
+	status_t s = submit_parallel_generic(&sGemvCtx, (uint32)d / 8, 3);
+	if (s != B_OK)
+		return s;
+
+	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	volatile uint32* slot = (volatile uint32*)(sGemvCtx.marker_bo.cpu_addr
+		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
+	if (!gpu_debug_wait_value(slot, tag, 2000000))
+		return B_TIMED_OUT;
+
+	memcpy(out, (const void*)sGemvCtx.output_bo.cpu_addr,
+		(size_t)d * sizeof(float));
+	return B_OK;
+}
+
+void
+media_pipeline_gemv_close(void)
+{
+	if (sGemvReady) {
+		media_pipeline_uninit(&sGemvCtx);
+		sGemvReady = false;
+	}
 }
 
 
