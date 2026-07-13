@@ -101,6 +101,12 @@ static const uint32 kGemvKernel288[][4] = {
 #include "kernels/gemv_n288.g4b.gen5"
 };
 
+// N=288 multi-token GEMM (T=4): one dispatch computes W @ X for 4 token
+// columns — the prefill amortization POC (media_pipeline_run_prefill_test).
+static const uint32 kGemvKernel288T4[][4] = {
+#include "kernels/gemv_n288_t4.g4b.gen5"
+};
+
 static const uint32 kSamplerReadKernel[][4] = {
 #include "kernels/sampler_read.g4b.gen5"
 };
@@ -185,7 +191,7 @@ static const uint32 kIqOnlyV3Kernel[][4] = {
 // ---------------------------------------------------------------------------
 
 #define BATCH_BO_SIZE		40960	// 40KB for up to 400-block batch via MI_BATCH_BUFFER_START
-#define KERNEL_BO_SIZE		32768	// up to ~2048 instructions (gemv_n256 is ~1120)
+#define KERNEL_BO_SIZE		131072	// up to ~8192 instructions (gemv_n288_t4 is ~5010)
 #define VFE_STATE_BO_SIZE	64		// struct i965_vfe_state = 24 bytes, pad to 64
 #define IDRT_BO_SIZE		64		// one interface descriptor = 16 bytes, pad
 #define CURBE_BO_SIZE		1024	// up to 30 GRFs (libva MPEG-2 ABI)
@@ -1842,6 +1848,118 @@ media_pipeline_run_gemv_test(void)
 
 	media_pipeline_uninit(&ctx);
 	return correct == D ? B_OK : B_ERROR;
+}
+
+
+// ---------------------------------------------------------------------------
+// Prefill POC — GEMM amortization: one dispatch computes W @ X for T token
+// columns. Compares against T separate single-token dispatches to show the
+// fixed per-dispatch cost amortizing over the prompt.
+// ---------------------------------------------------------------------------
+
+status_t
+media_pipeline_run_prefill_test(void)
+{
+	_sPrintf("intel_extreme media: *** prefill test entry ***\n");
+	if (gInfo == NULL || gInfo->shared_info == NULL
+		|| gInfo->shared_info->graphics_memory == NULL)
+		return B_NOT_INITIALIZED;
+
+	const uint32 N = 288, T = 4, D = 288, rows_per_thread = 8;
+	const uint32 threads = D / rows_per_thread;		// 36
+
+	LOG("==================================================\n");
+	LOG("  PREFILL POC — GEMM (N=%u, D=%u, T=%u tokens, %u threads)\n",
+		N, D, T, threads);
+	LOG("==================================================\n");
+
+	media_pipeline_context ctx;
+	status_t status = media_pipeline_init(&ctx);
+	if (status != B_OK) { LOG("prefill: init failed\n"); return status; }
+	status = media_pipeline_setup_saxpy_buffers(&ctx, N);
+	if (status != B_OK) {
+		LOG("prefill: buffer setup failed %s\n", strerror(status));
+		media_pipeline_uninit(&ctx);
+		return status;
+	}
+
+	// W (D x N), X (T x N, token-major), OUT (T x D, token-major).
+	float* W = (float*)ctx.input_x_bo.cpu_addr;
+	float* X = (float*)ctx.input_y_bo.cpu_addr;
+	float* OUT = (float*)ctx.output_bo.cpu_addr;
+	for (uint32 i = 0; i < D; i++)
+		for (uint32 j = 0; j < N; j++)
+			W[i * N + j] = (float)((int)((i * 7 + j * 3) % 5) - 2);
+	for (uint32 t = 0; t < T; t++)
+		for (uint32 j = 0; j < N; j++)
+			X[t * N + j] = (float)((int)((j + t) % 3) - 1);
+	memset(OUT, 0, (size_t)T * D * sizeof(float));
+
+	const uint32 tag = MEDIA_MARKER_TAG(MEDIA_MARKER_AFTER_MI_FLUSH_2);
+	volatile uint32* slot = (volatile uint32*)(ctx.marker_bo.cpu_addr
+		+ (uint32)MEDIA_MARKER_AFTER_MI_FLUSH_2 * 4);
+
+	// Phase 1: multi-token kernel, ONE dispatch for all T tokens.
+	status = media_pipeline_upload_kernel(&ctx,
+		(const uint32*)kGemvKernel288T4, sizeof(kGemvKernel288T4));
+	if (status != B_OK) {
+		LOG("prefill: T4 kernel upload failed %s\n", strerror(status));
+		media_pipeline_uninit(&ctx);
+		return status;
+	}
+	if (submit_parallel_generic(&ctx, threads, 3) != B_OK
+		|| !gpu_debug_wait_value(slot, tag, 2000000)) {
+		LOG("prefill: multi-token dispatch failed/timeout\n");
+		media_pipeline_uninit(&ctx);
+		return B_ERROR;
+	}
+
+	uint32 correct = 0;
+	for (uint32 t = 0; t < T; t++)
+		for (uint32 i = 0; i < D; i++) {
+			float acc = 0.0f;
+			for (uint32 j = 0; j < N; j++)
+				acc += W[i * N + j] * X[t * N + j];
+			if (OUT[t * D + i] == acc)
+				correct++;
+		}
+	LOG("  multi-token: %u/%u outputs correct\n", correct, T * D);
+
+	if (correct == T * D) {
+		const uint32 iters = 200;
+
+		// (A) prefill of T tokens as ONE multi-token dispatch.
+		bigtime_t a0 = bench_now_us();
+		for (uint32 it = 0; it < iters; it++) {
+			submit_parallel_generic(&ctx, threads, 3);
+			gpu_debug_wait_value(slot, tag, 2000000);
+		}
+		bigtime_t multitoken_us = (bench_now_us() - a0) / iters;
+
+		// (B) same T tokens as T separate single-token dispatches.
+		media_pipeline_upload_kernel(&ctx,
+			(const uint32*)kGemvKernel288, sizeof(kGemvKernel288));
+		bigtime_t b0 = bench_now_us();
+		for (uint32 it = 0; it < iters; it++)
+			for (uint32 t = 0; t < T; t++) {
+				submit_parallel_generic(&ctx, threads, 3);
+				gpu_debug_wait_value(slot, tag, 2000000);
+			}
+		bigtime_t singles_us = (bench_now_us() - b0) / iters;
+
+		LOG("  PREFILL BENCH (%u iters, %u tokens):\n", iters, T);
+		LOG("    %u single dispatches : %lld us  (%lld us/token)\n",
+			T, (long long)singles_us, (long long)(singles_us / T));
+		LOG("    1 multi-token dispatch: %lld us  (%lld us/token)\n",
+			(long long)multitoken_us, (long long)(multitoken_us / T));
+		LOG("    prefill speedup: %.2fx\n",
+			multitoken_us > 0 ? (double)singles_us / (double)multitoken_us
+			: 0.0);
+		LOG("==================================================\n");
+	}
+
+	media_pipeline_uninit(&ctx);
+	return correct == T * D ? B_OK : B_ERROR;
 }
 
 

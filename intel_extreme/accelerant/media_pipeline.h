@@ -202,6 +202,9 @@ status_t media_pipeline_run_saxpy_perf_test(void);
 // Level 2 POC: GEMV (matrix x vector) on the Gen5 EUs, verified vs CPU.
 status_t media_pipeline_run_gemv_test(void);
 
+// Prefill POC: multi-token GEMM (W @ X for T token columns) in one dispatch.
+status_t media_pipeline_run_prefill_test(void);
+
 // Public persistent GEMV (LLM matmul). N=288 only; d must be a multiple
 // of 8. Caller falls back to CPU on B_BAD_VALUE.
 status_t media_pipeline_gemv_open(void);
