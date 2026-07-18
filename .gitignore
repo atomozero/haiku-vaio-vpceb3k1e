@@ -72,3 +72,43 @@ gen5_docs/mesa_refs/
 gen5_docs/prm_ironlake/
 gen5_docs/xf86_video_intel/
 mesa-22.0.5/
+
+# ---- GitHub publish hygiene ----
+
+# Third-party reference material (PRM, libva, i-g-t, xf86-video-intel) — large,
+# not ours; keep only our own gen5_docs/analysis notes.
+gen5_docs/igt/
+gen5_docs/libva_intel/
+gen5_docs/prm_ironlake/
+gen5_docs/xf86_video_intel/
+gen5_docs/mesa_crocus/
+gen5_docs/linux_i915_refs/
+
+# Vendored/scratch trees and backups
+mesa-22.0.5/
+backup_driver/
+patches/
+*.hpkg
+
+# Compiled tool binaries (keep the .cpp/.sh/.py sources)
+tools/*
+!tools/*.sh
+!tools/*.cpp
+!tools/*.h
+!tools/*.py
+!tools/*.md
+
+# v2 test binaries (keep sources)
+v2/tests/test_media_hello
+v2/tests/test_media_hello_curbe
+v2/tests/test_ring
+
+# Compiled HDA driver binary (source is tracked)
+hda/hda
+
+# Personal / scratch
+prompt intel_extreme
+
+# pch_thermal compiled binaries (keep sources)
+pch_thermal/pch_temp
+pch_thermal/pch_thermal
