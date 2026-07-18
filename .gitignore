@@ -107,7 +107,6 @@ v2/tests/test_ring
 hda/hda
 
 # Personal / scratch
-prompt intel_extreme
 
 # pch_thermal compiled binaries (keep sources)
 pch_thermal/pch_temp
