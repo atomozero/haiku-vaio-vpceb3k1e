@@ -285,9 +285,12 @@ Builds and runs the full GPU test suite (6 tests): accelerant build, ring ioctl,
 
 ## Documentation
 
-- `TODO_INTEL_GPU_HAIKU.md` — Master TODO with milestone tracking
-- `PORTING.md` — **How to add support for a new Intel GPU generation** (contributor guide)
-- `gen5_docs/analysis/MEDIA_PIPELINE_BRINGUP.md` — 10-command media pipeline specification
-- `gen5_docs/analysis/VIDEO_DECODE_PIVOT.md` — Strategic direction (MPEG-2 → H.264 → LLM)
-- `gen5_docs/analysis/PHASE_*.md` — Per-phase test reports
-- `DIFFERENZE_DRIVER.md` — All patches vs stock Haiku
+All documentation lives under `docs/`; start at `docs/INDEX.md`.
+
+- `docs/INDEX.md` — **Master documentation index** (start here)
+- `docs/TODO_INTEL_GPU_HAIKU.md` — Master roadmap with milestone tracking
+- `docs/PORTING.md` — **How to add support for a new Intel GPU generation** (contributor guide)
+- `docs/analysis/MEDIA_PIPELINE_BRINGUP.md` — 10-command media pipeline specification
+- `docs/analysis/VIDEO_DECODE_PIVOT.md` — Strategic direction (MPEG-2 → H.264 → LLM)
+- `docs/analysis/PHASE_*.md` — Per-phase test reports
+- `docs/DRIVER_DIFFERENCES.md` — All patches vs stock Haiku

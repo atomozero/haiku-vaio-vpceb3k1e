@@ -6,7 +6,7 @@
  * Completion is tracked via MI_STORE_DATA_IMM markers in GTT memory,
  * not HEAD register polling.
  *
- * Design: see GPU_IDCT_DESIGN.md
+ * Design: see docs/analysis/GPU_IDCT_DESIGN.md
  */
 
 #include "gpu_idct.h"

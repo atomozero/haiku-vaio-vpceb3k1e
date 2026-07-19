@@ -25,7 +25,7 @@ running a small LLM's matrix multiplies on the GPU's execution units.
   (decode **and** batched prefill), **byte-identical** to the CPU. A complete,
   honest study of where the GPU wins (batched compute) and why it can't beat the
   CPU at token-by-token inference — see
-  [`gen5_docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md`](gen5_docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md).
+  [`docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md`](docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md).
 - **Tools**: a live GPU-utilisation graph (`tools/gpu_monitor`, works as a
   Desktop replicant), a regression test suite, and ring-health diagnostics.
 - Patched **HDA audio** driver for the Realtek ALC269.
@@ -72,7 +72,7 @@ intel_extreme/
   tools/gen4asm/       In-tree port of intel-gen4asm (Gen5 EU assembler)
 hda/                   Patched HDA audio kernel driver
 tools/                 gpu_monitor, test suite, ring health, GEM/DRM probes
-gen5_docs/analysis/    Design notes, phase reports, and result write-ups
+docs/                  All project documentation (start at docs/INDEX.md)
 ```
 
 The `llama2.c` GPU integration (`gpu_llm.cpp`, `forward_prefill`) lives in a
@@ -126,13 +126,17 @@ make && make install    # kernel driver, requires reboot
 
 ## Documentation
 
-- [`gen5_docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md`](gen5_docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md)
+All documentation lives under [`docs/`](docs/INDEX.md) — the
+[documentation index](docs/INDEX.md) is the full catalog. Highlights:
+
+- [`docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md`](docs/analysis/LLM_MATMUL_ON_GEN5_RESULTS.md)
   — the LLM-on-GPU study: what was built, the full results, and the root-cause of
   the CPU/GPU wall-clock verdict.
-- [`gen5_docs/INDEX.md`](gen5_docs/INDEX.md) — index of all analysis notes and phase reports.
-- [`PORTING.md`](PORTING.md) — how to add support for another Intel GPU generation.
-- [`DIFFERENZE_DRIVER.md`](DIFFERENZE_DRIVER.md) — every patch vs stock Haiku R1~beta5.
-- [`TODO_INTEL_GPU_HAIKU.md`](TODO_INTEL_GPU_HAIKU.md) — roadmap and milestone tracking.
+- [`docs/INDEX.md`](docs/INDEX.md) — index of every guide, analysis note, and phase report.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the driver stack's layered design.
+- [`docs/PORTING.md`](docs/PORTING.md) — how to add support for another Intel GPU generation.
+- [`docs/DRIVER_DIFFERENCES.md`](docs/DRIVER_DIFFERENCES.md) — every patch vs stock Haiku R1~beta5.
+- [`docs/TODO_INTEL_GPU_HAIKU.md`](docs/TODO_INTEL_GPU_HAIKU.md) — roadmap and milestone tracking.
 - [`CLAUDE.md`](CLAUDE.md) — build commands, architecture, and the hard-won Gen5 gotchas.
 
 ## Notable hardware findings
