@@ -63,7 +63,8 @@ intel_extreme/crocus_addon/Crocus Pipe*
 intel_extreme/crocus_addon/intel_extreme
 intel_extreme/crocus_addon/*.so
 
-# External reference trees (download separately if needed)
+# External reference trees, downloaded separately (see docs/analysis/GEN5_REFERENCES.md).
+# gen5_docs/ holds only these third-party clones now; our own notes live in docs/.
 gen5_docs/igt/
 gen5_docs/libva_intel/
 gen5_docs/linux_i915_refs/
@@ -75,14 +76,8 @@ mesa-22.0.5/
 
 # ---- GitHub publish hygiene ----
 
-# Third-party reference material (PRM, libva, i-g-t, xf86-video-intel) — large,
-# not ours; keep only our own gen5_docs/analysis notes.
-gen5_docs/igt/
-gen5_docs/libva_intel/
-gen5_docs/prm_ironlake/
-gen5_docs/xf86_video_intel/
-gen5_docs/mesa_crocus/
-gen5_docs/linux_i915_refs/
+# Third-party reference material (PRM, libva, i-g-t, xf86-video-intel) is large
+# and not ours; it is ignored above under gen5_docs/. Our own notes live in docs/.
 
 # Vendored/scratch trees and backups
 mesa-22.0.5/

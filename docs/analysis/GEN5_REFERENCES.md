@@ -1,4 +1,4 @@
-# Gen5 / Ironlake Documentation Index
+# Gen5 / Ironlake Reference-Material Catalog
 
 | | |
 |---|---|
@@ -15,6 +15,12 @@
 Local reference collection for Intel HD Graphics (Ironlake, device 0x0046) driver development on Haiku, VAIO VPCEB3K1E.
 
 Target: move the `intel_extreme` accelerant from "modeset-only" to "EU array usable for GPGPU" so a small LLM can run with hardware acceleration.
+
+> **Where these files live:** the directory names below (`prm_ironlake/`, `mesa_refs/`,
+> `linux_i915_refs/`, `libva_intel/`, `mesa_crocus/`, `igt/`, `xf86_video_intel/`) are
+> third-party trees under `gen5_docs/` at the repository root. They are large,
+> not ours, and git-ignored — download them separately. The project's own
+> documentation lives in `docs/`; see the [documentation index](../INDEX.md).
 
 ---
 

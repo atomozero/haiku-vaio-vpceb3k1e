@@ -83,7 +83,7 @@ into a GTT buffer (fast, write-combining) and submit them with a single
 **accelerant.h** - Add the batch_buffer structure:
 ```cpp
 struct batch_buffer {
-    addr_t      base;           // indirizzo virtuale (WC mapped)
+    addr_t      base;           // virtual address (WC mapped)
     uint32      offset;         // GTT offset for the GPU
     uint32      size;           // dimensione totale (64KB)
     uint32      position;       // current write position
@@ -200,10 +200,10 @@ instead of 5504 * 768 = 4.2MB), but the GPU has a 256MB+ aperture.
 ```cpp
 // FENCE register format per Gen5 (I915_FENCE):
 // Bit 0: Valid
-// Bit 1: X-Tile (0) / Y-Tile (1) -- per noi 0
+// Bit 1: X-Tile (0) / Y-Tile (1) -- 0 for us
 // Bit 11:4: Pitch (in tile widths, 128B increments per X-tile)
 // Bit 31:12: Start address (4KB aligned)
-// Bit 43:32: End address (4KB aligned) -- in secondo DWORD per 64-bit
+// Bit 43:32: End address (4KB aligned) -- in the second DWORD for 64-bit
 
 uint32 fence_pitch_val = (stride / 128) - 1; // stride in 128B units
 uint64 fence_val = start_addr | (fence_pitch_val << 2) | FENCE_VALID;
@@ -220,7 +220,7 @@ uint64 fence_val = start_addr | (fence_pitch_val << 2) | FENCE_VALID;
 if (gInfo->shared_info->frame_buffer_tiled) {
     // XY_COLOR_BLT: bit 11 = dst tiling
     opcode |= (1 << 11);
-    // Lo stride nei comandi BLT per tiled e in DWORD, non byte
+    // The stride in BLT commands for tiled surfaces is in DWORDs, not bytes
     dest_bytes_per_row = gInfo->shared_info->bytes_per_row >> 2;
 }
 ```
@@ -275,12 +275,12 @@ Eliminate busy-wait polling of the ring HEAD register in
 // In intel_shared_info:
 vint32      last_submitted_seq;    // ultimo seq# inviato alla GPU
 // The HWS page is already allocated: status_page / physical_status_page
-// Usiamo status_page->store[0] per il nostro sequence number
+// We use status_page->store[0] for our sequence number
 ```
 
 **engine.cpp** - Modify BatchCommands::~BatchCommands():
 ```cpp
-// Prima di MI_BATCH_BUFFER_END, aggiungere:
+// Before MI_BATCH_BUFFER_END, add:
 uint32 seq = atomic_add(&gInfo->shared_info->last_submitted_seq, 1) + 1;
 Write(MI_STORE_DWORD_INDEX);
 Write(0);  // offset 0 nella HWS page (store[0])
