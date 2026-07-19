@@ -1,7 +1,7 @@
 # Intel Gen5-Gen8 GPU Driver Stack for Haiku OS — v2
 
-Clean rewrite of the complete driver stack. See `../ARCHITECTURE.md` for the
-full plan, `../HARDWARE_WIKI.md` for empirical hardware knowledge.
+Clean rewrite of the complete driver stack. See `../docs/ARCHITECTURE.md` for the
+full plan, `../docs/hardware/HARDWARE_WIKI.md` for empirical hardware knowledge.
 
 ## Directory Layout
 
@@ -32,4 +32,4 @@ Each component has its own Makefile. Build order:
 ## Reference
 
 The v1 code in `../intel_extreme/` is the working reference implementation.
-All 24 documented Gen5 bugs and workarounds are in `../HARDWARE_WIKI.md`.
+All 24 documented Gen5 bugs and workarounds are in `../docs/hardware/HARDWARE_WIKI.md`.

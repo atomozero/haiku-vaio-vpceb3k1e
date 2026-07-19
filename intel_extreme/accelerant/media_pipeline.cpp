@@ -271,7 +271,7 @@ ring_submit_via_gpu_ring(const batch_writer* w)
 
 // ---------------------------------------------------------------------------
 // Per-command emitters — each corresponds to one step in
-// MEDIA_PIPELINE_BRINGUP.md §1.
+// docs/analysis/MEDIA_PIPELINE_BRINGUP.md §1.
 // ---------------------------------------------------------------------------
 
 static void

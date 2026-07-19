@@ -6,7 +6,7 @@
  *
  * Implements the 10-command sequence that hands control of the EU array
  * over to a compute kernel via MEDIA_OBJECT. Source of truth for the
- * sequence is gen5_docs/analysis/MEDIA_PIPELINE_BRINGUP.md, itself derived
+ * sequence is docs/analysis/MEDIA_PIPELINE_BRINGUP.md, itself derived
  * from libva-intel-driver i965_media.c and the Ironlake PRM Vol 2 Part 2.
  *
  * This is the path we will use for video decode (phase 2) and eventually
